@@ -426,8 +426,12 @@ impl ThinkSplitter {
                 self.buffer = self.buffer[start + 7..].to_string();
                 self.in_think = true;
             } else {
-                // Keep a tail that could be a partial `<think>` tag
-                let safe = self.buffer.len().saturating_sub(6);
+                // Keep a tail that could be a partial `<think>` tag.
+                // Walk back to a char boundary to avoid slicing inside multi-byte chars.
+                let mut safe = self.buffer.len().saturating_sub(6);
+                while safe > 0 && !self.buffer.is_char_boundary(safe) {
+                    safe -= 1;
+                }
                 self.visible.push_str(&self.buffer[..safe]);
                 self.buffer = self.buffer[safe..].to_string();
                 break;
@@ -506,6 +510,16 @@ mod tests {
         let (visible, think) = s.finish();
         assert_eq!(visible, "visible");
         assert_eq!(think, "partial thinking");
+    }
+
+    /// Bug: saturating_sub(6) on a buffer with multi-byte chars (e.g. emoji) lands
+    /// inside a char, panicking on slice. The safe offset must snap to a char boundary.
+    #[test]
+    fn multibyte_chars_dont_panic() {
+        let mut s = ThinkSplitter::new();
+        s.push(" Test 🎨\n\n##");
+        let (visible, _) = s.finish();
+        assert!(visible.contains("🎨"));
     }
 
     #[test]
