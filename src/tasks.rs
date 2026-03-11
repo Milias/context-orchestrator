@@ -78,17 +78,14 @@ fn run_git_watcher(tx: &mpsc::UnboundedSender<TaskMessage>) -> anyhow::Result<()
     let (notify_tx, notify_rx) = std::sync::mpsc::channel();
     let mut debouncer = new_debouncer(Duration::from_millis(500), notify_tx)?;
 
-    debouncer.watcher().watch(
-        &workdir,
-        notify::RecursiveMode::Recursive,
-    )?;
+    debouncer
+        .watcher()
+        .watch(&workdir, notify::RecursiveMode::Recursive)?;
 
     loop {
         match notify_rx.recv() {
             Ok(Ok(events)) => {
-                let has_changes = events
-                    .iter()
-                    .any(|e| e.kind == DebouncedEventKind::Any);
+                let has_changes = events.iter().any(|e| e.kind == DebouncedEventKind::Any);
                 if has_changes {
                     if let Ok(files) = scan_git_files() {
                         if tx.send(TaskMessage::GitFilesUpdated(files)).is_err() {
@@ -126,9 +123,7 @@ fn scan_git_files() -> anyhow::Result<Vec<GitFileSnapshot>> {
             || s.contains(git2::Status::INDEX_DELETED)
         {
             GitFileStatus::Staged
-        } else if s.contains(git2::Status::WT_MODIFIED)
-            || s.contains(git2::Status::WT_DELETED)
-        {
+        } else if s.contains(git2::Status::WT_MODIFIED) || s.contains(git2::Status::WT_DELETED) {
             GitFileStatus::Modified
         } else if s.contains(git2::Status::WT_NEW) {
             GitFileStatus::Untracked

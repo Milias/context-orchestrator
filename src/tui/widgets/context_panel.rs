@@ -38,7 +38,11 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         .collect();
     let tabs = Tabs::new(tab_titles)
         .select(tui_state.context_tab.index())
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
         .divider("│");
     frame.render_widget(tabs, tab_area);
 
@@ -121,12 +125,15 @@ fn render_node_list(
     nodes.sort_by_key(|n| n.content().to_string());
 
     if nodes.is_empty() {
-        let paragraph = Paragraph::new(Span::styled("(none)", Style::default().fg(Color::DarkGray)));
+        let paragraph =
+            Paragraph::new(Span::styled("(none)", Style::default().fg(Color::DarkGray)));
         frame.render_widget(paragraph, area);
         return;
     }
 
-    let offset = tui_state.context_list_offset.min(nodes.len().saturating_sub(1));
+    let offset = tui_state
+        .context_list_offset
+        .min(nodes.len().saturating_sub(1));
 
     let items: Vec<ListItem> = nodes
         .iter()
@@ -158,8 +165,16 @@ fn format_node_line(node: &Node) -> Line<'static> {
         Node::Tool {
             name, description, ..
         } => Line::from(vec![
-            Span::styled(name.clone(), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  {description}"), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                name.clone(),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {description}"),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]),
         Node::BackgroundTask {
             status,
@@ -214,7 +229,10 @@ fn render_minimap(frame: &mut Frame, area: Rect, graph: &ConversationGraph) {
             let max_len = width.saturating_sub(3);
             let truncated: String = content.chars().take(max_len).collect();
             let line = Line::from(vec![
-                Span::styled(format!("{prefix} "), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{prefix} "),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(truncated, Style::default().fg(Color::White)),
             ]);
             Some(ListItem::new(line))

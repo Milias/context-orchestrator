@@ -470,7 +470,18 @@ mod tests {
             updated_at: Utc::now(),
         };
         graph.upsert_node(task);
-        assert_eq!(graph.nodes_by(|n| matches!(n, Node::BackgroundTask { status: TaskStatus::Running, .. })).len(), 1);
+        assert_eq!(
+            graph
+                .nodes_by(|n| matches!(
+                    n,
+                    Node::BackgroundTask {
+                        status: TaskStatus::Running,
+                        ..
+                    }
+                ))
+                .len(),
+            1
+        );
 
         // Upsert replaces when present
         let updated = Node::BackgroundTask {
@@ -482,8 +493,30 @@ mod tests {
             updated_at: Utc::now(),
         };
         graph.upsert_node(updated);
-        assert_eq!(graph.nodes_by(|n| matches!(n, Node::BackgroundTask { status: TaskStatus::Completed, .. })).len(), 1);
-        assert_eq!(graph.nodes_by(|n| matches!(n, Node::BackgroundTask { status: TaskStatus::Running, .. })).len(), 0);
+        assert_eq!(
+            graph
+                .nodes_by(|n| matches!(
+                    n,
+                    Node::BackgroundTask {
+                        status: TaskStatus::Completed,
+                        ..
+                    }
+                ))
+                .len(),
+            1
+        );
+        assert_eq!(
+            graph
+                .nodes_by(|n| matches!(
+                    n,
+                    Node::BackgroundTask {
+                        status: TaskStatus::Running,
+                        ..
+                    }
+                ))
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -498,9 +531,7 @@ mod tests {
             updated_at: Utc::now(),
         };
         let gf1_id = graph.add_node(gf1);
-        graph
-            .add_edge(gf1_id, root_id, EdgeKind::Indexes)
-            .unwrap();
+        graph.add_edge(gf1_id, root_id, EdgeKind::Indexes).unwrap();
 
         let gf2 = Node::GitFile {
             id: Uuid::new_v4(),
@@ -511,18 +542,14 @@ mod tests {
         graph.add_node(gf2);
 
         assert_eq!(
-            graph
-                .nodes_by(|n| matches!(n, Node::GitFile { .. }))
-                .len(),
+            graph.nodes_by(|n| matches!(n, Node::GitFile { .. })).len(),
             2
         );
 
         graph.remove_nodes_by(|n| matches!(n, Node::GitFile { .. }));
 
         assert_eq!(
-            graph
-                .nodes_by(|n| matches!(n, Node::GitFile { .. }))
-                .len(),
+            graph.nodes_by(|n| matches!(n, Node::GitFile { .. })).len(),
             0
         );
         // Edge referencing removed node should also be gone

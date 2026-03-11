@@ -3,7 +3,12 @@
     "Stop": [
       {
         "matcher": "",
-        "command": "cd /home/develop/truevoid/context-manager && cargo fmt --all && cargo clippy --all-targets 2>&1"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /home/develop/truevoid/context-manager && cargo fmt --all && cargo clippy --all-targets 2>&1"
+          }
+        ]
       }
     ]
   }

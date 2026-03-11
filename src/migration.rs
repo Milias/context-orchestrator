@@ -135,9 +135,7 @@ fn migrate_v1_to_v2(v1: V1Graph) -> V2Graph {
 
 /// Back up a graph file before migration.
 fn backup_graph(graph_path: &Path, version: u32) -> anyhow::Result<()> {
-    let backup_name = format!(
-        "graph.v{version}.json.bak",
-    );
+    let backup_name = format!("graph.v{version}.json.bak",);
     let backup_path = graph_path.with_file_name(backup_name);
     std::fs::copy(graph_path, &backup_path)?;
     Ok(())
