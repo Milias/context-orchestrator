@@ -21,6 +21,8 @@ figment = { version = "0.10", features = ["env"] }
 git2 = "0.20"
 notify = "7"
 notify-debouncer-mini = "0.5"
+streamdown-parser = "0.1"
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

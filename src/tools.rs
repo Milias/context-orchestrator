@@ -87,11 +87,7 @@ async fn run_plan_extraction(
     tx: mpsc::UnboundedSender<TaskMessage>,
 ) {
     let task_id = Uuid::new_v4();
-    let truncated_desc = if user_args.len() > 40 {
-        format!("{}...", &user_args[..40])
-    } else {
-        user_args.clone()
-    };
+    let truncated_desc = truncate_content(&user_args, 40);
 
     let _ = tx.send(TaskMessage::TaskStatusChanged {
         task_id,
@@ -110,17 +106,29 @@ async fn run_plan_extraction(
             .to_string(),
     ));
 
-    let result = match background_llm_call(&*provider, messages, &config, &semaphore).await {
-        Ok(response) => serde_json::from_str::<PlanExtractionResult>(&response.content).unwrap_or(
-            PlanExtractionResult {
-                title: user_args,
-                description: None,
-            },
-        ),
-        Err(_) => PlanExtractionResult {
-            title: user_args,
-            description: None,
-        },
+    let (result, final_status) =
+        match background_llm_call(&*provider, messages, &config, &semaphore).await {
+            Ok(response) => {
+                let plan = serde_json::from_str::<PlanExtractionResult>(&response.content)
+                    .unwrap_or(PlanExtractionResult {
+                        title: user_args,
+                        description: None,
+                    });
+                (plan, TaskStatus::Completed)
+            }
+            Err(_) => (
+                PlanExtractionResult {
+                    title: user_args,
+                    description: None,
+                },
+                TaskStatus::Failed,
+            ),
+        };
+
+    let status_desc = if final_status == TaskStatus::Completed {
+        "Plan extracted".to_string()
+    } else {
+        "Plan extraction failed, used raw input".to_string()
     };
 
     let _ = tx.send(TaskMessage::ToolExtractionComplete {
@@ -130,8 +138,8 @@ async fn run_plan_extraction(
     let _ = tx.send(TaskMessage::TaskStatusChanged {
         task_id,
         kind: BackgroundTaskKind::ToolExtraction,
-        status: TaskStatus::Completed,
-        description: "Plan extracted".to_string(),
+        status: final_status,
+        description: status_desc,
     });
 }
 
@@ -192,10 +200,11 @@ pub fn tool_result_edge_kind() -> EdgeKind {
 }
 
 fn truncate_content(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max])
+        let truncated: String = s.chars().take(max).collect();
+        format!("{truncated}...")
     }
 }
 

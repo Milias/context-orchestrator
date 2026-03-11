@@ -99,3 +99,42 @@ fn test_plan_result_to_node() {
         _ => panic!("Expected WorkItem node"),
     }
 }
+
+#[test]
+fn test_parse_triggers_planning_not_matched() {
+    let triggers = parse_triggers("~planning some stuff");
+    assert!(triggers.is_empty());
+}
+
+#[test]
+fn test_parse_triggers_plan_with_punctuation() {
+    // ~plan. is not a match because '.' is not ' ' or empty
+    let triggers = parse_triggers("~plan.something");
+    assert!(triggers.is_empty());
+}
+
+#[test]
+fn test_parse_triggers_plan_at_eof_no_newline() {
+    let triggers = parse_triggers("~plan Fix it");
+    assert_eq!(triggers.len(), 1);
+}
+
+#[test]
+fn test_truncate_content_unicode_safe() {
+    // Multi-byte UTF-8: each emoji is 4 bytes
+    let emoji_str = "🎉🎊🎈🎁🎂";
+    let result = truncate_content(emoji_str, 3);
+    assert_eq!(result, "🎉🎊🎈...");
+}
+
+#[test]
+fn test_truncate_content_cjk_safe() {
+    let cjk = "你好世界测试";
+    let result = truncate_content(cjk, 4);
+    assert_eq!(result, "你好世界...");
+}
+
+#[test]
+fn test_truncate_content_short_string_unchanged() {
+    assert_eq!(truncate_content("hello", 10), "hello");
+}

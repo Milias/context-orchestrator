@@ -210,6 +210,44 @@ fn test_remove_nodes_by() {
 }
 
 #[test]
+fn test_think_block_not_in_history() {
+    let mut graph = ConversationGraph::new("System prompt");
+    let root_id = graph.branch_leaf("main").unwrap();
+
+    let asst_id = Uuid::new_v4();
+    let asst = Node::Message {
+        id: asst_id,
+        role: Role::Assistant,
+        content: "Hello".to_string(),
+        created_at: Utc::now(),
+        model: None,
+        input_tokens: None,
+        output_tokens: None,
+    };
+    graph.add_message(root_id, asst).unwrap();
+
+    let think = Node::ThinkBlock {
+        id: Uuid::new_v4(),
+        content: "reasoning...".to_string(),
+        parent_message_id: asst_id,
+        created_at: Utc::now(),
+    };
+    let think_id = graph.add_node(think);
+    graph
+        .add_edge(think_id, asst_id, EdgeKind::ThinkingOf)
+        .unwrap();
+
+    // ThinkBlock should NOT appear in branch history (it has no RespondsTo edge)
+    let history = graph.get_branch_history("main").unwrap();
+    assert_eq!(history.len(), 2); // system + assistant only
+    assert!(!history.iter().any(|n| matches!(n, Node::ThinkBlock { .. })));
+
+    // But has_think_block should detect it
+    assert!(graph.has_think_block(asst_id));
+    assert!(!graph.has_think_block(root_id));
+}
+
+#[test]
 fn test_branch_names() {
     let graph = ConversationGraph::new("System prompt");
     let names = graph.branch_names();

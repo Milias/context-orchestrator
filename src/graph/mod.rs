@@ -57,6 +57,7 @@ pub enum EdgeKind {
     Tracks,
     Indexes,
     Provides,
+    ThinkingOf,
 }
 
 // ── Edge ─────────────────────────────────────────────────────────────
@@ -114,6 +115,12 @@ pub enum Node {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     },
+    ThinkBlock {
+        id: Uuid,
+        content: String,
+        parent_message_id: Uuid,
+        created_at: DateTime<Utc>,
+    },
 }
 
 impl Node {
@@ -124,13 +131,16 @@ impl Node {
             | Node::WorkItem { id, .. }
             | Node::GitFile { id, .. }
             | Node::Tool { id, .. }
-            | Node::BackgroundTask { id, .. } => *id,
+            | Node::BackgroundTask { id, .. }
+            | Node::ThinkBlock { id, .. } => *id,
         }
     }
 
     pub fn content(&self) -> &str {
         match self {
-            Node::Message { content, .. } | Node::SystemDirective { content, .. } => content,
+            Node::Message { content, .. }
+            | Node::SystemDirective { content, .. }
+            | Node::ThinkBlock { content, .. } => content,
             Node::WorkItem { title, .. } => title,
             Node::GitFile { path, .. } => path,
             Node::Tool { name, .. } => name,
@@ -320,6 +330,13 @@ impl ConversationGraph {
     /// Return all nodes matching a predicate.
     pub fn nodes_by<F: Fn(&Node) -> bool>(&self, filter: F) -> Vec<&Node> {
         self.nodes.values().filter(|n| filter(n)).collect()
+    }
+
+    /// Check if a node has an associated `ThinkBlock` linked via `ThinkingOf`.
+    pub fn has_think_block(&self, node_id: Uuid) -> bool {
+        self.edges
+            .iter()
+            .any(|e| e.to == node_id && e.kind == EdgeKind::ThinkingOf)
     }
 
     /// Remove all nodes (and their edges) matching a predicate.

@@ -1,4 +1,5 @@
 use crate::graph::{ConversationGraph, Node, Role};
+use crate::tui::widgets::markdown::render_markdown;
 use crate::tui::TuiState;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -24,24 +25,7 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         return;
     }
 
-    // Build list of renderable messages with their heights
-    let mut entries: Vec<MessageEntry> = history
-        .iter()
-        .map(|node| {
-            let height = compute_height(node.content(), msg_content_width);
-            MessageEntry::Node { node, height }
-        })
-        .collect();
-
-    if let Some(ref streaming) = tui_state.streaming_response {
-        // +1 line for the cursor
-        let text_with_cursor = format!("{streaming}▌");
-        let height = compute_height(&text_with_cursor, msg_content_width);
-        entries.push(MessageEntry::Streaming {
-            content: text_with_cursor,
-            height,
-        });
-    }
+    let entries = build_entries(&history, graph, tui_state, msg_content_width);
 
     // All values in this scroll math are bounded by terminal dimensions (u16) and message
     // counts, so casts between i32/u16/usize cannot overflow in practice.
@@ -103,11 +87,27 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
             let msg_area = Rect::new(inner.x, inner.y + visible_y, inner.width, visible_h);
 
             match entry {
-                MessageEntry::Node { node, height } => {
-                    render_message(frame, msg_area, node, clip_top, *height as u16);
+                MessageEntry::Node {
+                    node,
+                    styled_text,
+                    height,
+                    has_thinking,
+                } => {
+                    render_message(
+                        frame,
+                        msg_area,
+                        node,
+                        styled_text,
+                        clip_top,
+                        *height as u16,
+                        *has_thinking,
+                    );
                 }
-                MessageEntry::Streaming { content, height } => {
-                    render_streaming(frame, msg_area, content, clip_top, *height as u16);
+                MessageEntry::Streaming {
+                    styled_text,
+                    height,
+                } => {
+                    render_streaming(frame, msg_area, styled_text, clip_top, *height as u16);
                 }
             }
 
@@ -117,8 +117,16 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
 }
 
 enum MessageEntry<'a> {
-    Node { node: &'a Node, height: usize },
-    Streaming { content: String, height: usize },
+    Node {
+        node: &'a Node,
+        styled_text: Text<'static>,
+        height: usize,
+        has_thinking: bool,
+    },
+    Streaming {
+        styled_text: Text<'static>,
+        height: usize,
+    },
 }
 
 impl MessageEntry<'_> {
@@ -129,20 +137,74 @@ impl MessageEntry<'_> {
     }
 }
 
-fn compute_height(content: &str, content_width: usize) -> usize {
-    let mut lines = 0usize;
-    for line in content.lines() {
-        let char_count = line.chars().count();
-        if char_count == 0 {
-            lines += 1;
+fn build_entries<'a>(
+    history: &[&'a Node],
+    graph: &ConversationGraph,
+    tui_state: &TuiState,
+    msg_content_width: usize,
+) -> Vec<MessageEntry<'a>> {
+    let mut entries: Vec<MessageEntry<'a>> = history
+        .iter()
+        .filter(|node| !matches!(node, Node::ThinkBlock { .. }))
+        .map(|node| {
+            let styled = render_markdown(node.content());
+            let has_thinking = graph.has_think_block(node.id());
+            let height = compute_styled_height(&styled, msg_content_width, has_thinking);
+            MessageEntry::Node {
+                node,
+                styled_text: styled,
+                height,
+                has_thinking,
+            }
+        })
+        .collect();
+
+    if let Some(ref streaming) = tui_state.streaming_response {
+        let mut styled = render_markdown(streaming);
+        // Append cursor as a styled span after parsing, to avoid corrupting parser state
+        if let Some(last_line) = styled.lines.last_mut() {
+            last_line
+                .spans
+                .push(Span::styled("▌", Style::default().fg(Color::Green)));
         } else {
-            lines += char_count.div_ceil(content_width);
+            styled.lines.push(Line::from(Span::styled(
+                "▌",
+                Style::default().fg(Color::Green),
+            )));
+        }
+        let height = compute_styled_height(&styled, msg_content_width, false);
+        entries.push(MessageEntry::Streaming {
+            styled_text: styled,
+            height,
+        });
+    }
+
+    entries
+}
+
+/// Compute the rendered height of styled text within a given content width.
+/// Each `Line` in the `Text` may wrap if its visible width exceeds `content_width`.
+/// +2 for the message block border (top/bottom). +1 if `has_thinking` (collapsed indicator).
+fn compute_styled_height(text: &Text<'_>, content_width: usize, has_thinking: bool) -> usize {
+    if content_width == 0 {
+        return 2;
+    }
+    let mut total_lines = 0usize;
+    if has_thinking {
+        total_lines += 1; // "[thinking...]" indicator line
+    }
+    for line in &text.lines {
+        let w = line.width();
+        if w == 0 {
+            total_lines += 1;
+        } else {
+            total_lines += w.div_ceil(content_width);
         }
     }
-    if content.is_empty() {
-        lines = 1;
+    if text.lines.is_empty() {
+        total_lines = 1;
     }
-    lines + 2 // +2 for top/bottom border
+    total_lines + 2 // +2 for top/bottom border
 }
 
 fn role_label(node: &Node) -> &'static str {
@@ -157,6 +219,8 @@ fn role_label(node: &Node) -> &'static str {
         Node::GitFile { .. } => "file",
         Node::Tool { .. } => "tool",
         Node::BackgroundTask { .. } => "bg",
+        // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
+        Node::ThinkBlock { .. } => "think",
     }
 }
 
@@ -170,7 +234,10 @@ fn role_color(node: &Node) -> Color {
         Node::WorkItem { .. } => Color::Yellow,
         Node::GitFile { .. } => Color::Blue,
         Node::Tool { .. } => Color::Magenta,
-        Node::SystemDirective { .. } | Node::BackgroundTask { .. } => Color::DarkGray,
+        // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
+        Node::SystemDirective { .. } | Node::BackgroundTask { .. } | Node::ThinkBlock { .. } => {
+            Color::DarkGray
+        }
     }
 }
 
@@ -204,33 +271,50 @@ fn build_block(label: &str, metadata: &str, color: Color) -> Block<'static> {
     block
 }
 
-fn render_message(frame: &mut Frame, area: Rect, node: &Node, clip_top: u16, full_height: u16) {
+fn render_message(
+    frame: &mut Frame,
+    area: Rect,
+    node: &Node,
+    styled_text: &Text<'static>,
+    clip_top: u16,
+    full_height: u16,
+    has_thinking: bool,
+) {
     let label = role_label(node);
     let color = role_color(node);
     let metadata = metadata_string(node);
     let block = build_block(label, &metadata, color);
 
-    let paragraph = Paragraph::new(node.content().to_string())
+    let mut content = styled_text.clone();
+    if has_thinking {
+        content.lines.insert(
+            0,
+            Line::styled(
+                "[thinking...]",
+                Style::default().fg(Color::DarkGray).italic(),
+            ),
+        );
+    }
+
+    let paragraph = Paragraph::new(content)
         .block(block)
         .wrap(Wrap { trim: false })
         .scroll((clip_top, 0));
 
-    // Render into a virtual area of full height, clipped to the visible rect
-    let virtual_area = Rect::new(area.x, area.y, area.width, full_height);
-    // Use the actual area for rendering (frame clips automatically)
-    let render_area = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        area.height.min(virtual_area.height),
-    );
+    let render_area = Rect::new(area.x, area.y, area.width, area.height.min(full_height));
     frame.render_widget(paragraph, render_area);
 }
 
-fn render_streaming(frame: &mut Frame, area: Rect, content: &str, clip_top: u16, full_height: u16) {
+fn render_streaming(
+    frame: &mut Frame,
+    area: Rect,
+    styled_text: &Text<'static>,
+    clip_top: u16,
+    full_height: u16,
+) {
     let block = build_block("assistant", "", Color::Green);
 
-    let paragraph = Paragraph::new(content.to_string())
+    let paragraph = Paragraph::new(styled_text.clone())
         .block(block)
         .wrap(Wrap { trim: false })
         .scroll((clip_top, 0));

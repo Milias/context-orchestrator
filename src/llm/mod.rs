@@ -109,7 +109,7 @@ pub async fn background_llm_call(
 }
 
 /// Strip markdown code fences from LLM responses that wrap JSON output.
-fn strip_json_fences(text: &str) -> String {
+pub(crate) fn strip_json_fences(text: &str) -> String {
     let trimmed = text.trim();
     if let Some(rest) = trimmed.strip_prefix("```json") {
         if let Some(content) = rest.strip_suffix("```") {
@@ -123,3 +123,6 @@ fn strip_json_fences(text: &str) -> String {
     }
     trimmed.to_string()
 }
+
+#[cfg(test)]
+mod tests;
