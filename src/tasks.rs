@@ -1,4 +1,6 @@
 use crate::graph::{BackgroundTaskKind, GitFileStatus, TaskStatus};
+use crate::llm::ChatMessage;
+use crate::tools::PlanExtractionResult;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -15,6 +17,21 @@ pub struct ToolSnapshot {
     pub description: String,
 }
 
+/// Read-only snapshot of graph context for background tasks.
+/// Cloned from the live graph before spawning — no shared mutable state.
+#[derive(Debug, Clone)]
+pub struct ContextSnapshot {
+    pub messages: Vec<ChatMessage>,
+    pub tools: Vec<ToolSnapshot>,
+    pub trigger_message_id: Uuid,
+}
+
+/// Outcome of a tool extraction background task.
+#[derive(Debug)]
+pub enum ToolExtractionOutcome {
+    Plan(PlanExtractionResult),
+}
+
 #[derive(Debug)]
 pub enum TaskMessage {
     GitFilesUpdated(Vec<GitFileSnapshot>),
@@ -24,6 +41,10 @@ pub enum TaskMessage {
         kind: BackgroundTaskKind,
         status: TaskStatus,
         description: String,
+    },
+    ToolExtractionComplete {
+        trigger_message_id: Uuid,
+        result: ToolExtractionOutcome,
     },
 }
 

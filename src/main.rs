@@ -5,6 +5,7 @@ mod llm;
 mod migration;
 mod persistence;
 mod tasks;
+mod tools;
 mod tui;
 
 use app::App;
@@ -15,6 +16,7 @@ use graph::ConversationGraph;
 use llm::anthropic::AnthropicProvider;
 use persistence::ConversationMetadata;
 use std::io;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Parser)]
@@ -100,6 +102,6 @@ async fn main() -> anyhow::Result<()> {
         original_hook(panic_info);
     }));
 
-    let app = App::new(config, graph, metadata, Box::new(provider));
+    let app = App::new(config, graph, metadata, Arc::new(provider));
     app.run().await
 }

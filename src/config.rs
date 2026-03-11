@@ -21,6 +21,18 @@ fn default_system_prompt() -> String {
     "You are a helpful assistant.".to_string()
 }
 
+fn default_background_model() -> String {
+    "claude-opus-4-6".to_string()
+}
+
+fn default_background_max_tokens() -> u32 {
+    1024
+}
+
+fn default_background_max_concurrent() -> usize {
+    2
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_base_url")]
@@ -35,6 +47,12 @@ pub struct AppConfig {
     pub max_context_tokens: u32,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+    #[serde(default = "default_background_model")]
+    pub background_model: String,
+    #[serde(default = "default_background_max_tokens")]
+    pub background_max_tokens: u32,
+    #[serde(default = "default_background_max_concurrent")]
+    pub background_max_concurrent: usize,
 }
 
 impl AppConfig {

@@ -21,6 +21,7 @@ pub enum ContextTab {
     Files,
     Tools,
     Tasks,
+    Work,
 }
 
 impl ContextTab {
@@ -30,6 +31,7 @@ impl ContextTab {
             ContextTab::Files,
             ContextTab::Tools,
             ContextTab::Tasks,
+            ContextTab::Work,
         ]
     }
 
@@ -39,6 +41,7 @@ impl ContextTab {
             ContextTab::Files => "Files",
             ContextTab::Tools => "Tools",
             ContextTab::Tasks => "Tasks",
+            ContextTab::Work => "Work",
         }
     }
 
@@ -48,6 +51,7 @@ impl ContextTab {
             ContextTab::Files => 1,
             ContextTab::Tools => 2,
             ContextTab::Tasks => 3,
+            ContextTab::Work => 4,
         }
     }
 
@@ -56,16 +60,18 @@ impl ContextTab {
             ContextTab::Outline => ContextTab::Files,
             ContextTab::Files => ContextTab::Tools,
             ContextTab::Tools => ContextTab::Tasks,
-            ContextTab::Tasks => ContextTab::Outline,
+            ContextTab::Tasks => ContextTab::Work,
+            ContextTab::Work => ContextTab::Outline,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            ContextTab::Outline => ContextTab::Tasks,
+            ContextTab::Outline => ContextTab::Work,
             ContextTab::Files => ContextTab::Outline,
             ContextTab::Tools => ContextTab::Files,
             ContextTab::Tasks => ContextTab::Tools,
+            ContextTab::Work => ContextTab::Tasks,
         }
     }
 }

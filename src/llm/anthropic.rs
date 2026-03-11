@@ -126,7 +126,6 @@ impl LlmProvider for AnthropicProvider {
 struct SseState<S> {
     stream: Pin<Box<S>>,
     buffer: String,
-    input_tokens: Option<u32>,
     output_tokens: Option<u32>,
 }
 
@@ -137,7 +136,6 @@ fn sse_to_stream_chunks(
         SseState {
             stream: Box::pin(byte_stream),
             buffer: String::new(),
-            input_tokens: None,
             output_tokens: None,
         },
         |mut state| async move {
@@ -147,11 +145,7 @@ fn sse_to_stream_chunks(
                     let event_text = state.buffer[..pos].to_string();
                     state.buffer = state.buffer[pos + 2..].to_string();
 
-                    if let Some(chunk) = parse_sse_event(
-                        &event_text,
-                        &mut state.input_tokens,
-                        &mut state.output_tokens,
-                    ) {
+                    if let Some(chunk) = parse_sse_event(&event_text, &mut state.output_tokens) {
                         return Some((chunk, state));
                     }
                     continue;
@@ -175,16 +169,6 @@ fn sse_to_stream_chunks(
 }
 
 #[derive(Deserialize)]
-struct MessageStartEvent {
-    message: Option<MessagePayload>,
-}
-
-#[derive(Deserialize)]
-struct MessagePayload {
-    usage: Option<UsagePayload>,
-}
-
-#[derive(Deserialize)]
 struct ContentBlockDeltaEvent {
     delta: Option<DeltaPayload>,
 }
@@ -201,7 +185,6 @@ struct MessageDeltaEvent {
 
 #[derive(Deserialize)]
 struct UsagePayload {
-    input_tokens: Option<u32>,
     output_tokens: Option<u32>,
 }
 
@@ -217,7 +200,6 @@ struct ErrorPayload {
 
 fn parse_sse_event(
     event_text: &str,
-    input_tokens: &mut Option<u32>,
     output_tokens: &mut Option<u32>,
 ) -> Option<anyhow::Result<StreamChunk>> {
     let mut event_type = "";
@@ -236,20 +218,6 @@ fn parse_sse_event(
     }
 
     match event_type {
-        "message_start" => {
-            let event: MessageStartEvent = match serde_json::from_str(data) {
-                Ok(v) => v,
-                Err(e) => return Some(Err(e.into())),
-            };
-            if let Some(tokens) = event
-                .message
-                .and_then(|m| m.usage)
-                .and_then(|u| u.input_tokens)
-            {
-                *input_tokens = Some(tokens);
-            }
-            None
-        }
         "content_block_delta" => {
             let event: ContentBlockDeltaEvent = match serde_json::from_str(data) {
                 Ok(v) => v,
@@ -271,7 +239,6 @@ fn parse_sse_event(
             None
         }
         "message_stop" => Some(Ok(StreamChunk::Done {
-            input_tokens: *input_tokens,
             output_tokens: *output_tokens,
         })),
         "error" => {
@@ -290,97 +257,5 @@ fn parse_sse_event(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_text_delta() {
-        let event = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}";
-        let mut it = None;
-        let mut ot = None;
-        let result = parse_sse_event(event, &mut it, &mut ot);
-        assert!(matches!(result, Some(Ok(StreamChunk::TextDelta(ref t))) if t == "Hello"));
-    }
-
-    #[test]
-    fn test_parse_message_start_captures_input_tokens() {
-        let event = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":25}}}";
-        let mut it = None;
-        let mut ot = None;
-        let result = parse_sse_event(event, &mut it, &mut ot);
-        assert!(result.is_none());
-        assert_eq!(it, Some(25));
-    }
-
-    #[test]
-    fn test_parse_message_delta_captures_output_tokens() {
-        let event = "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":100}}";
-        let mut it = None;
-        let mut ot = None;
-        let result = parse_sse_event(event, &mut it, &mut ot);
-        assert!(result.is_none());
-        assert_eq!(ot, Some(100));
-    }
-
-    #[test]
-    fn test_parse_message_stop() {
-        let event = "event: message_stop\ndata: {\"type\":\"message_stop\"}";
-        let mut it = Some(25);
-        let mut ot = Some(100);
-        let result = parse_sse_event(event, &mut it, &mut ot);
-        assert!(matches!(
-            result,
-            Some(Ok(StreamChunk::Done {
-                input_tokens: Some(25),
-                output_tokens: Some(100)
-            }))
-        ));
-    }
-
-    #[test]
-    fn test_parse_ping_ignored() {
-        let event = "event: ping\ndata: {\"type\":\"ping\"}";
-        let mut it = None;
-        let mut ot = None;
-        let result = parse_sse_event(event, &mut it, &mut ot);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_parse_error_event() {
-        let event = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}";
-        let mut it = None;
-        let mut ot = None;
-        let result = parse_sse_event(event, &mut it, &mut ot);
-        assert!(matches!(result, Some(Ok(StreamChunk::Error(ref e))) if e == "Overloaded"));
-    }
-
-    #[tokio::test]
-    async fn test_real_api_call() {
-        if std::env::var("ANTHROPIC_AUTH_TOKEN").is_err()
-            && std::env::var("ANTHROPIC_API_KEY").is_err()
-        {
-            eprintln!("Skipping: no API key set");
-            return;
-        }
-        let app_config = AppConfig::load().unwrap();
-        let provider = AnthropicProvider::from_config(&app_config).unwrap();
-        let messages = vec![ChatMessage {
-            role: "user".to_string(),
-            content: "Say hello in exactly 3 words.".to_string(),
-        }];
-        let config = ChatConfig::from_app_config(&app_config);
-        let mut stream = provider.chat(messages, &config).await.unwrap();
-
-        let mut full_text = String::new();
-        while let Some(chunk) = stream.next().await {
-            match chunk.unwrap() {
-                StreamChunk::TextDelta(t) => full_text.push_str(&t),
-                StreamChunk::Done { .. } => break,
-                StreamChunk::Error(e) => panic!("Error: {e}"),
-            }
-        }
-        assert!(!full_text.is_empty());
-        eprintln!("Response: {full_text}");
-    }
-}
+#[path = "anthropic_tests.rs"]
+mod tests;

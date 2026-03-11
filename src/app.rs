@@ -1,8 +1,8 @@
 use crate::config::AppConfig;
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
-use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
+use crate::llm::{BackgroundLlmConfig, ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use crate::persistence::{self, ConversationMetadata};
-use crate::tasks::{self, TaskMessage};
+use crate::tasks::{self, ContextSnapshot, TaskMessage, ToolExtractionOutcome};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
 use crate::tui::{self, TuiState};
@@ -12,14 +12,16 @@ use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use ratatui::prelude::*;
 use std::io;
-use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Semaphore};
 use uuid::Uuid;
 
 pub struct App {
     config: AppConfig,
     graph: ConversationGraph,
     metadata: ConversationMetadata,
-    provider: Box<dyn LlmProvider>,
+    provider: Arc<dyn LlmProvider>,
+    background_semaphore: Arc<Semaphore>,
     tui_state: TuiState,
     task_rx: mpsc::UnboundedReceiver<TaskMessage>,
     task_tx: mpsc::UnboundedSender<TaskMessage>,
@@ -30,17 +32,65 @@ impl App {
         config: AppConfig,
         graph: ConversationGraph,
         metadata: ConversationMetadata,
-        provider: Box<dyn LlmProvider>,
+        provider: Arc<dyn LlmProvider>,
     ) -> Self {
         let (task_tx, task_rx) = mpsc::unbounded_channel();
+        let background_semaphore = Arc::new(Semaphore::new(config.background_max_concurrent));
         Self {
             config,
             graph,
             metadata,
             provider,
+            background_semaphore,
             tui_state: TuiState::new(),
             task_rx,
             task_tx,
+        }
+    }
+
+    fn snapshot_context(&self, trigger_message_id: Uuid) -> ContextSnapshot {
+        let history = self
+            .graph
+            .get_branch_history(self.graph.active_branch())
+            .unwrap_or_default();
+
+        let messages: Vec<ChatMessage> = history
+            .iter()
+            .filter_map(|node| match node {
+                Node::Message { role, content, .. } => {
+                    let api_role = match role {
+                        Role::User => "user",
+                        Role::Assistant => "assistant",
+                        Role::System => return None,
+                    };
+                    Some(ChatMessage {
+                        role: api_role.to_string(),
+                        content: content.clone(),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+
+        let tools = self
+            .graph
+            .nodes_by(|n| matches!(n, Node::Tool { .. }))
+            .into_iter()
+            .filter_map(|n| match n {
+                Node::Tool {
+                    name, description, ..
+                } => Some(crate::tasks::ToolSnapshot {
+                    name: name.clone(),
+                    description: description.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+
+        ContextSnapshot {
+            messages,
+            tools,
+            trigger_message_id,
         }
     }
 
@@ -176,16 +226,29 @@ impl App {
             .branch_leaf(self.graph.active_branch())
             .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
 
+        let single = vec![ChatMessage {
+            role: "user".into(),
+            content: text.clone(),
+        }];
+        let user_tokens = self
+            .provider
+            .count_tokens(&single, &self.config.anthropic_model, None)
+            .await
+            .ok();
+
+        let text_for_triggers = text.clone();
         let user_node = Node::Message {
             id: Uuid::new_v4(),
             role: Role::User,
             content: text,
             created_at: Utc::now(),
             model: None,
-            input_tokens: None,
+            input_tokens: user_tokens,
             output_tokens: None,
         };
-        self.graph.add_message(parent_id, user_node)?;
+        let user_msg_id = self.graph.add_message(parent_id, user_node)?;
+
+        self.spawn_tool_triggers(&text_for_triggers, user_msg_id);
 
         let (system_prompt, messages) = self.build_context().await?;
         let config = ChatConfig {
@@ -193,23 +256,67 @@ impl App {
             ..ChatConfig::from_app_config(&self.config)
         };
 
+        let (response, output_tokens) = self
+            .stream_llm_response(messages, &config, terminal, event_stream)
+            .await?;
+
+        if !response.is_empty() {
+            let leaf = self.graph.branch_leaf(self.graph.active_branch()).unwrap();
+            let assistant_node = Node::Message {
+                id: Uuid::new_v4(),
+                role: Role::Assistant,
+                content: response,
+                created_at: Utc::now(),
+                model: Some(config.model.clone()),
+                input_tokens: None,
+                output_tokens,
+            };
+            self.graph.add_message(leaf, assistant_node)?;
+        }
+
+        self.tui_state.streaming_response = None;
+        self.tui_state.status_message = None;
+        self.save()?;
+        Ok(())
+    }
+
+    fn spawn_tool_triggers(&self, text: &str, user_msg_id: Uuid) {
+        for trigger in crate::tools::parse_triggers(text) {
+            let snapshot = self.snapshot_context(user_msg_id);
+            crate::tools::spawn_tool_extraction(
+                trigger,
+                snapshot,
+                Arc::clone(&self.provider),
+                Arc::clone(&self.background_semaphore),
+                BackgroundLlmConfig::from_app_config(&self.config),
+                self.task_tx.clone(),
+            );
+        }
+    }
+
+    async fn stream_llm_response(
+        &mut self,
+        messages: Vec<ChatMessage>,
+        config: &ChatConfig,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        event_stream: &mut EventStream,
+    ) -> anyhow::Result<(String, Option<u32>)> {
         self.tui_state.streaming_response = Some(String::new());
         self.tui_state.status_message = Some("Waiting for response...".to_string());
         self.tui_state.scroll_offset = u16::MAX;
         terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
 
-        let mut stream = match self.provider.chat(messages, &config).await {
+        let mut stream = match self.provider.chat(messages, config).await {
             Ok(s) => s,
             Err(e) => {
                 self.tui_state.streaming_response = None;
                 self.tui_state.status_message = Some(format!("Error: {e}"));
-                return Ok(());
+                return Ok((String::new(), None));
             }
         };
 
         let mut full_response = String::new();
         let mut output_tokens = None;
-        let mut input_tokens = None;
 
         loop {
             tokio::select! {
@@ -221,8 +328,7 @@ impl App {
                             self.tui_state.status_message = Some("Receiving...".to_string());
                             self.tui_state.scroll_offset = u16::MAX;
                         }
-                        Some(Ok(StreamChunk::Done { input_tokens: it, output_tokens: ot })) => {
-                            input_tokens = it;
+                        Some(Ok(StreamChunk::Done { output_tokens: ot })) => {
                             output_tokens = ot;
                             break;
                         }
@@ -248,29 +354,10 @@ impl App {
                     }
                 }
             }
-
             terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
         }
 
-        if !full_response.is_empty() {
-            let leaf = self.graph.branch_leaf(self.graph.active_branch()).unwrap();
-            let assistant_node = Node::Message {
-                id: Uuid::new_v4(),
-                role: Role::Assistant,
-                content: full_response,
-                created_at: Utc::now(),
-                model: Some(config.model.clone()),
-                input_tokens,
-                output_tokens,
-            };
-            self.graph.add_message(leaf, assistant_node)?;
-        }
-
-        self.tui_state.streaming_response = None;
-        self.tui_state.status_message = None;
-
-        self.save()?;
-        Ok(())
+        Ok((full_response, output_tokens))
     }
 
     fn handle_task_message(&mut self, msg: TaskMessage) {
@@ -324,6 +411,22 @@ impl App {
                     updated_at: Utc::now(),
                 });
             }
+            TaskMessage::ToolExtractionComplete {
+                trigger_message_id,
+                result,
+            } => match result {
+                ToolExtractionOutcome::Plan(plan) => {
+                    let node = crate::tools::plan_result_to_node(&plan);
+                    let node_id = self.graph.add_node(node);
+                    let _ = self.graph.add_edge(
+                        node_id,
+                        trigger_message_id,
+                        crate::tools::tool_result_edge_kind(),
+                    );
+                    self.tui_state.status_message =
+                        Some(format!("Work item created: {}", plan.title));
+                }
+            },
         }
     }
 

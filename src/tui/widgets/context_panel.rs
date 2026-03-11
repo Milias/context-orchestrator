@@ -67,6 +67,7 @@ fn render_tab_content(
         ContextTab::Files => render_node_list(frame, area, graph, tui_state, is_git_file),
         ContextTab::Tools => render_node_list(frame, area, graph, tui_state, is_tool),
         ContextTab::Tasks => render_node_list(frame, area, graph, tui_state, is_background_task),
+        ContextTab::Work => render_node_list(frame, area, graph, tui_state, is_work_item),
     }
 }
 
@@ -192,6 +193,17 @@ fn format_node_line(node: &Node) -> Line<'static> {
                 Span::styled(description.clone(), Style::default().fg(Color::White)),
             ])
         }
+        Node::WorkItem { title, status, .. } => {
+            let (marker, color) = match status {
+                crate::graph::WorkItemStatus::Todo => ("[]", Color::Yellow),
+                crate::graph::WorkItemStatus::Active => ("[*]", Color::Cyan),
+                crate::graph::WorkItemStatus::Done => ("[v]", Color::Green),
+            };
+            Line::from(vec![
+                Span::styled(format!("{marker} "), Style::default().fg(color)),
+                Span::styled(title.clone(), Style::default().fg(Color::White)),
+            ])
+        }
         _ => Line::from(node.content().to_string()),
     }
 }
@@ -253,4 +265,8 @@ fn is_tool(node: &Node) -> bool {
 
 fn is_background_task(node: &Node) -> bool {
     matches!(node, Node::BackgroundTask { .. })
+}
+
+fn is_work_item(node: &Node) -> bool {
+    matches!(node, Node::WorkItem { .. })
 }

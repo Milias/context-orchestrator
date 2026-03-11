@@ -175,11 +175,10 @@ fn role_color(node: &Node) -> Color {
 }
 
 fn metadata_string(node: &Node) -> String {
-    match (node.input_tokens(), node.output_tokens()) {
-        (Some(inp), Some(out)) => format!("{inp}in / {out}out"),
-        (Some(inp), None) => format!("{inp}in"),
-        (None, Some(out)) => format!("{out}out"),
-        (None, None) => String::new(),
+    let tokens = node.input_tokens().or(node.output_tokens());
+    match tokens {
+        Some(t) => format!("{t} tokens"),
+        None => String::new(),
     }
 }
 
