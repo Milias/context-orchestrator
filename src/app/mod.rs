@@ -363,11 +363,31 @@ impl App {
                 }
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
-                        if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
-                            && key.code == crossterm::event::KeyCode::Char('q')
-                        {
-                            self.tui_state.should_quit = true;
-                            break;
+                        let action = input::handle_key_event(key, &mut self.tui_state);
+                        match action {
+                            Action::Quit => {
+                                self.tui_state.should_quit = true;
+                                break;
+                            }
+                            Action::ScrollUp => {
+                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(3);
+                            }
+                            Action::ScrollDown => {
+                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(3);
+                            }
+                            Action::PageUp => {
+                                if let Ok(size) = terminal.size() {
+                                    let page = size.height / 2;
+                                    self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(page);
+                                }
+                            }
+                            Action::PageDown => {
+                                if let Ok(size) = terminal.size() {
+                                    let page = size.height / 2;
+                                    self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(page);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }

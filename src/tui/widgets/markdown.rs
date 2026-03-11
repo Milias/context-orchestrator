@@ -34,9 +34,12 @@ pub fn render_markdown(content: &str) -> Text<'static> {
     Text::from(lines)
 }
 
+const CODE_BG: Color = Color::Rgb(40, 42, 54);
+
 struct RenderContext {
     inline_spans: Vec<Span<'static>>,
     code_language: Option<String>,
+    table_col_widths: Vec<usize>,
 }
 
 impl RenderContext {
@@ -44,6 +47,7 @@ impl RenderContext {
         Self {
             inline_spans: Vec::new(),
             code_language: None,
+            table_col_widths: Vec::new(),
         }
     }
 
@@ -66,6 +70,18 @@ fn heading_style(level: u8) -> Style {
         _ => Color::White,
     };
     Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+fn format_table_row(cells: &[String], col_widths: &[usize]) -> String {
+    cells
+        .iter()
+        .enumerate()
+        .map(|(i, cell)| {
+            let w = col_widths.get(i).copied().unwrap_or(cell.len());
+            format!("{cell:<w$}")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn push_inline(spans: &mut Vec<Span<'static>>, elem: &InlineElement) {
@@ -95,19 +111,15 @@ fn push_inline(spans: &mut Vec<Span<'static>>, elem: &InlineElement) {
         InlineElement::Code(s) => {
             spans.push(Span::styled(
                 format!(" {s} "),
-                Style::default().fg(Color::Yellow).bg(Color::DarkGray),
+                Style::default().fg(Color::Yellow).bg(CODE_BG),
             ));
         }
-        InlineElement::Link { text, url } => {
+        InlineElement::Link { text, .. } => {
             spans.push(Span::styled(
                 text.clone(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::UNDERLINED),
-            ));
-            spans.push(Span::styled(
-                format!(" ({url})"),
-                Style::default().fg(Color::DarkGray),
             ));
         }
         InlineElement::Image { alt, .. } => {
@@ -140,18 +152,14 @@ fn push_parse_inline(spans: &mut Vec<Span<'static>>, event: &ParseEvent) {
         )),
         ParseEvent::InlineCode(s) => spans.push(Span::styled(
             format!(" {s} "),
-            Style::default().fg(Color::Yellow).bg(Color::DarkGray),
+            Style::default().fg(Color::Yellow).bg(CODE_BG),
         )),
-        ParseEvent::Link { text, url } => {
+        ParseEvent::Link { text, .. } => {
             spans.push(Span::styled(
                 text.clone(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::UNDERLINED),
-            ));
-            spans.push(Span::styled(
-                format!(" ({url})"),
-                Style::default().fg(Color::DarkGray),
             ));
         }
         ParseEvent::Image { alt, .. } => spans.push(Span::styled(
@@ -192,7 +200,6 @@ fn process_event(event: &ParseEvent, lines: &mut Vec<Line<'static>>, ctx: &mut R
         ParseEvent::BlockquoteStart { .. } => {
             ctx.flush_inline(lines);
         }
-        // Newline always starts a new line
         ParseEvent::Newline => {
             if ctx.inline_spans.is_empty() {
                 lines.push(Line::default());
@@ -204,8 +211,6 @@ fn process_event(event: &ParseEvent, lines: &mut Vec<Line<'static>>, ctx: &mut R
             ctx.flush_inline(lines);
             lines.push(Line::default());
         }
-
-        // Headings
         ParseEvent::Heading { level, content } => {
             ctx.flush_inline(lines);
             let prefix = "#".repeat(*level as usize);
@@ -214,8 +219,21 @@ fn process_event(event: &ParseEvent, lines: &mut Vec<Line<'static>>, ctx: &mut R
                 heading_style(*level),
             ));
         }
+        ParseEvent::InlineElements(elements) => {
+            for elem in elements {
+                push_inline(&mut ctx.inline_spans, elem);
+            }
+        }
+        _ => process_block_event(event, lines, ctx),
+    }
+}
 
-        // Code blocks
+fn process_block_event(
+    event: &ParseEvent,
+    lines: &mut Vec<Line<'static>>,
+    ctx: &mut RenderContext,
+) {
+    match event {
         ParseEvent::CodeBlockStart { language, .. } => {
             ctx.flush_inline(lines);
             ctx.code_language.clone_from(language);
@@ -226,8 +244,7 @@ fn process_event(event: &ParseEvent, lines: &mut Vec<Line<'static>>, ctx: &mut R
             ));
         }
         ParseEvent::CodeBlockLine(code) => {
-            let spans = highlight_code_line(code, ctx.code_language.as_deref());
-            lines.push(Line::from(spans));
+            lines.push(Line::from(highlight_code_line(code, ctx.code_language.as_deref())));
         }
         ParseEvent::CodeBlockEnd => {
             lines.push(Line::styled(
@@ -236,8 +253,6 @@ fn process_event(event: &ParseEvent, lines: &mut Vec<Line<'static>>, ctx: &mut R
             ));
             ctx.code_language = None;
         }
-
-        // Lists
         ParseEvent::ListItem {
             indent,
             bullet,
@@ -254,17 +269,24 @@ fn process_event(event: &ParseEvent, lines: &mut Vec<Line<'static>>, ctx: &mut R
                 Span::raw(content.clone()),
             ]));
         }
-
-        // Tables
         ParseEvent::TableHeader(cells) => {
             ctx.flush_inline(lines);
-            let header = cells.join(" | ");
+            ctx.table_col_widths = cells.iter().map(String::len).collect();
             lines.push(Line::styled(
-                header,
+                format_table_row(cells, &ctx.table_col_widths),
                 Style::default().bold().fg(Color::Cyan),
             ));
         }
-        ParseEvent::TableSeparator | ParseEvent::HorizontalRule => {
+        ParseEvent::TableSeparator => {
+            let total: usize = ctx.table_col_widths.iter().sum::<usize>()
+                + ctx.table_col_widths.len().saturating_sub(1) * 3;
+            let width = if total > 0 { total } else { 40 };
+            lines.push(Line::styled(
+                "\u{2500}".repeat(width),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        ParseEvent::HorizontalRule => {
             ctx.flush_inline(lines);
             lines.push(Line::styled(
                 "\u{2500}".repeat(40),
@@ -272,26 +294,19 @@ fn process_event(event: &ParseEvent, lines: &mut Vec<Line<'static>>, ctx: &mut R
             ));
         }
         ParseEvent::TableRow(cells) => {
-            let row = cells.join(" | ");
-            lines.push(Line::raw(row));
+            for (i, cell) in cells.iter().enumerate() {
+                if i < ctx.table_col_widths.len() {
+                    ctx.table_col_widths[i] = ctx.table_col_widths[i].max(cell.len());
+                }
+            }
+            lines.push(Line::raw(format_table_row(cells, &ctx.table_col_widths)));
         }
-
-        // Blockquotes
         ParseEvent::BlockquoteLine(text) => {
             lines.push(Line::from(vec![
                 Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
                 Span::styled(text.clone(), Style::default().fg(Color::Gray)),
             ]));
         }
-
-        // Inline element collections
-        ParseEvent::InlineElements(elements) => {
-            for elem in elements {
-                push_inline(&mut ctx.inline_spans, elem);
-            }
-        }
-
-        // Inline events already handled by early return above
         _ => {}
     }
 }
@@ -312,13 +327,13 @@ fn highlight_code_line(code: &str, language: Option<&str>) -> Vec<Span<'static>>
                 let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
                 Span::styled(
                     text.to_string(),
-                    Style::default().fg(fg).bg(Color::DarkGray),
+                    Style::default().fg(fg).bg(CODE_BG),
                 )
             })
             .collect(),
         Err(_) => vec![Span::styled(
             code.to_string(),
-            Style::default().fg(Color::White).bg(Color::DarkGray),
+            Style::default().fg(Color::White).bg(CODE_BG),
         )],
     }
 }
@@ -364,7 +379,7 @@ mod tests {
         let spans: Vec<&Span> = text.lines.iter().flat_map(|l| l.spans.iter()).collect();
         let code_span = spans.iter().find(|s| s.content.contains("code"));
         assert!(code_span.is_some());
-        assert_eq!(code_span.unwrap().style.bg, Some(Color::DarkGray));
+        assert_eq!(code_span.unwrap().style.bg, Some(CODE_BG));
     }
 
     #[test]
