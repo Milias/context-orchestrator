@@ -1,3 +1,4 @@
+use crate::config::AppConfig;
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
@@ -12,16 +13,9 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    pub fn new() -> anyhow::Result<Self> {
-        let api_key = std::env::var("ANTHROPIC_AUTH_TOKEN")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .map_err(|_| {
-                anyhow::anyhow!("Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY set")
-            })?;
-
-        let base_url = std::env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-        let base_url = base_url.trim_end_matches('/').to_string();
+    pub fn from_config(config: &AppConfig) -> anyhow::Result<Self> {
+        let api_key = config.api_key()?;
+        let base_url = config.anthropic_base_url.trim_end_matches('/').to_string();
 
         let client = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -263,12 +257,13 @@ mod tests {
             eprintln!("Skipping: no API key set");
             return;
         }
-        let provider = AnthropicProvider::new().unwrap();
+        let app_config = AppConfig::load().unwrap();
+        let provider = AnthropicProvider::from_config(&app_config).unwrap();
         let messages = vec![ChatMessage {
             role: "user".to_string(),
             content: "Say hello in exactly 3 words.".to_string(),
         }];
-        let config = ChatConfig::default();
+        let config = ChatConfig::from_app_config(&app_config);
         let mut stream = provider.chat(messages, &config).await.unwrap();
 
         let mut full_text = String::new();

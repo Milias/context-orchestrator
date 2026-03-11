@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod graph;
 mod llm;
 mod persistence;
@@ -6,18 +7,44 @@ mod tui;
 
 use app::App;
 use chrono::Utc;
+use clap::{Parser, Subcommand};
+use config::AppConfig;
 use graph::ConversationGraph;
 use llm::anthropic::AnthropicProvider;
 use persistence::ConversationMetadata;
 use std::io;
 use uuid::Uuid;
 
+#[derive(Parser)]
+#[command(
+    name = "context-manager",
+    version,
+    about = "Graph-based context manager for LLM conversations"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Create a new conversation
+    New {
+        /// Name for the new conversation
+        #[arg(default_value = "New Conversation")]
+        name: String,
+    },
+    /// List all conversations
+    List,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
+    let cli = Cli::parse();
+    let config = AppConfig::load()?;
 
-    // Handle --list
-    if args.iter().any(|a| a == "--list") {
+    // Handle list subcommand (no API key needed)
+    if let Some(Command::List) = &cli.command {
         let conversations = persistence::list_conversations().unwrap_or_default();
         if conversations.is_empty() {
             println!("No conversations found.");
@@ -29,46 +56,40 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Check for API key early
-    if std::env::var("ANTHROPIC_AUTH_TOKEN").is_err() && std::env::var("ANTHROPIC_API_KEY").is_err()
-    {
-        anyhow::bail!("Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY environment variable set");
-    }
+    // API key required from here on
+    config.api_key()?;
+    let provider = AnthropicProvider::from_config(&config)?;
 
-    let provider = AnthropicProvider::new()?;
-
-    // Handle --new "name"
-    let (metadata, graph) = if let Some(pos) = args.iter().position(|a| a == "--new") {
-        let name = args
-            .get(pos + 1)
-            .cloned()
-            .unwrap_or_else(|| "New Conversation".to_string());
-        let id = Uuid::new_v4().to_string();
-        let graph = ConversationGraph::new("You are a helpful assistant.");
-        let metadata = ConversationMetadata {
-            id: id.clone(),
-            name,
-            created_at: Utc::now(),
-            last_modified: Utc::now(),
-        };
-        persistence::save_conversation(&id, &metadata, &graph)?;
-        (metadata, graph)
-    } else {
-        let conversations = persistence::list_conversations().unwrap_or_default();
-        if conversations.is_empty() {
+    let (metadata, graph) = match &cli.command {
+        Some(Command::New { name }) => {
             let id = Uuid::new_v4().to_string();
-            let graph = ConversationGraph::new("You are a helpful assistant.");
+            let graph = ConversationGraph::new(&config.system_prompt);
             let metadata = ConversationMetadata {
                 id: id.clone(),
-                name: "Default Conversation".to_string(),
+                name: name.clone(),
                 created_at: Utc::now(),
                 last_modified: Utc::now(),
             };
             persistence::save_conversation(&id, &metadata, &graph)?;
             (metadata, graph)
-        } else {
-            let latest = &conversations[0];
-            persistence::load_conversation(&latest.id)?
+        }
+        _ => {
+            let conversations = persistence::list_conversations().unwrap_or_default();
+            if conversations.is_empty() {
+                let id = Uuid::new_v4().to_string();
+                let graph = ConversationGraph::new(&config.system_prompt);
+                let metadata = ConversationMetadata {
+                    id: id.clone(),
+                    name: "Default Conversation".to_string(),
+                    created_at: Utc::now(),
+                    last_modified: Utc::now(),
+                };
+                persistence::save_conversation(&id, &metadata, &graph)?;
+                (metadata, graph)
+            } else {
+                let latest = &conversations[0];
+                persistence::load_conversation(&latest.id)?
+            }
         }
     };
 
@@ -80,6 +101,6 @@ async fn main() -> anyhow::Result<()> {
         original_hook(panic_info);
     }));
 
-    let app = App::new(graph, metadata, Box::new(provider));
+    let app = App::new(config, graph, metadata, Box::new(provider));
     app.run().await
 }

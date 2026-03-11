@@ -1,3 +1,4 @@
+use crate::config::AppConfig;
 use crate::graph::{ConversationGraph, Node, Role};
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use crate::persistence::{self, ConversationMetadata};
@@ -13,6 +14,7 @@ use std::io;
 use uuid::Uuid;
 
 pub struct App {
+    config: AppConfig,
     graph: ConversationGraph,
     metadata: ConversationMetadata,
     provider: Box<dyn LlmProvider>,
@@ -21,6 +23,7 @@ pub struct App {
 
 impl App {
     pub fn new(
+        config: AppConfig,
         graph: ConversationGraph,
         metadata: ConversationMetadata,
         provider: Box<dyn LlmProvider>,
@@ -32,6 +35,7 @@ impl App {
             tui_state.branch_list_selected = idx;
         }
         Self {
+            config,
             graph,
             metadata,
             provider,
@@ -157,7 +161,7 @@ impl App {
         let (system_prompt, messages) = self.build_context()?;
         let config = ChatConfig {
             system_prompt,
-            ..ChatConfig::default()
+            ..ChatConfig::from_app_config(&self.config)
         };
 
         self.tui_state.streaming_response = Some(String::new());

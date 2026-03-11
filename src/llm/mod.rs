@@ -1,5 +1,6 @@
 pub mod anthropic;
 
+use crate::config::AppConfig;
 use async_trait::async_trait;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -18,13 +19,11 @@ pub struct ChatConfig {
     pub system_prompt: Option<String>,
 }
 
-impl Default for ChatConfig {
-    fn default() -> Self {
+impl ChatConfig {
+    pub fn from_app_config(config: &AppConfig) -> Self {
         Self {
-            model: std::env::var("ANTHROPIC_MODEL")
-                .or_else(|_| std::env::var("CONTEXT_MANAGER_MODEL"))
-                .unwrap_or_else(|_| "claude-sonnet-4-5-20250514".to_string()),
-            max_tokens: 4096,
+            model: config.anthropic_model.clone(),
+            max_tokens: config.max_tokens,
             system_prompt: None,
         }
     }
