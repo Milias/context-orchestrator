@@ -130,17 +130,24 @@ fn role_label(node: &Node) -> &'static str {
             Role::Assistant => "assistant",
             Role::System => "system",
         },
+        Node::WorkItem { .. } => "task",
+        Node::GitFile { .. } => "file",
+        Node::Tool { .. } => "tool",
+        Node::BackgroundTask { .. } => "bg",
     }
 }
 
 fn role_color(node: &Node) -> Color {
     match node {
-        Node::SystemDirective { .. } => Color::DarkGray,
         Node::Message { role, .. } => match role {
             Role::User => Color::Cyan,
             Role::Assistant => Color::Green,
             Role::System => Color::DarkGray,
         },
+        Node::WorkItem { .. } => Color::Yellow,
+        Node::GitFile { .. } => Color::Blue,
+        Node::Tool { .. } => Color::Magenta,
+        Node::SystemDirective { .. } | Node::BackgroundTask { .. } => Color::DarkGray,
     }
 }
 

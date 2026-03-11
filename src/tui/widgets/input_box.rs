@@ -1,13 +1,19 @@
-use crate::tui::TuiState;
+use crate::tui::{FocusPanel, TuiState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 pub fn render(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
+    let border_color = if tui_state.focus == FocusPanel::Input {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
     let input = Paragraph::new(tui_state.input_text.as_str()).block(
         Block::default()
-            .title("Message (Enter: send | Ctrl+Q: quit)")
+            .title("Message (Enter: send | Tab: focus | Ctrl+B: panel | Ctrl+Q: quit)")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow)),
+            .border_style(Style::default().fg(border_color)),
     );
 
     frame.render_widget(input, area);

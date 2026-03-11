@@ -1,4 +1,4 @@
-use crate::tui::TuiState;
+use crate::tui::{FocusPanel, TuiState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug)]
@@ -11,10 +11,38 @@ pub enum Action {
 }
 
 pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
-        return Action::Quit;
+    // Global keybindings
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('q') => return Action::Quit,
+            KeyCode::Char('b') => {
+                tui_state.context_panel_visible = !tui_state.context_panel_visible;
+                if !tui_state.context_panel_visible
+                    && tui_state.focus == FocusPanel::ContextPanel
+                {
+                    tui_state.focus = FocusPanel::Input;
+                }
+                return Action::None;
+            }
+            _ => {}
+        }
     }
 
+    if key.code == KeyCode::Tab {
+        tui_state.focus = match tui_state.focus {
+            FocusPanel::Input if tui_state.context_panel_visible => FocusPanel::ContextPanel,
+            _ => FocusPanel::Input,
+        };
+        return Action::None;
+    }
+
+    match tui_state.focus {
+        FocusPanel::Input => handle_input_key(key, tui_state),
+        FocusPanel::ContextPanel => handle_context_panel_key(key, tui_state),
+    }
+}
+
+fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     match key.code {
         KeyCode::Enter => {
             let text = tui_state.input_text.trim().to_string();
@@ -63,4 +91,25 @@ pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
         KeyCode::Down => Action::ScrollDown,
         _ => Action::None,
     }
+}
+
+fn handle_context_panel_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
+    match key.code {
+        KeyCode::Left => {
+            tui_state.context_tab = tui_state.context_tab.prev();
+            tui_state.context_list_offset = 0;
+        }
+        KeyCode::Right => {
+            tui_state.context_tab = tui_state.context_tab.next();
+            tui_state.context_list_offset = 0;
+        }
+        KeyCode::Up => {
+            tui_state.context_list_offset = tui_state.context_list_offset.saturating_sub(1);
+        }
+        KeyCode::Down => {
+            tui_state.context_list_offset += 1;
+        }
+        _ => {}
+    }
+    Action::None
 }

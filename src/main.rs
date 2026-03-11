@@ -2,7 +2,9 @@ mod app;
 mod config;
 mod graph;
 mod llm;
+mod migration;
 mod persistence;
+mod tasks;
 mod tui;
 
 use app::App;

@@ -332,6 +332,7 @@ Everything in VISION.md that is NOT in this MVP:
 | Multiple LLM providers | Trait is there; implementations are additive | 5.4 |
 | Token budgeting | Requires tokenizer, budget algorithm | 3.2 |
 | Context inspector pane | Useful but not required to prove the concept | 5.3 |
+| External PM integration (Jira, Linear, etc.) | Work items are internal graph nodes only; no external sync | — |
 | Bootstrapping from Git/issues | No existing project data to import in MVP | 6 |
 | Graph visualization | Hard in TUI, not needed for branching | 5.3 |
 | Web escape hatch | Requires web server, xterm.js | 5.3 |

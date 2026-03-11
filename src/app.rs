@@ -1,7 +1,8 @@
 use crate::config::AppConfig;
-use crate::graph::{ConversationGraph, Node, Role};
+use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use crate::persistence::{self, ConversationMetadata};
+use crate::tasks::{self, TaskMessage};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
 use crate::tui::{self, TuiState};
@@ -11,6 +12,7 @@ use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use ratatui::prelude::*;
 use std::io;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub struct App {
@@ -19,6 +21,8 @@ pub struct App {
     metadata: ConversationMetadata,
     provider: Box<dyn LlmProvider>,
     tui_state: TuiState,
+    task_rx: mpsc::UnboundedReceiver<TaskMessage>,
+    task_tx: mpsc::UnboundedSender<TaskMessage>,
 }
 
 impl App {
@@ -28,12 +32,15 @@ impl App {
         metadata: ConversationMetadata,
         provider: Box<dyn LlmProvider>,
     ) -> Self {
+        let (task_tx, task_rx) = mpsc::unbounded_channel();
         Self {
             config,
             graph,
             metadata,
             provider,
             tui_state: TuiState::new(),
+            task_rx,
+            task_tx,
         }
     }
 
@@ -59,6 +66,11 @@ impl App {
                         content: content.clone(),
                     });
                 }
+                // Non-conversation node types are skipped in LLM context
+                Node::WorkItem { .. }
+                | Node::GitFile { .. }
+                | Node::Tool { .. }
+                | Node::BackgroundTask { .. } => {}
             }
         }
 
@@ -99,6 +111,11 @@ impl App {
         let mut terminal = tui::setup_terminal()?;
         let mut event_stream = EventStream::new();
 
+        // Spawn background tasks
+        tasks::spawn_git_watcher(self.task_tx.clone());
+        tasks::spawn_tool_discovery(self.task_tx.clone());
+        tasks::spawn_context_summarization(self.task_tx.clone());
+
         terminal.draw(|frame| ui::draw(frame, &self.graph, &self.tui_state))?;
 
         loop {
@@ -127,6 +144,9 @@ impl App {
                             Action::None => {}
                         }
                     }
+                }
+                Some(task_msg) = self.task_rx.recv() => {
+                    self.handle_task_message(task_msg);
                 }
             }
 
@@ -241,6 +261,58 @@ impl App {
 
         self.save()?;
         Ok(())
+    }
+
+    fn handle_task_message(&mut self, msg: TaskMessage) {
+        match msg {
+            TaskMessage::GitFilesUpdated(files) => {
+                self.graph.remove_nodes_by(|n| matches!(n, Node::GitFile { .. }));
+                let root_id = self.graph.branch_leaf(self.graph.active_branch());
+                for file in files {
+                    let node = Node::GitFile {
+                        id: Uuid::new_v4(),
+                        path: file.path,
+                        status: file.status,
+                        updated_at: Utc::now(),
+                    };
+                    let node_id = self.graph.add_node(node);
+                    if let Some(root) = root_id {
+                        let _ = self.graph.add_edge(node_id, root, EdgeKind::Indexes);
+                    }
+                }
+            }
+            TaskMessage::ToolsDiscovered(tools) => {
+                self.graph.remove_nodes_by(|n| matches!(n, Node::Tool { .. }));
+                let root_id = self.graph.branch_leaf(self.graph.active_branch());
+                for tool in tools {
+                    let node = Node::Tool {
+                        id: Uuid::new_v4(),
+                        name: tool.name,
+                        description: tool.description,
+                        updated_at: Utc::now(),
+                    };
+                    let node_id = self.graph.add_node(node);
+                    if let Some(root) = root_id {
+                        let _ = self.graph.add_edge(node_id, root, EdgeKind::Provides);
+                    }
+                }
+            }
+            TaskMessage::TaskStatusChanged {
+                task_id,
+                kind,
+                status,
+                description,
+            } => {
+                self.graph.upsert_node(Node::BackgroundTask {
+                    id: task_id,
+                    kind,
+                    status,
+                    description,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                });
+            }
+        }
     }
 
     fn save(&self) -> anyhow::Result<()> {

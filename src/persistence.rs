@@ -1,4 +1,5 @@
 use crate::graph::ConversationGraph;
+use crate::migration;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -30,7 +31,7 @@ fn save_conversation_to(
 
     let graph_path = dir.join("graph.json");
     let graph_tmp = dir.join("graph.json.tmp");
-    std::fs::write(&graph_tmp, serde_json::to_string_pretty(graph)?)?;
+    std::fs::write(&graph_tmp, migration::to_versioned_json(graph)?)?;
     std::fs::rename(&graph_tmp, &graph_path)?;
 
     let meta_path = dir.join("metadata.json");
@@ -47,8 +48,8 @@ fn load_conversation_from(
 ) -> anyhow::Result<(ConversationMetadata, ConversationGraph)> {
     let dir = base.join(conversation_id);
 
-    let graph_data = std::fs::read_to_string(dir.join("graph.json"))?;
-    let graph: ConversationGraph = serde_json::from_str(&graph_data)?;
+    let graph_path = dir.join("graph.json");
+    let graph = migration::load_and_migrate(&graph_path)?;
 
     let metadata_str = std::fs::read_to_string(dir.join("metadata.json"))?;
     let metadata: ConversationMetadata = serde_json::from_str(&metadata_str)?;

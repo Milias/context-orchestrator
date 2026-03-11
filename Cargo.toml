@@ -18,6 +18,9 @@ futures = "0.3"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 figment = { version = "0.10", features = ["env"] }
+git2 = "0.20"
+notify = "7"
+notify-debouncer-mini = "0.5"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
