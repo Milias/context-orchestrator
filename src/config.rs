@@ -6,11 +6,15 @@ fn default_base_url() -> String {
 }
 
 fn default_model() -> String {
-    "claude-sonnet-4-5-20250514".to_string()
+    "claude-sonnet-4-6".to_string()
 }
 
 fn default_max_tokens() -> u32 {
     4096
+}
+
+fn default_max_context_tokens() -> u32 {
+    180_000
 }
 
 fn default_system_prompt() -> String {
@@ -27,6 +31,8 @@ pub struct AppConfig {
     pub anthropic_model: String,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    #[serde(default = "default_max_context_tokens")]
+    pub max_context_tokens: u32,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
 }

@@ -83,12 +83,6 @@ pub fn list_conversations() -> anyhow::Result<Vec<ConversationMetadata>> {
     Ok(conversations)
 }
 
-#[allow(dead_code)]
-pub fn delete_conversation(conversation_id: &str) -> anyhow::Result<()> {
-    let dir = conversation_dir(conversation_id)?;
-    std::fs::remove_dir_all(dir)?;
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -153,26 +147,6 @@ mod tests {
         if let Some(h) = old_home {
             unsafe { std::env::set_var("HOME", h) };
         }
-    }
-
-    #[test]
-    fn test_delete_conversation() {
-        with_temp_home(|| {
-            let graph = ConversationGraph::new("Prompt");
-            let metadata = ConversationMetadata {
-                id: "to-delete".to_string(),
-                name: "Delete Me".to_string(),
-                created_at: Utc::now(),
-                last_modified: Utc::now(),
-            };
-            save_conversation("to-delete", &metadata, &graph).unwrap();
-
-            delete_conversation("to-delete").unwrap();
-            assert!(load_conversation("to-delete").is_err());
-
-            let list = list_conversations().unwrap();
-            assert!(list.iter().all(|m| m.id != "to-delete"));
-        });
     }
 
     #[test]

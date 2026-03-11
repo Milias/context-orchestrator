@@ -39,7 +39,6 @@ pub enum StreamChunk {
     Error(String),
 }
 
-#[allow(dead_code)]
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn chat(
@@ -48,5 +47,10 @@ pub trait LlmProvider: Send + Sync {
         config: &ChatConfig,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = anyhow::Result<StreamChunk>> + Send>>>;
 
-    fn name(&self) -> &str;
+    async fn count_tokens(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        system_prompt: Option<&str>,
+    ) -> anyhow::Result<u32>;
 }

@@ -4,7 +4,7 @@ use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use crate::persistence::{self, ConversationMetadata};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
-use crate::tui::{self, Focus, TuiState};
+use crate::tui::{self, TuiState};
 
 use chrono::Utc;
 use crossterm::event::{Event, EventStream};
@@ -28,22 +28,16 @@ impl App {
         metadata: ConversationMetadata,
         provider: Box<dyn LlmProvider>,
     ) -> Self {
-        let mut tui_state = TuiState::new();
-        let branches = graph.branch_names();
-        let active = graph.active_branch().to_string();
-        if let Some(idx) = branches.iter().position(|b| b.as_str() == active) {
-            tui_state.branch_list_selected = idx;
-        }
         Self {
             config,
             graph,
             metadata,
             provider,
-            tui_state,
+            tui_state: TuiState::new(),
         }
     }
 
-    fn build_context(&self) -> anyhow::Result<(Option<String>, Vec<ChatMessage>)> {
+    async fn build_context(&self) -> anyhow::Result<(Option<String>, Vec<ChatMessage>)> {
         let history = self.graph.get_branch_history(self.graph.active_branch())?;
 
         let mut system_prompt = None;
@@ -68,12 +62,26 @@ impl App {
             }
         }
 
-        // Truncation: ~4 chars per token, limit to ~150K tokens
-        let max_chars: usize = 600_000;
-        let mut total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-        while total_chars > max_chars && messages.len() > 1 {
-            let removed = messages.remove(0);
-            total_chars -= removed.content.len();
+        let max_tokens = self.config.max_context_tokens;
+        let token_count = self
+            .provider
+            .count_tokens(
+                &messages,
+                &self.config.anthropic_model,
+                system_prompt.as_deref(),
+            )
+            .await?;
+
+        if token_count > max_tokens {
+            let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+            let ratio = max_tokens as f64 / token_count as f64;
+            let target_chars = (total_chars as f64 * ratio) as usize;
+
+            let mut current_chars = total_chars;
+            while current_chars > target_chars && messages.len() > 1 {
+                let removed = messages.remove(0);
+                current_chars -= removed.content.len();
+            }
         }
 
         Ok((system_prompt, messages))
@@ -102,18 +110,6 @@ impl App {
                                 }
                                 Action::SendMessage(text) => {
                                     self.handle_send_message(text, &mut terminal, &mut event_stream).await?;
-                                }
-                                Action::CreateBranch(name) => {
-                                    self.handle_create_branch(&name)?;
-                                }
-                                Action::SwitchBranch(index) => {
-                                    self.handle_switch_branch(index)?;
-                                }
-                                Action::ToggleFocus => {
-                                    self.tui_state.focus = match self.tui_state.focus {
-                                        Focus::Input => Focus::BranchList,
-                                        Focus::BranchList => Focus::Input,
-                                    };
                                 }
                                 Action::ScrollUp => {
                                     self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(1);
@@ -154,11 +150,12 @@ impl App {
             content: text,
             created_at: Utc::now(),
             model: None,
-            token_count: None,
+            input_tokens: None,
+            output_tokens: None,
         };
         self.graph.add_message(parent_id, user_node)?;
 
-        let (system_prompt, messages) = self.build_context()?;
+        let (system_prompt, messages) = self.build_context().await?;
         let config = ChatConfig {
             system_prompt,
             ..ChatConfig::from_app_config(&self.config)
@@ -229,48 +226,16 @@ impl App {
                 content: full_response,
                 created_at: Utc::now(),
                 model: Some(config.model.clone()),
-                token_count: output_tokens,
+                input_tokens,
+                output_tokens,
             };
             self.graph.add_message(leaf, assistant_node)?;
         }
 
         self.tui_state.streaming_response = None;
         self.tui_state.status_message = None;
-        let _ = input_tokens; // tracked but not displayed in MVP
 
         self.save()?;
-        Ok(())
-    }
-
-    fn handle_create_branch(&mut self, name: &str) -> anyhow::Result<()> {
-        let fork_point = self
-            .graph
-            .branch_leaf(self.graph.active_branch())
-            .ok_or_else(|| anyhow::anyhow!("No active branch leaf"))?;
-
-        match self.graph.create_branch(name, fork_point) {
-            Ok(()) => {
-                self.graph.switch_branch(name)?;
-                self.tui_state.status_message = Some(format!("Created branch: {}", name));
-                self.save()?;
-            }
-            Err(e) => {
-                self.tui_state.status_message = Some(format!("Error: {}", e));
-            }
-        }
-        Ok(())
-    }
-
-    fn handle_switch_branch(&mut self, index: usize) -> anyhow::Result<()> {
-        let branches = self.graph.branch_names();
-        let clamped = index.min(branches.len().saturating_sub(1));
-        self.tui_state.branch_list_selected = clamped;
-
-        if let Some(name) = branches.get(clamped) {
-            let name = name.to_string();
-            self.graph.switch_branch(&name)?;
-            self.tui_state.scroll_offset = 0;
-        }
         Ok(())
     }
 

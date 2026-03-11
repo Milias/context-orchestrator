@@ -3,7 +3,7 @@ use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use reqwest::Client;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
 pub struct AnthropicProvider {
@@ -28,6 +28,29 @@ impl AnthropicProvider {
     }
 }
 
+#[derive(Serialize)]
+struct MessagesRequest {
+    model: String,
+    max_tokens: u32,
+    messages: Vec<ChatMessage>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CountTokensRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CountTokensResponse {
+    input_tokens: u32,
+}
+
 #[async_trait]
 impl LlmProvider for AnthropicProvider {
     async fn chat(
@@ -35,15 +58,13 @@ impl LlmProvider for AnthropicProvider {
         messages: Vec<ChatMessage>,
         config: &ChatConfig,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = anyhow::Result<StreamChunk>> + Send>>> {
-        let mut body = serde_json::json!({
-            "model": config.model,
-            "max_tokens": config.max_tokens,
-            "messages": messages,
-            "stream": true,
-        });
-        if let Some(ref system) = config.system_prompt {
-            body["system"] = serde_json::Value::String(system.clone());
-        }
+        let body = MessagesRequest {
+            model: config.model.clone(),
+            max_tokens: config.max_tokens,
+            messages,
+            stream: true,
+            system: config.system_prompt.clone(),
+        };
 
         let response = self
             .client
@@ -68,8 +89,37 @@ impl LlmProvider for AnthropicProvider {
         Ok(Box::pin(chunk_stream))
     }
 
-    fn name(&self) -> &str {
-        "anthropic"
+    async fn count_tokens(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        system_prompt: Option<&str>,
+    ) -> anyhow::Result<u32> {
+        let body = CountTokensRequest {
+            model: model.to_string(),
+            messages: messages.to_vec(),
+            system: system_prompt.map(|s| s.to_string()),
+        };
+
+        let response = self
+            .client
+            .post(format!("{}/v1/messages/count_tokens", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("authorization", format!("Bearer {}", self.api_key))
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Token count API error {}: {}", status, body);
+        }
+
+        let result: CountTokensResponse = response.json().await?;
+        Ok(result.input_tokens)
     }
 }
 
@@ -124,6 +174,47 @@ fn sse_to_stream_chunks(
     )
 }
 
+#[derive(Deserialize)]
+struct MessageStartEvent {
+    message: Option<MessagePayload>,
+}
+
+#[derive(Deserialize)]
+struct MessagePayload {
+    usage: Option<UsagePayload>,
+}
+
+#[derive(Deserialize)]
+struct ContentBlockDeltaEvent {
+    delta: Option<DeltaPayload>,
+}
+
+#[derive(Deserialize)]
+struct DeltaPayload {
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MessageDeltaEvent {
+    usage: Option<UsagePayload>,
+}
+
+#[derive(Deserialize)]
+struct UsagePayload {
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct ErrorEvent {
+    error: Option<ErrorPayload>,
+}
+
+#[derive(Deserialize)]
+struct ErrorPayload {
+    message: Option<String>,
+}
+
 fn parse_sse_event(
     event_text: &str,
     input_tokens: &mut Option<u32>,
@@ -144,24 +235,35 @@ fn parse_sse_event(
         return None;
     }
 
-    let json: Value = match serde_json::from_str(data) {
-        Ok(v) => v,
-        Err(e) => return Some(Err(e.into())),
-    };
-
     match event_type {
         "message_start" => {
-            if let Some(tokens) = json["message"]["usage"]["input_tokens"].as_u64() {
-                *input_tokens = Some(tokens as u32);
+            let event: MessageStartEvent = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.into())),
+            };
+            if let Some(tokens) = event.message.and_then(|m| m.usage).and_then(|u| u.input_tokens)
+            {
+                *input_tokens = Some(tokens);
             }
             None
         }
-        "content_block_delta" => json["delta"]["text"]
-            .as_str()
-            .map(|text| Ok(StreamChunk::TextDelta(text.to_string()))),
+        "content_block_delta" => {
+            let event: ContentBlockDeltaEvent = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.into())),
+            };
+            event
+                .delta
+                .and_then(|d| d.text)
+                .map(|text| Ok(StreamChunk::TextDelta(text)))
+        }
         "message_delta" => {
-            if let Some(tokens) = json["usage"]["output_tokens"].as_u64() {
-                *output_tokens = Some(tokens as u32);
+            let event: MessageDeltaEvent = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.into())),
+            };
+            if let Some(tokens) = event.usage.and_then(|u| u.output_tokens) {
+                *output_tokens = Some(tokens);
             }
             None
         }
@@ -170,10 +272,17 @@ fn parse_sse_event(
             output_tokens: *output_tokens,
         })),
         "error" => {
-            let msg = json["error"]["message"].as_str().unwrap_or("Unknown error");
-            Some(Ok(StreamChunk::Error(msg.to_string())))
+            let event: ErrorEvent = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.into())),
+            };
+            let msg = event
+                .error
+                .and_then(|e| e.message)
+                .unwrap_or_else(|| "Unknown error".to_string());
+            Some(Ok(StreamChunk::Error(msg)))
         }
-        _ => None, // message_start, content_block_start, content_block_stop, ping
+        _ => None,
     }
 }
 
