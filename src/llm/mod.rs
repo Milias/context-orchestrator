@@ -39,6 +39,7 @@ pub enum StreamChunk {
     Error(String),
 }
 
+#[allow(dead_code)]
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn chat(

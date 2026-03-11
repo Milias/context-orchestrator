@@ -3,12 +3,7 @@ use crate::tui::{Focus, TuiState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState};
 
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &TuiState,
-) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
     let branches = graph.branch_names();
     let active = graph.active_branch();
 

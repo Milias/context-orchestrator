@@ -1,8 +1,8 @@
 use crate::graph::ConversationGraph;
-use crate::tui::TuiState;
 use crate::tui::widgets::{branch_list, conversation, input_box};
+use crate::tui::TuiState;
 use ratatui::prelude::*;
-use ratatui::widgets::{Paragraph};
+use ratatui::widgets::Paragraph;
 
 pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &TuiState) {
     let vertical = Layout::default()
@@ -32,19 +32,11 @@ pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &TuiState) 
     input_box::render(frame, input_area, tui_state);
 }
 
-fn draw_status_bar(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &TuiState,
-) {
+fn draw_status_bar(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
     let status_text = if let Some(ref msg) = tui_state.status_message {
         msg.clone()
     } else {
-        format!(
-            "Context Manager v0.1  [branch: {}]",
-            graph.active_branch()
-        )
+        format!("Context Manager v0.1  [branch: {}]", graph.active_branch())
     };
     let status =
         Paragraph::new(status_text).style(Style::default().bg(Color::Blue).fg(Color::White));

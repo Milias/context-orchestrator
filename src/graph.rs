@@ -29,6 +29,7 @@ pub enum Node {
     },
 }
 
+#[allow(dead_code)]
 impl Node {
     pub fn id(&self) -> Uuid {
         match self {
@@ -70,6 +71,7 @@ pub struct ConversationGraph {
     active_branch: String,
 }
 
+#[allow(dead_code)]
 impl ConversationGraph {
     pub fn new(system_prompt: &str) -> Self {
         let id = Uuid::new_v4();
@@ -106,8 +108,7 @@ impl ConversationGraph {
         let id = node.id();
         self.nodes.insert(id, node);
         self.edges.insert(id, parent_id);
-        self.branches
-            .insert(self.active_branch.clone(), id);
+        self.branches.insert(self.active_branch.clone(), id);
         Ok(id)
     }
 

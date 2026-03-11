@@ -47,7 +47,7 @@ impl LlmProvider for AnthropicProvider {
 
         let response = self
             .client
-            .post(&format!("{}/v1/messages", self.base_url))
+            .post(format!("{}/v1/messages", self.base_url))
             .header("x-api-key", &self.api_key)
             .header("authorization", format!("Bearer {}", self.api_key))
             .header("anthropic-version", "2023-06-01")
@@ -156,13 +156,9 @@ fn parse_sse_event(
             }
             None
         }
-        "content_block_delta" => {
-            if let Some(text) = json["delta"]["text"].as_str() {
-                Some(Ok(StreamChunk::TextDelta(text.to_string())))
-            } else {
-                None
-            }
-        }
+        "content_block_delta" => json["delta"]["text"]
+            .as_str()
+            .map(|text| Ok(StreamChunk::TextDelta(text.to_string()))),
         "message_delta" => {
             if let Some(tokens) = json["usage"]["output_tokens"].as_u64() {
                 *output_tokens = Some(tokens as u32);
@@ -174,9 +170,7 @@ fn parse_sse_event(
             output_tokens: *output_tokens,
         })),
         "error" => {
-            let msg = json["error"]["message"]
-                .as_str()
-                .unwrap_or("Unknown error");
+            let msg = json["error"]["message"].as_str().unwrap_or("Unknown error");
             Some(Ok(StreamChunk::Error(msg.to_string())))
         }
         _ => None, // message_start, content_block_start, content_block_stop, ping
@@ -193,9 +187,7 @@ mod tests {
         let mut it = None;
         let mut ot = None;
         let result = parse_sse_event(event, &mut it, &mut ot);
-        assert!(
-            matches!(result, Some(Ok(StreamChunk::TextDelta(ref t))) if t == "Hello")
-        );
+        assert!(matches!(result, Some(Ok(StreamChunk::TextDelta(ref t))) if t == "Hello"));
     }
 
     #[test]
@@ -224,9 +216,13 @@ mod tests {
         let mut it = Some(25);
         let mut ot = Some(100);
         let result = parse_sse_event(event, &mut it, &mut ot);
-        assert!(
-            matches!(result, Some(Ok(StreamChunk::Done { input_tokens: Some(25), output_tokens: Some(100) })))
-        );
+        assert!(matches!(
+            result,
+            Some(Ok(StreamChunk::Done {
+                input_tokens: Some(25),
+                output_tokens: Some(100)
+            }))
+        ));
     }
 
     #[test]
@@ -244,9 +240,7 @@ mod tests {
         let mut it = None;
         let mut ot = None;
         let result = parse_sse_event(event, &mut it, &mut ot);
-        assert!(
-            matches!(result, Some(Ok(StreamChunk::Error(ref e))) if e == "Overloaded")
-        );
+        assert!(matches!(result, Some(Ok(StreamChunk::Error(ref e))) if e == "Overloaded"));
     }
 
     #[tokio::test]

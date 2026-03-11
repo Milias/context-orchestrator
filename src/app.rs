@@ -3,8 +3,8 @@ use crate::graph::{ConversationGraph, Node, Role};
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use crate::persistence::{self, ConversationMetadata};
 use crate::tui::input::{self, Action};
-use crate::tui::{self, Focus, TuiState};
 use crate::tui::ui;
+use crate::tui::{self, Focus, TuiState};
 
 use chrono::Utc;
 use crossterm::event::{Event, EventStream};

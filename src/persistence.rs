@@ -83,6 +83,7 @@ pub fn list_conversations() -> anyhow::Result<Vec<ConversationMetadata>> {
     Ok(conversations)
 }
 
+#[allow(dead_code)]
 pub fn delete_conversation(conversation_id: &str) -> anyhow::Result<()> {
     let dir = conversation_dir(conversation_id)?;
     std::fs::remove_dir_all(dir)?;

@@ -3,12 +3,7 @@ use crate::tui::TuiState;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &TuiState,
-) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
     let history = graph
         .get_branch_history(graph.active_branch())
         .unwrap_or_default();
@@ -69,11 +64,7 @@ pub fn render(
     }
 
     let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title("Conversation")
-                .borders(Borders::ALL),
-        )
+        .block(Block::default().title("Conversation").borders(Borders::ALL))
         .wrap(Wrap { trim: false })
         .scroll((tui_state.scroll_offset, 0));
 
