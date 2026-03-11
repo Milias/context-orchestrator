@@ -1,7 +1,7 @@
 use crate::graph::ConversationGraph;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMetadata {
@@ -11,7 +11,7 @@ pub struct ConversationMetadata {
     pub last_modified: DateTime<Utc>,
 }
 
-fn conversations_dir() -> anyhow::Result<PathBuf> {
+fn default_conversations_dir() -> anyhow::Result<PathBuf> {
     let home =
         std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
     Ok(PathBuf::from(home)
@@ -19,19 +19,15 @@ fn conversations_dir() -> anyhow::Result<PathBuf> {
         .join("conversations"))
 }
 
-fn conversation_dir(conversation_id: &str) -> anyhow::Result<PathBuf> {
-    Ok(conversations_dir()?.join(conversation_id))
-}
-
-pub fn save_conversation(
+fn save_conversation_to(
+    base: &Path,
     conversation_id: &str,
     metadata: &ConversationMetadata,
     graph: &ConversationGraph,
 ) -> anyhow::Result<()> {
-    let dir = conversation_dir(conversation_id)?;
+    let dir = base.join(conversation_id);
     std::fs::create_dir_all(&dir)?;
 
-    // Atomic write: write to .tmp then rename
     let graph_path = dir.join("graph.json");
     let graph_tmp = dir.join("graph.json.tmp");
     std::fs::write(&graph_tmp, serde_json::to_string_pretty(graph)?)?;
@@ -45,28 +41,28 @@ pub fn save_conversation(
     Ok(())
 }
 
-pub fn load_conversation(
+fn load_conversation_from(
+    base: &Path,
     conversation_id: &str,
 ) -> anyhow::Result<(ConversationMetadata, ConversationGraph)> {
-    let dir = conversation_dir(conversation_id)?;
+    let dir = base.join(conversation_id);
 
     let graph_data = std::fs::read_to_string(dir.join("graph.json"))?;
     let graph: ConversationGraph = serde_json::from_str(&graph_data)?;
 
-    let meta_data = std::fs::read_to_string(dir.join("metadata.json"))?;
-    let metadata: ConversationMetadata = serde_json::from_str(&meta_data)?;
+    let metadata_str = std::fs::read_to_string(dir.join("metadata.json"))?;
+    let metadata: ConversationMetadata = serde_json::from_str(&metadata_str)?;
 
     Ok((metadata, graph))
 }
 
-pub fn list_conversations() -> anyhow::Result<Vec<ConversationMetadata>> {
-    let dir = conversations_dir()?;
-    if !dir.exists() {
+fn list_conversations_in(base: &Path) -> anyhow::Result<Vec<ConversationMetadata>> {
+    if !base.exists() {
         return Ok(Vec::new());
     }
 
     let mut conversations = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
+    for entry in std::fs::read_dir(base)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
@@ -83,76 +79,82 @@ pub fn list_conversations() -> anyhow::Result<Vec<ConversationMetadata>> {
     Ok(conversations)
 }
 
+pub fn save_conversation(
+    conversation_id: &str,
+    metadata: &ConversationMetadata,
+    graph: &ConversationGraph,
+) -> anyhow::Result<()> {
+    save_conversation_to(
+        &default_conversations_dir()?,
+        conversation_id,
+        metadata,
+        graph,
+    )
+}
+
+pub fn load_conversation(
+    conversation_id: &str,
+) -> anyhow::Result<(ConversationMetadata, ConversationGraph)> {
+    load_conversation_from(&default_conversations_dir()?, conversation_id)
+}
+
+pub fn list_conversations() -> anyhow::Result<Vec<ConversationMetadata>> {
+    list_conversations_in(&default_conversations_dir()?)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::graph::ConversationGraph;
 
-    fn with_temp_home<F: FnOnce()>(f: F) {
-        let tmp = tempfile::tempdir().unwrap();
-        let old_home = std::env::var("HOME").ok();
-        unsafe { std::env::set_var("HOME", tmp.path()) };
-        f();
-        if let Some(h) = old_home {
-            unsafe { std::env::set_var("HOME", h) };
-        }
-    }
-
     #[test]
     fn test_save_and_load_roundtrip() {
-        with_temp_home(|| {
-            let graph = ConversationGraph::new("Test prompt");
-            let metadata = ConversationMetadata {
-                id: "test-conv-1".to_string(),
-                name: "Test Conversation".to_string(),
-                created_at: Utc::now(),
-                last_modified: Utc::now(),
-            };
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
 
-            save_conversation("test-conv-1", &metadata, &graph).unwrap();
-            let (loaded_meta, loaded_graph) = load_conversation("test-conv-1").unwrap();
+        let graph = ConversationGraph::new("Test prompt");
+        let metadata = ConversationMetadata {
+            id: "test-conv-1".to_string(),
+            name: "Test Conversation".to_string(),
+            created_at: Utc::now(),
+            last_modified: Utc::now(),
+        };
 
-            assert_eq!(loaded_meta.id, "test-conv-1");
-            assert_eq!(loaded_meta.name, "Test Conversation");
+        save_conversation_to(base, "test-conv-1", &metadata, &graph).unwrap();
+        let (loaded_meta, loaded_graph) = load_conversation_from(base, "test-conv-1").unwrap();
 
-            let orig_history = graph.get_branch_history("main").unwrap();
-            let loaded_history = loaded_graph.get_branch_history("main").unwrap();
-            assert_eq!(orig_history.len(), loaded_history.len());
-            assert_eq!(orig_history[0].content(), loaded_history[0].content());
-        });
+        assert_eq!(loaded_meta.id, "test-conv-1");
+        assert_eq!(loaded_meta.name, "Test Conversation");
+
+        let orig_history = graph.get_branch_history("main").unwrap();
+        let loaded_history = loaded_graph.get_branch_history("main").unwrap();
+        assert_eq!(orig_history.len(), loaded_history.len());
+        assert_eq!(orig_history[0].content(), loaded_history[0].content());
     }
 
     #[test]
     fn test_list_conversations() {
-        // Use a dedicated temp dir to avoid interference from parallel tests
         let tmp = tempfile::tempdir().unwrap();
-        let old_home = std::env::var("HOME").ok();
-        unsafe { std::env::set_var("HOME", tmp.path()) };
+        let base = tmp.path();
 
         for i in 0..3 {
             let graph = ConversationGraph::new("Prompt");
             let metadata = ConversationMetadata {
-                id: format!("list-test-conv-{}", i),
-                name: format!("Conversation {}", i),
+                id: format!("list-test-conv-{i}"),
+                name: format!("Conversation {i}"),
                 created_at: Utc::now(),
                 last_modified: Utc::now(),
             };
-            save_conversation(&metadata.id, &metadata, &graph).unwrap();
+            save_conversation_to(base, &metadata.id, &metadata, &graph).unwrap();
         }
 
-        let list = list_conversations().unwrap();
+        let list = list_conversations_in(base).unwrap();
         assert_eq!(list.len(), 3);
-
-        if let Some(h) = old_home {
-            unsafe { std::env::set_var("HOME", h) };
-        }
     }
 
     #[test]
     fn test_load_nonexistent_errors() {
-        with_temp_home(|| {
-            assert!(load_conversation("does-not-exist").is_err());
-        });
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(load_conversation_from(tmp.path(), "does-not-exist").is_err());
     }
 }

@@ -60,36 +60,33 @@ async fn main() -> anyhow::Result<()> {
     config.api_key()?;
     let provider = AnthropicProvider::from_config(&config)?;
 
-    let (metadata, graph) = match &cli.command {
-        Some(Command::New { name }) => {
+    let (metadata, graph) = if let Some(Command::New { name }) = &cli.command {
+        let id = Uuid::new_v4().to_string();
+        let graph = ConversationGraph::new(&config.system_prompt);
+        let metadata = ConversationMetadata {
+            id: id.clone(),
+            name: name.clone(),
+            created_at: Utc::now(),
+            last_modified: Utc::now(),
+        };
+        persistence::save_conversation(&id, &metadata, &graph)?;
+        (metadata, graph)
+    } else {
+        let conversations = persistence::list_conversations().unwrap_or_default();
+        if conversations.is_empty() {
             let id = Uuid::new_v4().to_string();
             let graph = ConversationGraph::new(&config.system_prompt);
             let metadata = ConversationMetadata {
                 id: id.clone(),
-                name: name.clone(),
+                name: "Default Conversation".to_string(),
                 created_at: Utc::now(),
                 last_modified: Utc::now(),
             };
             persistence::save_conversation(&id, &metadata, &graph)?;
             (metadata, graph)
-        }
-        _ => {
-            let conversations = persistence::list_conversations().unwrap_or_default();
-            if conversations.is_empty() {
-                let id = Uuid::new_v4().to_string();
-                let graph = ConversationGraph::new(&config.system_prompt);
-                let metadata = ConversationMetadata {
-                    id: id.clone(),
-                    name: "Default Conversation".to_string(),
-                    created_at: Utc::now(),
-                    last_modified: Utc::now(),
-                };
-                persistence::save_conversation(&id, &metadata, &graph)?;
-                (metadata, graph)
-            } else {
-                let latest = &conversations[0];
-                persistence::load_conversation(&latest.id)?
-            }
+        } else {
+            let latest = &conversations[0];
+            persistence::load_conversation(&latest.id)?
         }
     };
 

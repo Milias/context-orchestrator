@@ -33,26 +33,37 @@ pub enum Node {
 impl Node {
     pub fn id(&self) -> Uuid {
         match self {
-            Node::Message { id, .. } => *id,
-            Node::SystemDirective { id, .. } => *id,
+            Node::Message { id, .. } | Node::SystemDirective { id, .. } => *id,
         }
     }
 
     pub fn content(&self) -> &str {
         match self {
-            Node::Message { content, .. } => content,
-            Node::SystemDirective { content, .. } => content,
+            Node::Message { content, .. } | Node::SystemDirective { content, .. } => content,
         }
     }
 
+    pub fn input_tokens(&self) -> Option<u32> {
+        match self {
+            Node::Message { input_tokens, .. } => *input_tokens,
+            Node::SystemDirective { .. } => None,
+        }
+    }
+
+    pub fn output_tokens(&self) -> Option<u32> {
+        match self {
+            Node::Message { output_tokens, .. } => *output_tokens,
+            Node::SystemDirective { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationGraph {
     nodes: HashMap<Uuid, Node>,
-    /// child_id -> parent_id (responds_to)
+    /// `child_id` -> `parent_id` (`responds_to`)
     edges: HashMap<Uuid, Uuid>,
-    /// branch_name -> leaf_node_id
+    /// `branch_name` -> `leaf_node_id`
     branches: HashMap<String, Uuid>,
     /// Currently active branch name
     active_branch: String,
@@ -82,7 +93,7 @@ impl ConversationGraph {
 
     pub fn add_message(&mut self, parent_id: Uuid, node: Node) -> anyhow::Result<Uuid> {
         if !self.nodes.contains_key(&parent_id) {
-            anyhow::bail!("Parent node {} does not exist", parent_id);
+            anyhow::bail!("Parent node {parent_id} does not exist");
         }
         let id = node.id();
         self.nodes.insert(id, node);
@@ -95,7 +106,7 @@ impl ConversationGraph {
         let leaf_id = self
             .branches
             .get(branch_name)
-            .ok_or_else(|| anyhow::anyhow!("Branch '{}' does not exist", branch_name))?;
+            .ok_or_else(|| anyhow::anyhow!("Branch '{branch_name}' does not exist"))?;
 
         let mut path = Vec::new();
         let mut visited = HashSet::new();
@@ -103,12 +114,12 @@ impl ConversationGraph {
 
         loop {
             if !visited.insert(current) {
-                anyhow::bail!("Cycle detected in graph at node {}", current);
+                anyhow::bail!("Cycle detected in graph at node {current}");
             }
             let node = self
                 .nodes
                 .get(&current)
-                .ok_or_else(|| anyhow::anyhow!("Node {} not found", current))?;
+                .ok_or_else(|| anyhow::anyhow!("Node {current} not found"))?;
             path.push(node);
 
             match self.edges.get(&current) {
@@ -128,7 +139,6 @@ impl ConversationGraph {
     pub fn branch_leaf(&self, branch_name: &str) -> Option<Uuid> {
         self.branches.get(branch_name).copied()
     }
-
 }
 
 #[cfg(test)]

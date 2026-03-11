@@ -74,7 +74,15 @@ impl App {
 
         if token_count > max_tokens {
             let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-            let ratio = max_tokens as f64 / token_count as f64;
+            let ratio = f64::from(max_tokens) / f64::from(token_count);
+            // Truncation/sign-loss/precision-loss are acceptable here: total_chars and ratio
+            // are both non-negative and the result fits comfortably in usize for any realistic
+            // conversation size.
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
             let target_chars = (total_chars as f64 * ratio) as usize;
 
             let mut current_chars = total_chars;
@@ -100,28 +108,24 @@ impl App {
 
             tokio::select! {
                 maybe_event = event_stream.next() => {
-                    match maybe_event {
-                        Some(Ok(Event::Key(key))) => {
-                            let action = input::handle_key_event(key, &mut self.tui_state);
-                            match action {
-                                Action::Quit => {
-                                    self.save()?;
-                                    break;
-                                }
-                                Action::SendMessage(text) => {
-                                    self.handle_send_message(text, &mut terminal, &mut event_stream).await?;
-                                }
-                                Action::ScrollUp => {
-                                    self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(1);
-                                }
-                                Action::ScrollDown => {
-                                    self.tui_state.scroll_offset += 1;
-                                }
-                                Action::None => {}
+                    if let Some(Ok(Event::Key(key))) = maybe_event {
+                        let action = input::handle_key_event(key, &mut self.tui_state);
+                        match action {
+                            Action::Quit => {
+                                self.save()?;
+                                break;
                             }
+                            Action::SendMessage(text) => {
+                                self.handle_send_message(text, &mut terminal, &mut event_stream).await?;
+                            }
+                            Action::ScrollUp => {
+                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(1);
+                            }
+                            Action::ScrollDown => {
+                                self.tui_state.scroll_offset += 1;
+                            }
+                            Action::None => {}
                         }
-                        Some(Ok(Event::Resize(_, _))) => {}
-                        _ => {}
                     }
                 }
             }
@@ -169,7 +173,7 @@ impl App {
             Ok(s) => s,
             Err(e) => {
                 self.tui_state.streaming_response = None;
-                self.tui_state.status_message = Some(format!("Error: {}", e));
+                self.tui_state.status_message = Some(format!("Error: {e}"));
                 return Ok(());
             }
         };
@@ -193,11 +197,11 @@ impl App {
                             break;
                         }
                         Some(Ok(StreamChunk::Error(e))) => {
-                            self.tui_state.status_message = Some(format!("API Error: {}", e));
+                            self.tui_state.status_message = Some(format!("API Error: {e}"));
                             break;
                         }
                         Some(Err(e)) => {
-                            self.tui_state.status_message = Some(format!("Stream error: {}", e));
+                            self.tui_state.status_message = Some(format!("Stream error: {e}"));
                             break;
                         }
                         None => break,

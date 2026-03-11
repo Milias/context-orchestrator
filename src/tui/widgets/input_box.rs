@@ -12,6 +12,9 @@ pub fn render(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
 
     frame.render_widget(input, area);
 
+    // Cursor position within a terminal row; input length is bounded by screen width so
+    // truncation to u16 is safe.
+    #[allow(clippy::cast_possible_truncation)]
     let cursor_x = area.x + 1 + tui_state.input_cursor as u16;
     let cursor_y = area.y + 1;
     frame.set_cursor_position((cursor_x, cursor_y));

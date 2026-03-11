@@ -42,7 +42,7 @@ impl AppConfig {
         Figment::new()
             .merge(Env::raw())
             .extract()
-            .map_err(|e| anyhow::anyhow!("Configuration error: {}", e))
+            .map_err(|e| anyhow::anyhow!("Configuration error: {e}"))
     }
 
     pub fn api_key(&self) -> anyhow::Result<String> {

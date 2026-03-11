@@ -19,5 +19,8 @@ async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 figment = { version = "0.10", features = ["env"] }
 
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
 [dev-dependencies]
 tempfile = "3"

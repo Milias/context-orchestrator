@@ -80,7 +80,7 @@ impl LlmProvider for AnthropicProvider {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Anthropic API error {}: {}", status, body);
+            anyhow::bail!("Anthropic API error {status}: {body}");
         }
 
         let byte_stream = response.bytes_stream();
@@ -98,7 +98,7 @@ impl LlmProvider for AnthropicProvider {
         let body = CountTokensRequest {
             model: model.to_string(),
             messages: messages.to_vec(),
-            system: system_prompt.map(|s| s.to_string()),
+            system: system_prompt.map(std::string::ToString::to_string),
         };
 
         let response = self
@@ -115,7 +115,7 @@ impl LlmProvider for AnthropicProvider {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token count API error {}: {}", status, body);
+            anyhow::bail!("Token count API error {status}: {body}");
         }
 
         let result: CountTokensResponse = response.json().await?;
@@ -241,7 +241,10 @@ fn parse_sse_event(
                 Ok(v) => v,
                 Err(e) => return Some(Err(e.into())),
             };
-            if let Some(tokens) = event.message.and_then(|m| m.usage).and_then(|u| u.input_tokens)
+            if let Some(tokens) = event
+                .message
+                .and_then(|m| m.usage)
+                .and_then(|u| u.input_tokens)
             {
                 *input_tokens = Some(tokens);
             }
@@ -374,10 +377,10 @@ mod tests {
             match chunk.unwrap() {
                 StreamChunk::TextDelta(t) => full_text.push_str(&t),
                 StreamChunk::Done { .. } => break,
-                StreamChunk::Error(e) => panic!("Error: {}", e),
+                StreamChunk::Error(e) => panic!("Error: {e}"),
             }
         }
         assert!(!full_text.is_empty());
-        eprintln!("Response: {}", full_text);
+        eprintln!("Response: {full_text}");
     }
 }

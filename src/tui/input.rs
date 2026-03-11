@@ -30,8 +30,7 @@ pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
                 .input_text
                 .char_indices()
                 .nth(tui_state.input_cursor)
-                .map(|(i, _)| i)
-                .unwrap_or(tui_state.input_text.len());
+                .map_or(tui_state.input_text.len(), |(i, _)| i);
             tui_state.input_text.insert(byte_offset, c);
             tui_state.input_cursor += 1;
             Action::None
@@ -43,8 +42,7 @@ pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
                     .input_text
                     .char_indices()
                     .nth(tui_state.input_cursor)
-                    .map(|(i, _)| i)
-                    .unwrap_or(tui_state.input_text.len());
+                    .map_or(tui_state.input_text.len(), |(i, _)| i);
                 tui_state.input_text.remove(byte_offset);
             }
             Action::None
