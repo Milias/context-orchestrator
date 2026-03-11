@@ -89,7 +89,7 @@ impl TuiState {
         Self {
             input_text: String::new(),
             input_cursor: 0,
-            scroll_offset: 0,
+            scroll_offset: u16::MAX,
             streaming_response: None,
             status_message: None,
             should_quit: false,
