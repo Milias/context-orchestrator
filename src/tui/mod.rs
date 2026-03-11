@@ -9,39 +9,25 @@ use crossterm::{
 use ratatui::prelude::*;
 use std::io;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Focus {
-    Input,
-    BranchList,
-}
-
 #[derive(Debug)]
 pub struct TuiState {
-    pub focus: Focus,
     pub input_text: String,
     pub input_cursor: usize,
     pub scroll_offset: u16,
-    pub branch_list_selected: usize,
     pub streaming_response: Option<String>,
     pub status_message: Option<String>,
     pub should_quit: bool,
-    pub naming_branch: bool,
-    pub branch_name_input: String,
 }
 
 impl TuiState {
     pub fn new() -> Self {
         Self {
-            focus: Focus::Input,
             input_text: String::new(),
             input_cursor: 0,
             scroll_offset: 0,
-            branch_list_selected: 0,
             streaming_response: None,
             status_message: None,
             should_quit: false,
-            naming_branch: false,
-            branch_name_input: String::new(),
         }
     }
 }

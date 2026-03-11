@@ -1,5 +1,5 @@
 use crate::graph::ConversationGraph;
-use crate::tui::widgets::{branch_list, conversation, input_box};
+use crate::tui::widgets::{conversation, input_box};
 use crate::tui::TuiState;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -15,19 +15,10 @@ pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &TuiState) 
         .split(frame.area());
 
     let status_area = vertical[0];
-    let main_area = vertical[1];
+    let conversation_area = vertical[1];
     let input_area = vertical[2];
 
-    let horizontal = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
-        .split(main_area);
-
-    let branch_area = horizontal[0];
-    let conversation_area = horizontal[1];
-
     draw_status_bar(frame, status_area, graph, tui_state);
-    branch_list::render(frame, branch_area, graph, tui_state);
     conversation::render(frame, conversation_area, graph, tui_state);
     input_box::render(frame, input_area, tui_state);
 }
