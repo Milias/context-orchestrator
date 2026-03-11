@@ -1,0 +1,183 @@
+use crate::graph::ConversationGraph;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationMetadata {
+    pub id: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub last_modified: DateTime<Utc>,
+}
+
+fn conversations_dir() -> anyhow::Result<PathBuf> {
+    let home =
+        std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
+    Ok(PathBuf::from(home)
+        .join(".context-manager")
+        .join("conversations"))
+}
+
+fn conversation_dir(conversation_id: &str) -> anyhow::Result<PathBuf> {
+    Ok(conversations_dir()?.join(conversation_id))
+}
+
+pub fn save_conversation(
+    conversation_id: &str,
+    metadata: &ConversationMetadata,
+    graph: &ConversationGraph,
+) -> anyhow::Result<()> {
+    let dir = conversation_dir(conversation_id)?;
+    std::fs::create_dir_all(&dir)?;
+
+    // Atomic write: write to .tmp then rename
+    let graph_path = dir.join("graph.json");
+    let graph_tmp = dir.join("graph.json.tmp");
+    std::fs::write(&graph_tmp, serde_json::to_string_pretty(graph)?)?;
+    std::fs::rename(&graph_tmp, &graph_path)?;
+
+    let meta_path = dir.join("metadata.json");
+    let meta_tmp = dir.join("metadata.json.tmp");
+    std::fs::write(&meta_tmp, serde_json::to_string_pretty(metadata)?)?;
+    std::fs::rename(&meta_tmp, &meta_path)?;
+
+    Ok(())
+}
+
+pub fn load_conversation(
+    conversation_id: &str,
+) -> anyhow::Result<(ConversationMetadata, ConversationGraph)> {
+    let dir = conversation_dir(conversation_id)?;
+
+    let graph_data = std::fs::read_to_string(dir.join("graph.json"))?;
+    let graph: ConversationGraph = serde_json::from_str(&graph_data)?;
+
+    let meta_data = std::fs::read_to_string(dir.join("metadata.json"))?;
+    let metadata: ConversationMetadata = serde_json::from_str(&meta_data)?;
+
+    Ok((metadata, graph))
+}
+
+pub fn list_conversations() -> anyhow::Result<Vec<ConversationMetadata>> {
+    let dir = conversations_dir()?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut conversations = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let meta_path = entry.path().join("metadata.json");
+        if let Ok(data) = std::fs::read_to_string(&meta_path) {
+            if let Ok(metadata) = serde_json::from_str::<ConversationMetadata>(&data) {
+                conversations.push(metadata);
+            }
+        }
+    }
+
+    conversations.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    Ok(conversations)
+}
+
+pub fn delete_conversation(conversation_id: &str) -> anyhow::Result<()> {
+    let dir = conversation_dir(conversation_id)?;
+    std::fs::remove_dir_all(dir)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::ConversationGraph;
+
+    fn with_temp_home<F: FnOnce()>(f: F) {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+        f();
+        if let Some(h) = old_home {
+            unsafe { std::env::set_var("HOME", h) };
+        }
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip() {
+        with_temp_home(|| {
+            let graph = ConversationGraph::new("Test prompt");
+            let metadata = ConversationMetadata {
+                id: "test-conv-1".to_string(),
+                name: "Test Conversation".to_string(),
+                created_at: Utc::now(),
+                last_modified: Utc::now(),
+            };
+
+            save_conversation("test-conv-1", &metadata, &graph).unwrap();
+            let (loaded_meta, loaded_graph) = load_conversation("test-conv-1").unwrap();
+
+            assert_eq!(loaded_meta.id, "test-conv-1");
+            assert_eq!(loaded_meta.name, "Test Conversation");
+
+            let orig_history = graph.get_branch_history("main").unwrap();
+            let loaded_history = loaded_graph.get_branch_history("main").unwrap();
+            assert_eq!(orig_history.len(), loaded_history.len());
+            assert_eq!(orig_history[0].content(), loaded_history[0].content());
+        });
+    }
+
+    #[test]
+    fn test_list_conversations() {
+        // Use a dedicated temp dir to avoid interference from parallel tests
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+
+        for i in 0..3 {
+            let graph = ConversationGraph::new("Prompt");
+            let metadata = ConversationMetadata {
+                id: format!("list-test-conv-{}", i),
+                name: format!("Conversation {}", i),
+                created_at: Utc::now(),
+                last_modified: Utc::now(),
+            };
+            save_conversation(&metadata.id, &metadata, &graph).unwrap();
+        }
+
+        let list = list_conversations().unwrap();
+        assert_eq!(list.len(), 3);
+
+        if let Some(h) = old_home {
+            unsafe { std::env::set_var("HOME", h) };
+        }
+    }
+
+    #[test]
+    fn test_delete_conversation() {
+        with_temp_home(|| {
+            let graph = ConversationGraph::new("Prompt");
+            let metadata = ConversationMetadata {
+                id: "to-delete".to_string(),
+                name: "Delete Me".to_string(),
+                created_at: Utc::now(),
+                last_modified: Utc::now(),
+            };
+            save_conversation("to-delete", &metadata, &graph).unwrap();
+
+            delete_conversation("to-delete").unwrap();
+            assert!(load_conversation("to-delete").is_err());
+
+            let list = list_conversations().unwrap();
+            assert!(list.iter().all(|m| m.id != "to-delete"));
+        });
+    }
+
+    #[test]
+    fn test_load_nonexistent_errors() {
+        with_temp_home(|| {
+            assert!(load_conversation("does-not-exist").is_err());
+        });
+    }
+}
