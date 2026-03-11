@@ -36,10 +36,63 @@ pub fn render_markdown(content: &str) -> Text<'static> {
 
 const CODE_BG: Color = Color::Rgb(40, 42, 54);
 
+struct TableBuffer {
+    header: Option<Vec<String>>,
+    rows: Vec<Vec<String>>,
+    col_widths: Vec<usize>,
+}
+
+impl TableBuffer {
+    fn new() -> Self {
+        Self {
+            header: None,
+            rows: Vec::new(),
+            col_widths: Vec::new(),
+        }
+    }
+
+    fn set_header(&mut self, cells: &[String]) {
+        self.update_widths(cells);
+        self.header = Some(cells.to_vec());
+    }
+
+    fn add_row(&mut self, cells: &[String]) {
+        self.update_widths(cells);
+        self.rows.push(cells.to_vec());
+    }
+
+    fn update_widths(&mut self, cells: &[String]) {
+        if self.col_widths.len() < cells.len() {
+            self.col_widths.resize(cells.len(), 0);
+        }
+        for (i, cell) in cells.iter().enumerate() {
+            self.col_widths[i] = self.col_widths[i].max(cell.len());
+        }
+    }
+
+    fn flush(self, lines: &mut Vec<Line<'static>>) {
+        if let Some(header) = &self.header {
+            lines.push(Line::styled(
+                format_table_row(header, &self.col_widths),
+                Style::default().bold().fg(Color::Cyan),
+            ));
+            let total: usize =
+                self.col_widths.iter().sum::<usize>() + self.col_widths.len().saturating_sub(1) * 3;
+            lines.push(Line::styled(
+                "\u{2500}".repeat(total.max(1)),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        for row in &self.rows {
+            lines.push(Line::raw(format_table_row(row, &self.col_widths)));
+        }
+    }
+}
+
 struct RenderContext {
     inline_spans: Vec<Span<'static>>,
     code_language: Option<String>,
-    table_col_widths: Vec<usize>,
+    table: TableBuffer,
 }
 
 impl RenderContext {
@@ -47,7 +100,7 @@ impl RenderContext {
         Self {
             inline_spans: Vec::new(),
             code_language: None,
-            table_col_widths: Vec::new(),
+            table: TableBuffer::new(),
         }
     }
 
@@ -244,7 +297,10 @@ fn process_block_event(
             ));
         }
         ParseEvent::CodeBlockLine(code) => {
-            lines.push(Line::from(highlight_code_line(code, ctx.code_language.as_deref())));
+            lines.push(Line::from(highlight_code_line(
+                code,
+                ctx.code_language.as_deref(),
+            )));
         }
         ParseEvent::CodeBlockEnd => {
             lines.push(Line::styled(
@@ -271,20 +327,7 @@ fn process_block_event(
         }
         ParseEvent::TableHeader(cells) => {
             ctx.flush_inline(lines);
-            ctx.table_col_widths = cells.iter().map(String::len).collect();
-            lines.push(Line::styled(
-                format_table_row(cells, &ctx.table_col_widths),
-                Style::default().bold().fg(Color::Cyan),
-            ));
-        }
-        ParseEvent::TableSeparator => {
-            let total: usize = ctx.table_col_widths.iter().sum::<usize>()
-                + ctx.table_col_widths.len().saturating_sub(1) * 3;
-            let width = if total > 0 { total } else { 40 };
-            lines.push(Line::styled(
-                "\u{2500}".repeat(width),
-                Style::default().fg(Color::DarkGray),
-            ));
+            ctx.table.set_header(cells);
         }
         ParseEvent::HorizontalRule => {
             ctx.flush_inline(lines);
@@ -294,12 +337,11 @@ fn process_block_event(
             ));
         }
         ParseEvent::TableRow(cells) => {
-            for (i, cell) in cells.iter().enumerate() {
-                if i < ctx.table_col_widths.len() {
-                    ctx.table_col_widths[i] = ctx.table_col_widths[i].max(cell.len());
-                }
-            }
-            lines.push(Line::raw(format_table_row(cells, &ctx.table_col_widths)));
+            ctx.table.add_row(cells);
+        }
+        ParseEvent::TableEnd => {
+            let table = std::mem::replace(&mut ctx.table, TableBuffer::new());
+            table.flush(lines);
         }
         ParseEvent::BlockquoteLine(text) => {
             lines.push(Line::from(vec![
@@ -325,10 +367,7 @@ fn highlight_code_line(code: &str, language: Option<&str>) -> Vec<Span<'static>>
             .into_iter()
             .map(|(style, text)| {
                 let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
-                Span::styled(
-                    text.to_string(),
-                    Style::default().fg(fg).bg(CODE_BG),
-                )
+                Span::styled(text.to_string(), Style::default().fg(fg).bg(CODE_BG))
             })
             .collect(),
         Err(_) => vec![Span::styled(

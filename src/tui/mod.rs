@@ -88,6 +88,9 @@ pub struct TuiState {
     pub context_panel_visible: bool,
     pub context_tab: ContextTab,
     pub context_list_offset: usize,
+    /// When true, new streaming chunks auto-scroll to the bottom.
+    /// Set to false when the user manually scrolls during streaming.
+    pub auto_scroll: bool,
 }
 
 impl TuiState {
@@ -103,6 +106,7 @@ impl TuiState {
             context_panel_visible: true,
             context_tab: ContextTab::Outline,
             context_list_offset: 0,
+            auto_scroll: true,
         }
     }
 }

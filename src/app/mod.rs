@@ -319,6 +319,7 @@ impl App {
     ) -> anyhow::Result<(String, String, Option<u32>)> {
         self.tui_state.streaming_response = Some(String::new());
         self.tui_state.status_message = Some("Waiting for response...".to_string());
+        self.tui_state.auto_scroll = true;
         self.tui_state.scroll_offset = u16::MAX;
         terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
 
@@ -344,7 +345,9 @@ impl App {
                             self.tui_state.status_message = Some(
                                 if think_splitter.is_thinking() { "Thinking..." } else { "Receiving..." }.to_string()
                             );
-                            self.tui_state.scroll_offset = u16::MAX;
+                            if self.tui_state.auto_scroll {
+                                self.tui_state.scroll_offset = u16::MAX;
+                            }
                         }
                         Some(Ok(StreamChunk::Done { output_tokens: ot })) => {
                             output_tokens = ot;
@@ -370,18 +373,22 @@ impl App {
                                 break;
                             }
                             Action::ScrollUp => {
+                                self.tui_state.auto_scroll = false;
                                 self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(3);
                             }
                             Action::ScrollDown => {
+                                self.tui_state.auto_scroll = false;
                                 self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(3);
                             }
                             Action::PageUp => {
+                                self.tui_state.auto_scroll = false;
                                 if let Ok(size) = terminal.size() {
                                     let page = size.height / 2;
                                     self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(page);
                                 }
                             }
                             Action::PageDown => {
+                                self.tui_state.auto_scroll = false;
                                 if let Ok(size) = terminal.size() {
                                     let page = size.height / 2;
                                     self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(page);
