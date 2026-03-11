@@ -20,7 +20,7 @@ This document surveys five categories of inter-agent communication patterns — 
 
 This hybrid is more expressive than any single framework's communication model. It combines the blackboard's shared state, tuple space's content-addressable access, LangGraph's persisted state, and Gas Town's durable/ephemeral split — unified in a typed property graph with out-of-band notification channels.
 
-**Key finding:** The graph-as-blackboard pattern is validated by recent research (arXiv:2507.01701) showing 13-57% improvements over traditional multi-agent communication, with fewer tokens consumed. Gas Town's production experience validates the durable+ephemeral split — switching protocol messages from persistent beads to ephemeral nudges reduced Dolt commit volume by 80%.
+**Key finding:** The graph-as-blackboard pattern is validated by recent research (arXiv:2507.01701) showing ~4-5% average improvements over traditional multi-agent communication, with fewer tokens consumed. Gas Town's production experience validates the durable+ephemeral split — switching protocol messages from persistent beads to ephemeral nudges reduced Dolt commit volume by 80%.
 
 ---
 
@@ -86,7 +86,7 @@ Actors encapsulate state and process messages sequentially from a mailbox, elimi
 | **Coerce** | Tokio | Yes | Slowest | Built-in |
 | **Xtra** | Multi-RT | No | Good | No |
 
-**Ractor** is the strongest candidate for Context Manager: Erlang-style supervision trees, Tokio-native, production-validated at Meta, process groups for pub/sub, and 4-level priority messaging (Signal > Stop > Supervision > Regular). For 2-5 agents, raw tokio channels suffice. For 6+ agents, Ractor's supervision alone justifies the dependency.
+**Ractor** is the strongest candidate for Context Manager: Erlang-style supervision trees, Tokio-native, used at Meta for Thrift overload protection, process groups for pub/sub, and 4-level priority messaging (Signal > Stop > Supervision > Regular). For 2-5 agents, raw tokio channels suffice. For 6+ agents, Ractor's supervision alone justifies the dependency.
 
 Sources: [Ractor GitHub](https://github.com/slawlor/ractor), [Actor Benchmarks](https://github.com/tqwewe/actor-benchmarks), [Comparing Rust Actor Libraries (2025)](https://tqwewe.com/blog/comparing-rust-actor-libraries/)
 
@@ -154,7 +154,7 @@ Sources: [A2A Protocol](https://a2a-protocol.org/latest/), [IBM - What is A2A](h
 
 #### Anthropic MCP (Model Context Protocol)
 
-Widely adopted standard for agent-to-tool communication via JSON-RPC 2.0. The 2026 roadmap adds a Tasks primitive and session migration, converging toward agent-to-agent communication. MCP's host-as-orchestrator pattern mirrors Context Manager's coordinator architecture.
+Widely adopted standard for agent-to-tool communication via JSON-RPC 2.0. The 2026 roadmap includes a Tasks primitive (already shipped via SEP-1686) and session migration (in progress), converging toward agent-to-agent communication. MCP's host-as-orchestrator pattern mirrors Context Manager's coordinator architecture.
 
 Source: [MCP 2026 Roadmap](http://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/)
 
@@ -182,7 +182,7 @@ The most sophisticated open-source multi-agent orchestrator (20-30 agents). Yegg
 
 GUPP ("If there is work on your Hook, YOU MUST RUN IT") ensures agents proceed without waiting for confirmation. ZFC ("Go provides transport. Agents provide cognition.") separates infrastructure from reasoning.
 
-**Key lesson**: Switching protocol messages from durable mail to ephemeral nudges reduced Dolt commit volume by ~80%. This directly validates our three-layer split.
+**Key lesson**: Switching patrol traffic from durable mail to ephemeral nudges reduced Dolt commit volume by ~80% for operational health-check messages (per Gas Town CHANGELOG.md). This directly validates our three-layer split.
 
 Sources: [Gas Town GitHub](https://github.com/steveyegge/gastown), [Maggie Appleton - Gas Town Patterns](https://maggieappleton.com/gastown)
 
@@ -227,6 +227,8 @@ The property graph is strictly more expressive than any other communication medi
 - **Relationship-aware**: typed edges encode *why* two items are related
 - **Context-native**: the graph IS the LLM context — agents read the relevant subgraph
 - **Composable**: complex behaviors emerge from simple node+edge patterns
+- **Causal ordering without vector clocks**: edges like `ProducedBy` and `DelegateTo` encode causal relationships directly — no Lamport timestamps or vector clocks needed
+- **Retrospective coordination analysis**: "which agents contributed to this conclusion?" is a graph traversal, not a log search. All durable communication is queryable after the fact
 
 LangGraph demonstrates this model at scale — shared state IS the communication channel, with production adoption by enterprise users.
 
@@ -355,9 +357,9 @@ Phase 1 is the natural starting point. The current `App` with its `select!` loop
 
 ### Green Team (Validates Approach)
 
-- **Graph-as-blackboard is validated** by arXiv:2507.01701 — 13-57% improvements over traditional multi-agent communication, with fewer tokens consumed.
+- **Graph-as-blackboard is validated** by arXiv:2507.01701 — ~4-5% average improvements over traditional multi-agent communication, with fewer tokens consumed.
 - **LangGraph demonstrates shared-state communication at scale** — enterprise production adoption validates the pattern.
-- **Gas Town validates durable+ephemeral split** — 80% commit volume reduction when switching protocol messages from persistent to ephemeral.
+- **Gas Town validates durable+ephemeral split** — ~80% commit volume reduction for patrol traffic when switching from persistent to ephemeral (CHANGELOG.md).
 - **Actor-owned graph eliminates all shared-mutable-state bugs** by construction. Single writer, sequential processing, no locks.
 - **Three-layer architecture aligns with every successful system reviewed** — Gas Town (beads/nudges), LangGraph (state/messages), Google ADK (session/events).
 - **Current architecture follows the target pattern** — the `App` struct's `select!` loop is structurally similar to a GraphCoordinator actor.
@@ -385,7 +387,7 @@ Phase 1 is the natural starting point. The current `App` with its `select!` loop
 
 The survey of 10+ multi-agent frameworks and 5 communication pattern categories reveals a convergent design: successful systems separate durable state from ephemeral coordination. Gas Town uses beads+nudges. LangGraph uses state+messages. Google ADK uses session+events. The pattern is universal.
 
-Context Manager's property graph gives us a unique advantage: our durable layer is not just a flat state dict or an append-only log, but a typed, relationship-aware graph that supports multi-hop queries, subgraph extraction, and content-addressable lookup. This makes the graph a natural blackboard — validated by recent research showing 13-57% improvements for blackboard-based multi-agent LLM systems.
+Context Manager's property graph gives us a unique advantage: our durable layer is not just a flat state dict or an append-only log, but a typed, relationship-aware graph that supports multi-hop queries, subgraph extraction, and content-addressable lookup. This makes the graph a natural blackboard — validated by recent research showing ~4-5% average improvements for blackboard-based multi-agent LLM systems.
 
 The recommended path forward is incremental: extract a `GraphCoordinator` from the existing `App` (Phase 1), formalize agents as a trait (Phase 2), adopt Ractor for supervision when agent count warrants it (Phase 3), and add advanced patterns as needed (Phase 4). Each phase delivers value independently and does not require subsequent phases.
 
