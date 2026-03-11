@@ -3,16 +3,18 @@ use crate::tui::TuiState;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let history = graph
         .get_branch_history(graph.active_branch())
         .unwrap_or_default();
 
-    let outer_block = Block::default().title("Conversation").borders(Borders::ALL);
-    let inner = outer_block.inner(area);
-    frame.render_widget(outer_block, area);
+    // Compute inner area without rendering yet — we need scroll info for the title
+    let probe_block = Block::default().borders(Borders::ALL);
+    let inner = probe_block.inner(area);
 
     if inner.width < 4 || inner.height == 0 {
+        let outer_block = Block::default().title("Conversation").borders(Borders::ALL);
+        frame.render_widget(outer_block, area);
         return;
     }
 
@@ -50,6 +52,27 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         clippy::cast_lossless
     )]
     {
+        let total_height: u16 = entries.iter().map(|e| e.height() as u16).sum();
+        let max_scroll = total_height.saturating_sub(inner.height);
+        tui_state.scroll_offset = tui_state.scroll_offset.min(max_scroll);
+
+        let scroll_indicator = if max_scroll == 0 {
+            String::new()
+        } else if tui_state.scroll_offset >= max_scroll {
+            " [END] ".to_string()
+        } else {
+            let pct = (u32::from(tui_state.scroll_offset) * 100) / u32::from(max_scroll);
+            format!(" [{pct}%] ")
+        };
+        let mut outer_block = Block::default().title("Conversation").borders(Borders::ALL);
+        if !scroll_indicator.is_empty() {
+            outer_block = outer_block.title(
+                Line::styled(scroll_indicator, Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Right),
+            );
+        }
+        frame.render_widget(outer_block, area);
+
         let scroll = i32::from(tui_state.scroll_offset);
         let viewport_h = i32::from(inner.height);
         let mut y_offset: i32 = -scroll;

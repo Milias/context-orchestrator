@@ -4,7 +4,7 @@ use crate::tui::TuiState;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &TuiState) {
+pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let area = frame.area();
     let show_context = tui_state.context_panel_visible && area.height >= 20;
 

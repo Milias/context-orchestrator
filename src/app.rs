@@ -116,7 +116,7 @@ impl App {
         tasks::spawn_tool_discovery(self.task_tx.clone());
         tasks::spawn_context_summarization(self.task_tx.clone());
 
-        terminal.draw(|frame| ui::draw(frame, &self.graph, &self.tui_state))?;
+        terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
 
         loop {
             if self.tui_state.should_quit {
@@ -136,10 +136,18 @@ impl App {
                                 self.handle_send_message(text, &mut terminal, &mut event_stream).await?;
                             }
                             Action::ScrollUp => {
-                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(1);
+                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(3);
                             }
                             Action::ScrollDown => {
-                                self.tui_state.scroll_offset += 1;
+                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(3);
+                            }
+                            Action::PageUp => {
+                                let page = terminal.size()?.height / 2;
+                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(page);
+                            }
+                            Action::PageDown => {
+                                let page = terminal.size()?.height / 2;
+                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(page);
                             }
                             Action::None => {}
                         }
@@ -150,7 +158,7 @@ impl App {
                 }
             }
 
-            terminal.draw(|frame| ui::draw(frame, &self.graph, &self.tui_state))?;
+            terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
         }
 
         tui::restore_terminal(terminal)?;
@@ -187,7 +195,8 @@ impl App {
 
         self.tui_state.streaming_response = Some(String::new());
         self.tui_state.status_message = Some("Waiting for response...".to_string());
-        terminal.draw(|frame| ui::draw(frame, &self.graph, &self.tui_state))?;
+        self.tui_state.scroll_offset = u16::MAX;
+        terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
 
         let mut stream = match self.provider.chat(messages, &config).await {
             Ok(s) => s,
@@ -210,6 +219,7 @@ impl App {
                             full_response.push_str(&text);
                             self.tui_state.streaming_response = Some(full_response.clone());
                             self.tui_state.status_message = Some("Receiving...".to_string());
+                            self.tui_state.scroll_offset = u16::MAX;
                         }
                         Some(Ok(StreamChunk::Done { input_tokens: it, output_tokens: ot })) => {
                             input_tokens = it;
@@ -239,7 +249,7 @@ impl App {
                 }
             }
 
-            terminal.draw(|frame| ui::draw(frame, &self.graph, &self.tui_state))?;
+            terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
         }
 
         if !full_response.is_empty() {
@@ -266,7 +276,8 @@ impl App {
     fn handle_task_message(&mut self, msg: TaskMessage) {
         match msg {
             TaskMessage::GitFilesUpdated(files) => {
-                self.graph.remove_nodes_by(|n| matches!(n, Node::GitFile { .. }));
+                self.graph
+                    .remove_nodes_by(|n| matches!(n, Node::GitFile { .. }));
                 let root_id = self.graph.branch_leaf(self.graph.active_branch());
                 for file in files {
                     let node = Node::GitFile {
@@ -282,7 +293,8 @@ impl App {
                 }
             }
             TaskMessage::ToolsDiscovered(tools) => {
-                self.graph.remove_nodes_by(|n| matches!(n, Node::Tool { .. }));
+                self.graph
+                    .remove_nodes_by(|n| matches!(n, Node::Tool { .. }));
                 let root_id = self.graph.branch_leaf(self.graph.active_branch());
                 for tool in tools {
                     let node = Node::Tool {

@@ -8,6 +8,8 @@ pub enum Action {
     SendMessage(String),
     ScrollUp,
     ScrollDown,
+    PageUp,
+    PageDown,
 }
 
 pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
@@ -17,9 +19,7 @@ pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
             KeyCode::Char('q') => return Action::Quit,
             KeyCode::Char('b') => {
                 tui_state.context_panel_visible = !tui_state.context_panel_visible;
-                if !tui_state.context_panel_visible
-                    && tui_state.focus == FocusPanel::ContextPanel
-                {
+                if !tui_state.context_panel_visible && tui_state.focus == FocusPanel::ContextPanel {
                     tui_state.focus = FocusPanel::Input;
                 }
                 return Action::None;
@@ -89,6 +89,8 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
         }
         KeyCode::Up => Action::ScrollUp,
         KeyCode::Down => Action::ScrollDown,
+        KeyCode::PageUp => Action::PageUp,
+        KeyCode::PageDown => Action::PageDown,
         _ => Action::None,
     }
 }
