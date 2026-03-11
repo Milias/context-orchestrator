@@ -30,8 +30,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Check for API key early
-    std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY environment variable not set"))?;
+    if std::env::var("ANTHROPIC_AUTH_TOKEN").is_err() && std::env::var("ANTHROPIC_API_KEY").is_err()
+    {
+        anyhow::bail!("Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY environment variable set");
+    }
 
     let provider = AnthropicProvider::new()?;
 

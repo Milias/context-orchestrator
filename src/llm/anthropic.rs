@@ -7,17 +7,30 @@ use std::pin::Pin;
 
 pub struct AnthropicProvider {
     api_key: String,
+    base_url: String,
     client: Client,
 }
 
 impl AnthropicProvider {
     pub fn new() -> anyhow::Result<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY environment variable not set"))?;
+        let api_key = std::env::var("ANTHROPIC_AUTH_TOKEN")
+            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
+            .map_err(|_| {
+                anyhow::anyhow!("Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY set")
+            })?;
+
+        let base_url = std::env::var("ANTHROPIC_BASE_URL")
+            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+        let base_url = base_url.trim_end_matches('/').to_string();
+
         let client = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()?;
-        Ok(Self { api_key, client })
+        Ok(Self {
+            api_key,
+            base_url,
+            client,
+        })
     }
 }
 
@@ -40,8 +53,9 @@ impl LlmProvider for AnthropicProvider {
 
         let response = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(&format!("{}/v1/messages", self.base_url))
             .header("x-api-key", &self.api_key)
+            .header("authorization", format!("Bearer {}", self.api_key))
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)
@@ -243,8 +257,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_real_api_call() {
-        if std::env::var("ANTHROPIC_API_KEY").is_err() {
-            eprintln!("Skipping: ANTHROPIC_API_KEY not set");
+        if std::env::var("ANTHROPIC_AUTH_TOKEN").is_err()
+            && std::env::var("ANTHROPIC_API_KEY").is_err()
+        {
+            eprintln!("Skipping: no API key set");
             return;
         }
         let provider = AnthropicProvider::new().unwrap();

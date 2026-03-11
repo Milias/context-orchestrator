@@ -21,7 +21,8 @@ pub struct ChatConfig {
 impl Default for ChatConfig {
     fn default() -> Self {
         Self {
-            model: std::env::var("CONTEXT_MANAGER_MODEL")
+            model: std::env::var("ANTHROPIC_MODEL")
+                .or_else(|_| std::env::var("CONTEXT_MANAGER_MODEL"))
                 .unwrap_or_else(|_| "claude-sonnet-4-5-20250514".to_string()),
             max_tokens: 4096,
             system_prompt: None,
