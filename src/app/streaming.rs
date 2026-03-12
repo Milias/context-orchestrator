@@ -29,8 +29,7 @@ pub(super) struct StreamResult {
     pub think_text: String,
     pub output_tokens: Option<u32>,
     pub tool_use_records: Vec<ToolUseRecord>,
-    /// True if the stream was interrupted by user quit.
-    pub cancelled: bool,
+    pub stop_reason: Option<String>,
 }
 
 impl App {
@@ -59,7 +58,7 @@ impl App {
         let mut think_splitter = ThinkSplitter::new();
         let mut output_tokens = None;
         let mut tool_use_records = Vec::new();
-        let mut cancelled = false;
+        let mut stop_reason = None;
         loop {
             tokio::select! {
                 biased; // event branch first so user input isn't starved by SSE bursts
@@ -70,7 +69,6 @@ impl App {
                         match action {
                             Action::Quit => {
                                 self.tui_state.should_quit = true;
-                                cancelled = true;
                                 break;
                             }
                             Action::ScrollUp | Action::ScrollDown => {
@@ -110,8 +108,9 @@ impl App {
                             let tool_call_id = Uuid::new_v4();
                             tool_use_records.push(ToolUseRecord { tool_call_id, api_id: id, name, input });
                         }
-                        Some(Ok(StreamChunk::Done { output_tokens: ot })) => {
+                        Some(Ok(StreamChunk::Done { output_tokens: ot, stop_reason: sr })) => {
                             output_tokens = ot;
+                            stop_reason = sr;
                             break;
                         }
                         Some(Ok(StreamChunk::Error(e))) => {
@@ -135,7 +134,7 @@ impl App {
             think_text: think_content,
             output_tokens,
             tool_use_records,
-            cancelled,
+            stop_reason,
         })
     }
 }

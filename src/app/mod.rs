@@ -1,3 +1,4 @@
+mod agent_loop;
 mod streaming;
 mod task_handler;
 mod think_splitter;
@@ -146,7 +147,8 @@ impl App {
                 &self.config.anthropic_model,
                 system_prompt.as_deref(),
             )
-            .await?;
+            .await
+            .unwrap_or(0);
 
         if token_count > max_tokens {
             let total_chars: usize = messages.iter().map(|m| m.content.char_len()).sum();
@@ -177,6 +179,17 @@ impl App {
                 messages.remove(0);
             } else {
                 break;
+            }
+        }
+
+        // Drop trailing assistant messages with tool_use blocks that lack a following tool_result.
+        if messages.len() > 1 {
+            if let Some(last) = messages.last() {
+                let has_tool_use = matches!(&last.content,
+                    ChatContent::Blocks(b) if b.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })));
+                if last.role == "assistant" && has_tool_use {
+                    messages.pop();
+                }
             }
         }
 
@@ -274,56 +287,13 @@ impl App {
 
         self.spawn_tool_triggers(&text_for_triggers, user_msg_id);
 
-        let (system_prompt, messages) = self.build_context().await?;
         let config = ChatConfig {
-            system_prompt,
+            system_prompt: None,
+            tools: crate::tool_executor::registered_tool_definitions(),
             ..ChatConfig::from_app_config(&self.config)
         };
 
-        let result = self
-            .stream_llm_response(messages, &config, terminal, event_stream)
-            .await?;
-
-        if !result.response.is_empty() || !result.tool_use_records.is_empty() {
-            let leaf = self
-                .graph
-                .branch_leaf(self.graph.active_branch())
-                .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
-            let assistant_id = Uuid::new_v4();
-            let assistant_node = Node::Message {
-                id: assistant_id,
-                role: Role::Assistant,
-                content: result.response,
-                created_at: Utc::now(),
-                model: Some(config.model.clone()),
-                input_tokens: None,
-                output_tokens: result.output_tokens,
-            };
-            self.graph.add_message(leaf, assistant_node)?;
-
-            for record in &result.tool_use_records {
-                let args = crate::graph::parse_tool_arguments(&record.name, &record.input);
-                let api_id = Some(record.api_id.clone());
-                self.handle_tool_call_dispatched(record.tool_call_id, assistant_id, args, api_id);
-            }
-
-            if !result.think_text.is_empty() {
-                let think_node = Node::ThinkBlock {
-                    id: Uuid::new_v4(),
-                    content: result.think_text,
-                    parent_message_id: assistant_id,
-                    created_at: Utc::now(),
-                };
-                let think_id = self.graph.add_node(think_node);
-                self.graph
-                    .add_edge(think_id, assistant_id, EdgeKind::ThinkingOf)?;
-            }
-        }
-
-        self.tui_state.streaming_response = None;
-        self.tui_state.status_message = None;
-        self.save()?;
-        Ok(())
+        self.run_agent_loop(&config, terminal, event_stream).await
     }
 
     fn spawn_tool_triggers(&self, text: &str, user_msg_id: Uuid) {

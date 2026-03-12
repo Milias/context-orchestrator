@@ -136,6 +136,7 @@ struct SseState<S> {
     stream: Pin<Box<S>>,
     buffer: String,
     output_tokens: Option<u32>,
+    stop_reason: Option<String>,
     /// Pending `tool_use` block being accumulated across SSE events.
     pending_tool_use: Option<PendingToolUse>,
 }
@@ -154,6 +155,7 @@ fn sse_to_stream_chunks(
             stream: Box::pin(byte_stream),
             buffer: String::new(),
             output_tokens: None,
+            stop_reason: None,
             pending_tool_use: None,
         },
         |mut state| async move {
@@ -166,6 +168,7 @@ fn sse_to_stream_chunks(
                     if let Some(chunk) = parse_sse_event(
                         &event_text,
                         &mut state.output_tokens,
+                        &mut state.stop_reason,
                         &mut state.pending_tool_use,
                     ) {
                         return Some((chunk, state));
@@ -219,6 +222,12 @@ struct DeltaPayload {
 #[derive(Deserialize)]
 struct MessageDeltaEvent {
     usage: Option<UsagePayload>,
+    delta: Option<MessageDeltaPayload>,
+}
+
+#[derive(Deserialize)]
+struct MessageDeltaPayload {
+    stop_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -239,6 +248,7 @@ struct ErrorPayload {
 fn parse_sse_event(
     event_text: &str,
     output_tokens: &mut Option<u32>,
+    stop_reason: &mut Option<String>,
     pending_tool_use: &mut Option<PendingToolUse>,
 ) -> Option<anyhow::Result<StreamChunk>> {
     let mut event_type = "";
@@ -316,10 +326,14 @@ fn parse_sse_event(
             if let Some(tokens) = event.usage.and_then(|u| u.output_tokens) {
                 *output_tokens = Some(tokens);
             }
+            if let Some(reason) = event.delta.and_then(|d| d.stop_reason) {
+                *stop_reason = Some(reason);
+            }
             None
         }
         "message_stop" => Some(Ok(StreamChunk::Done {
             output_tokens: *output_tokens,
+            stop_reason: stop_reason.take(),
         })),
         "error" => {
             let event: ErrorEvent = match serde_json::from_str(data) {

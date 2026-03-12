@@ -1,26 +1,65 @@
 use crate::graph::tool_types::ToolCallArguments;
+use crate::llm::tool_types::{SchemaProperty, SchemaType, ToolDefinition, ToolInputSchema};
 use crate::tasks::TaskMessage;
 use tokio::sync::mpsc;
 use uuid::Uuid;
+
+/// Return the tool definitions to register with the LLM API.
+pub fn registered_tool_definitions() -> Vec<ToolDefinition> {
+    vec![ToolDefinition {
+        name: "read_file".to_string(),
+        description: "Read the contents of a file at the given path".to_string(),
+        input_schema: ToolInputSchema {
+            properties: vec![SchemaProperty {
+                name: "path".to_string(),
+                property_type: SchemaType::String,
+                description: "Absolute or relative path to the file".to_string(),
+                required: true,
+            }],
+        },
+    }]
+}
 
 pub struct ToolExecutionResult {
     pub content: String,
     pub is_error: bool,
 }
 
-/// Execute a tool call. Currently all tools are stubs that return errors.
-/// Real implementations will be added as tools are built out.
-// Stubs are sync now, but real implementations will need async for I/O.
-#[allow(clippy::unused_async)]
+const MAX_READ_FILE_BYTES: usize = 100_000;
+
+/// Execute a tool call and return the result.
 pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult {
     match arguments {
         ToolCallArguments::Plan { .. } => ToolExecutionResult {
             content: "Plan tool execution not yet implemented".to_string(),
             is_error: true,
         },
-        ToolCallArguments::ReadFile { path } => ToolExecutionResult {
-            content: format!("read_file not yet implemented (path: {path})"),
-            is_error: true,
+        ToolCallArguments::ReadFile { path } => match tokio::fs::read_to_string(path).await {
+            Ok(contents) => {
+                if contents.len() > MAX_READ_FILE_BYTES {
+                    let mut boundary = MAX_READ_FILE_BYTES;
+                    while boundary > 0 && !contents.is_char_boundary(boundary) {
+                        boundary -= 1;
+                    }
+                    ToolExecutionResult {
+                        content: format!(
+                            "{}\n\n[truncated, {} bytes total]",
+                            &contents[..boundary],
+                            contents.len()
+                        ),
+                        is_error: false,
+                    }
+                } else {
+                    ToolExecutionResult {
+                        content: contents,
+                        is_error: false,
+                    }
+                }
+            }
+            Err(e) => ToolExecutionResult {
+                content: format!("Error reading file: {e}"),
+                is_error: true,
+            },
         },
         ToolCallArguments::WriteFile { path, .. } => ToolExecutionResult {
             content: format!("write_file not yet implemented (path: {path})"),

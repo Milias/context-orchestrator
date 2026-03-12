@@ -33,6 +33,10 @@ fn default_background_max_concurrent() -> usize {
     2
 }
 
+fn default_max_tool_loop_iterations() -> usize {
+    10
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_base_url")]
@@ -53,6 +57,8 @@ pub struct AppConfig {
     pub background_max_tokens: u32,
     #[serde(default = "default_background_max_concurrent")]
     pub background_max_concurrent: usize,
+    #[serde(default = "default_max_tool_loop_iterations")]
+    pub max_tool_loop_iterations: usize,
 }
 
 impl AppConfig {

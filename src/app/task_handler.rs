@@ -120,7 +120,12 @@ impl App {
         tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone());
     }
 
-    fn handle_tool_call_completed(&mut self, tool_call_id: Uuid, content: String, is_error: bool) {
+    pub(super) fn handle_tool_call_completed(
+        &mut self,
+        tool_call_id: Uuid,
+        content: String,
+        is_error: bool,
+    ) {
         let new_status = if is_error {
             ToolCallStatus::Failed
         } else {
