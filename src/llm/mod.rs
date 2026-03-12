@@ -1,4 +1,7 @@
 pub mod anthropic;
+pub mod tool_types;
+
+pub use tool_types::{ChatContent, ContentBlock, RawJson, ToolDefinition};
 
 use crate::config::AppConfig;
 use async_trait::async_trait;
@@ -11,7 +14,22 @@ use tokio::sync::Semaphore;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    pub content: ChatContent,
+}
+
+impl ChatMessage {
+    /// Convenience constructor for plain-text messages.
+    pub fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            content: ChatContent::Text(content.into()),
+        }
+    }
+
+    /// Extract the text content, if any.
+    pub fn text_content(&self) -> Option<&str> {
+        self.content.text_content()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -19,6 +37,7 @@ pub struct ChatConfig {
     pub model: String,
     pub max_tokens: u32,
     pub system_prompt: Option<String>,
+    pub tools: Vec<ToolDefinition>,
 }
 
 impl ChatConfig {
@@ -27,6 +46,7 @@ impl ChatConfig {
             model: config.anthropic_model.clone(),
             max_tokens: config.max_tokens,
             system_prompt: None,
+            tools: Vec::new(),
         }
     }
 }
@@ -34,7 +54,14 @@ impl ChatConfig {
 #[derive(Debug, Clone)]
 pub enum StreamChunk {
     TextDelta(String),
-    Done { output_tokens: Option<u32> },
+    ToolUse {
+        id: String,
+        name: String,
+        input: String,
+    },
+    Done {
+        output_tokens: Option<u32>,
+    },
     Error(String),
 }
 
@@ -73,6 +100,7 @@ impl BackgroundLlmConfig {
             model: self.model.clone(),
             max_tokens: self.max_tokens,
             system_prompt,
+            tools: Vec::new(),
         }
     }
 }
@@ -98,6 +126,7 @@ pub async fn background_llm_call(
     while let Some(chunk) = stream.next().await {
         match chunk? {
             StreamChunk::TextDelta(t) => full_text.push_str(&t),
+            StreamChunk::ToolUse { .. } => {} // Background calls don't use tools
             StreamChunk::Done { .. } => break,
             StreamChunk::Error(e) => anyhow::bail!("LLM error: {e}"),
         }
@@ -126,3 +155,7 @@ pub(crate) fn strip_json_fences(text: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tool_types_tests.rs"]
+mod tool_types_tests;

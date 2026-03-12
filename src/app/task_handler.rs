@@ -1,5 +1,7 @@
+use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus};
 use crate::graph::{EdgeKind, Node};
 use crate::tasks::{TaskMessage, ToolExtractionOutcome};
+use crate::tool_executor;
 
 use chrono::Utc;
 use uuid::Uuid;
@@ -74,6 +76,71 @@ impl App {
                         Some(format!("Work item created: {}", plan.title));
                 }
             },
+            TaskMessage::ToolCallDispatched {
+                tool_call_id,
+                parent_message_id,
+                arguments,
+            } => {
+                self.handle_tool_call_dispatched(tool_call_id, parent_message_id, arguments, None);
+            }
+            TaskMessage::ToolCallCompleted {
+                tool_call_id,
+                content,
+                is_error,
+            } => {
+                self.handle_tool_call_completed(tool_call_id, content, is_error);
+            }
         }
+    }
+
+    pub(super) fn handle_tool_call_dispatched(
+        &mut self,
+        tool_call_id: Uuid,
+        parent_message_id: Uuid,
+        arguments: ToolCallArguments,
+        api_tool_use_id: Option<String>,
+    ) {
+        let tool_call = Node::ToolCall {
+            id: tool_call_id,
+            api_tool_use_id,
+            arguments: arguments.clone(),
+            status: ToolCallStatus::Pending,
+            parent_message_id,
+            created_at: Utc::now(),
+            completed_at: None,
+        };
+        self.graph.add_node(tool_call);
+        let _ = self
+            .graph
+            .add_edge(tool_call_id, parent_message_id, EdgeKind::Invoked);
+        let _ = self
+            .graph
+            .update_tool_call_status(tool_call_id, ToolCallStatus::Running, None);
+
+        tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone());
+    }
+
+    fn handle_tool_call_completed(&mut self, tool_call_id: Uuid, content: String, is_error: bool) {
+        let new_status = if is_error {
+            ToolCallStatus::Failed
+        } else {
+            ToolCallStatus::Completed
+        };
+        let _ = self
+            .graph
+            .update_tool_call_status(tool_call_id, new_status, Some(Utc::now()));
+
+        let result_id = Uuid::new_v4();
+        let result_node = Node::ToolResult {
+            id: result_id,
+            tool_call_id,
+            content,
+            is_error,
+            created_at: Utc::now(),
+        };
+        self.graph.add_node(result_node);
+        let _ = self
+            .graph
+            .add_edge(result_id, tool_call_id, EdgeKind::Produced);
     }
 }

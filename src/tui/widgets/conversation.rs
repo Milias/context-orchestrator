@@ -219,6 +219,8 @@ fn role_label(node: &Node) -> &'static str {
         Node::GitFile { .. } => "file",
         Node::Tool { .. } => "tool",
         Node::BackgroundTask { .. } => "bg",
+        Node::ToolCall { .. } => "call",
+        Node::ToolResult { .. } => "result",
         // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
         Node::ThinkBlock { .. } => "think",
     }
@@ -233,7 +235,8 @@ fn role_color(node: &Node) -> Color {
         },
         Node::WorkItem { .. } => Color::Yellow,
         Node::GitFile { .. } => Color::Blue,
-        Node::Tool { .. } => Color::Magenta,
+        Node::Tool { .. } | Node::ToolCall { .. } => Color::Magenta,
+        Node::ToolResult { .. } => Color::Cyan,
         // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
         Node::SystemDirective { .. } | Node::BackgroundTask { .. } | Node::ThinkBlock { .. } => {
             Color::DarkGray

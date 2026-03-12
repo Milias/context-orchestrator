@@ -1,3 +1,7 @@
+pub mod tool_types;
+
+pub use tool_types::{parse_tool_arguments, ToolCallArguments, ToolCallStatus};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -48,7 +52,7 @@ pub enum TaskStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
     RespondsTo,
@@ -58,6 +62,8 @@ pub enum EdgeKind {
     Indexes,
     Provides,
     ThinkingOf,
+    Invoked,
+    Produced,
 }
 
 // ── Edge ─────────────────────────────────────────────────────────────
@@ -121,6 +127,24 @@ pub enum Node {
         parent_message_id: Uuid,
         created_at: DateTime<Utc>,
     },
+    ToolCall {
+        id: Uuid,
+        /// The API-assigned `tool_use` ID (e.g. `toolu_xxx`), used to pair
+        /// `tool_use`/`tool_result` blocks in the LLM context.
+        api_tool_use_id: Option<String>,
+        arguments: ToolCallArguments,
+        status: ToolCallStatus,
+        parent_message_id: Uuid,
+        created_at: DateTime<Utc>,
+        completed_at: Option<DateTime<Utc>>,
+    },
+    ToolResult {
+        id: Uuid,
+        tool_call_id: Uuid,
+        content: String,
+        is_error: bool,
+        created_at: DateTime<Utc>,
+    },
 }
 
 impl Node {
@@ -132,7 +156,9 @@ impl Node {
             | Node::GitFile { id, .. }
             | Node::Tool { id, .. }
             | Node::BackgroundTask { id, .. }
-            | Node::ThinkBlock { id, .. } => *id,
+            | Node::ThinkBlock { id, .. }
+            | Node::ToolCall { id, .. }
+            | Node::ToolResult { id, .. } => *id,
         }
     }
 
@@ -140,11 +166,13 @@ impl Node {
         match self {
             Node::Message { content, .. }
             | Node::SystemDirective { content, .. }
-            | Node::ThinkBlock { content, .. } => content,
+            | Node::ThinkBlock { content, .. }
+            | Node::ToolResult { content, .. } => content,
             Node::WorkItem { title, .. } => title,
             Node::GitFile { path, .. } => path,
             Node::Tool { name, .. } => name,
             Node::BackgroundTask { description, .. } => description,
+            Node::ToolCall { arguments, .. } => arguments.tool_name(),
         }
     }
 
@@ -176,6 +204,9 @@ pub struct ConversationGraph {
     /// Runtime index for fast ancestor walking. Not serialized.
     #[serde(skip)]
     responds_to: HashMap<Uuid, Uuid>,
+    /// Runtime index: `ToolCall` id -> parent message id (from `Invoked` edges). Not serialized.
+    #[serde(skip)]
+    invoked_by: HashMap<Uuid, Uuid>,
 }
 
 /// Raw form for serde (no runtime indexes).
@@ -195,12 +226,19 @@ impl From<ConversationGraphRaw> for ConversationGraph {
             .filter(|e| e.kind == EdgeKind::RespondsTo)
             .map(|e| (e.from, e.to))
             .collect();
+        let invoked_by = raw
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Invoked)
+            .map(|e| (e.from, e.to))
+            .collect();
         Self {
             nodes: raw.nodes,
             edges: raw.edges,
             branches: raw.branches,
             active_branch: raw.active_branch,
             responds_to,
+            invoked_by,
         }
     }
 }
@@ -236,6 +274,7 @@ impl ConversationGraph {
             branches,
             active_branch: "main".to_string(),
             responds_to: HashMap::new(),
+            invoked_by: HashMap::new(),
         }
     }
 
@@ -272,8 +311,14 @@ impl ConversationGraph {
         if !self.nodes.contains_key(&to) {
             anyhow::bail!("Node {to} does not exist");
         }
-        if kind == EdgeKind::RespondsTo {
-            self.responds_to.insert(from, to);
+        match kind {
+            EdgeKind::RespondsTo => {
+                self.responds_to.insert(from, to);
+            }
+            EdgeKind::Invoked => {
+                self.invoked_by.insert(from, to);
+            }
+            _ => {}
         }
         self.edges.push(Edge { from, to, kind });
         Ok(())
@@ -282,6 +327,31 @@ impl ConversationGraph {
     /// Insert or update a node. Creates if absent, replaces if present.
     pub fn upsert_node(&mut self, node: Node) {
         self.nodes.insert(node.id(), node);
+    }
+
+    /// Update the status (and optionally `completed_at`) of a `ToolCall` node in place.
+    pub fn update_tool_call_status(
+        &mut self,
+        id: Uuid,
+        new_status: ToolCallStatus,
+        completed_at: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<()> {
+        let node = self
+            .nodes
+            .get_mut(&id)
+            .ok_or_else(|| anyhow::anyhow!("Node {id} not found"))?;
+        match node {
+            Node::ToolCall {
+                status,
+                completed_at: ca,
+                ..
+            } => {
+                *status = new_status;
+                *ca = completed_at;
+                Ok(())
+            }
+            _ => anyhow::bail!("Node {id} is not a ToolCall"),
+        }
     }
 
     /// Walk from the branch leaf to the root via `RespondsTo` edges, return chronological order.
@@ -332,6 +402,31 @@ impl ConversationGraph {
         self.nodes.values().filter(|n| filter(n)).collect()
     }
 
+    /// Find all nodes connected from `source` via edges of the given kind.
+    /// Returns node ids where an edge `(source) --[kind]--> (target)` exists.
+    pub fn targets_by_edge(&self, source: Uuid, kind: EdgeKind) -> Vec<Uuid> {
+        self.edges
+            .iter()
+            .filter(|e| e.from == source && e.kind == kind)
+            .map(|e| e.to)
+            .collect()
+    }
+
+    /// Find all nodes connected to `target` via edges of the given kind.
+    /// Returns node ids where an edge `(source) --[kind]--> (target)` exists.
+    pub fn sources_by_edge(&self, target: Uuid, kind: EdgeKind) -> Vec<Uuid> {
+        self.edges
+            .iter()
+            .filter(|e| e.to == target && e.kind == kind)
+            .map(|e| e.from)
+            .collect()
+    }
+
+    /// Look up a node by id.
+    pub fn node(&self, id: Uuid) -> Option<&Node> {
+        self.nodes.get(&id)
+    }
+
     /// Check if a node has an associated `ThinkBlock` linked via `ThinkingOf`.
     pub fn has_think_block(&self, node_id: Uuid) -> bool {
         self.edges
@@ -351,6 +446,7 @@ impl ConversationGraph {
         for id in &to_remove {
             self.nodes.remove(id);
             self.responds_to.remove(id);
+            self.invoked_by.remove(id);
         }
 
         self.edges
@@ -360,3 +456,7 @@ impl ConversationGraph {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tool_types_tests.rs"]
+mod tool_types_tests;

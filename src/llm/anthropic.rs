@@ -1,4 +1,5 @@
 use crate::config::AppConfig;
+use crate::llm::tool_types::{ApiToolDefinition, ToolDefinition};
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
@@ -36,6 +37,8 @@ struct MessagesRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<ApiToolDefinition>,
 }
 
 #[derive(Serialize)]
@@ -58,12 +61,16 @@ impl LlmProvider for AnthropicProvider {
         messages: Vec<ChatMessage>,
         config: &ChatConfig,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = anyhow::Result<StreamChunk>> + Send>>> {
+        let api_tools: Vec<ApiToolDefinition> =
+            config.tools.iter().map(ToolDefinition::to_api).collect();
+
         let body = MessagesRequest {
             model: config.model.clone(),
             max_tokens: config.max_tokens,
             messages,
             stream: true,
             system: config.system_prompt.clone(),
+            tools: api_tools,
         };
 
         let response = self
@@ -123,10 +130,20 @@ impl LlmProvider for AnthropicProvider {
     }
 }
 
+// ── SSE parsing ─────────────────────────────────────────────────────
+
 struct SseState<S> {
     stream: Pin<Box<S>>,
     buffer: String,
     output_tokens: Option<u32>,
+    /// Pending `tool_use` block being accumulated across SSE events.
+    pending_tool_use: Option<PendingToolUse>,
+}
+
+struct PendingToolUse {
+    id: String,
+    name: String,
+    input_json: String,
 }
 
 fn sse_to_stream_chunks(
@@ -137,6 +154,7 @@ fn sse_to_stream_chunks(
             stream: Box::pin(byte_stream),
             buffer: String::new(),
             output_tokens: None,
+            pending_tool_use: None,
         },
         |mut state| async move {
             loop {
@@ -145,7 +163,11 @@ fn sse_to_stream_chunks(
                     let event_text = state.buffer[..pos].to_string();
                     state.buffer = state.buffer[pos + 2..].to_string();
 
-                    if let Some(chunk) = parse_sse_event(&event_text, &mut state.output_tokens) {
+                    if let Some(chunk) = parse_sse_event(
+                        &event_text,
+                        &mut state.output_tokens,
+                        &mut state.pending_tool_use,
+                    ) {
                         return Some((chunk, state));
                     }
                     continue;
@@ -169,13 +191,29 @@ fn sse_to_stream_chunks(
 }
 
 #[derive(Deserialize)]
+struct ContentBlockStartEvent {
+    content_block: Option<ContentBlockInfo>,
+}
+
+#[derive(Deserialize)]
+struct ContentBlockInfo {
+    #[serde(rename = "type")]
+    block_type: Option<String>,
+    id: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct ContentBlockDeltaEvent {
     delta: Option<DeltaPayload>,
 }
 
 #[derive(Deserialize)]
 struct DeltaPayload {
+    #[serde(rename = "type")]
+    delta_type: Option<String>,
     text: Option<String>,
+    partial_json: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -201,6 +239,7 @@ struct ErrorPayload {
 fn parse_sse_event(
     event_text: &str,
     output_tokens: &mut Option<u32>,
+    pending_tool_use: &mut Option<PendingToolUse>,
 ) -> Option<anyhow::Result<StreamChunk>> {
     let mut event_type = "";
     let mut data = "";
@@ -218,15 +257,56 @@ fn parse_sse_event(
     }
 
     match event_type {
+        "content_block_start" => {
+            let event: ContentBlockStartEvent = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.into())),
+            };
+            if let Some(block) = event.content_block {
+                if block.block_type.as_deref() == Some("tool_use") {
+                    *pending_tool_use = Some(PendingToolUse {
+                        id: block.id.unwrap_or_default(),
+                        name: block.name.unwrap_or_default(),
+                        input_json: String::new(),
+                    });
+                }
+            }
+            None
+        }
         "content_block_delta" => {
             let event: ContentBlockDeltaEvent = match serde_json::from_str(data) {
                 Ok(v) => v,
                 Err(e) => return Some(Err(e.into())),
             };
-            event
-                .delta
-                .and_then(|d| d.text)
-                .map(|text| Ok(StreamChunk::TextDelta(text)))
+            if let Some(delta) = event.delta {
+                match delta.delta_type.as_deref() {
+                    Some("input_json_delta") => {
+                        if let Some(ref mut pending) = pending_tool_use {
+                            if let Some(partial) = delta.partial_json {
+                                pending.input_json.push_str(&partial);
+                            }
+                        }
+                        None
+                    }
+                    _ => {
+                        // Text delta (or unknown delta type)
+                        delta.text.map(|text| Ok(StreamChunk::TextDelta(text)))
+                    }
+                }
+            } else {
+                None
+            }
+        }
+        "content_block_stop" => {
+            if let Some(pending) = pending_tool_use.take() {
+                Some(Ok(StreamChunk::ToolUse {
+                    id: pending.id,
+                    name: pending.name,
+                    input: pending.input_json,
+                }))
+            } else {
+                None
+            }
         }
         "message_delta" => {
             let event: MessageDeltaEvent = match serde_json::from_str(data) {

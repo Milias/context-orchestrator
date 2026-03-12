@@ -1,8 +1,13 @@
+mod streaming;
 mod task_handler;
+mod think_splitter;
 
 use crate::config::AppConfig;
+use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
-use crate::llm::{BackgroundLlmConfig, ChatConfig, ChatMessage, LlmProvider, StreamChunk};
+use crate::llm::{
+    BackgroundLlmConfig, ChatConfig, ChatContent, ChatMessage, ContentBlock, LlmProvider, RawJson,
+};
 use crate::persistence::{self, ConversationMetadata};
 use crate::tasks::{self, ContextSnapshot, TaskMessage};
 use crate::tui::input::{self, Action};
@@ -65,10 +70,7 @@ impl App {
                         Role::Assistant => "assistant",
                         Role::System => return None,
                     };
-                    Some(ChatMessage {
-                        role: api_role.to_string(),
-                        content: content.clone(),
-                    })
+                    Some(ChatMessage::text(api_role, content))
                 }
                 _ => None,
             })
@@ -78,14 +80,18 @@ impl App {
             .graph
             .nodes_by(|n| matches!(n, Node::Tool { .. }))
             .into_iter()
-            .filter_map(|n| match n {
-                Node::Tool {
+            .filter_map(|n| {
+                if let Node::Tool {
                     name, description, ..
-                } => Some(crate::tasks::ToolSnapshot {
-                    name: name.clone(),
-                    description: description.clone(),
-                }),
-                _ => None,
+                } = n
+                {
+                    Some(crate::tasks::ToolSnapshot {
+                        name: name.clone(),
+                        description: description.clone(),
+                    })
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -107,23 +113,28 @@ impl App {
                 Node::SystemDirective { content, .. } => {
                     system_prompt = Some(content.clone());
                 }
-                Node::Message { role, content, .. } => {
-                    let api_role = match role {
-                        Role::User => "user",
-                        Role::Assistant => "assistant",
-                        Role::System => continue,
-                    };
-                    messages.push(ChatMessage {
-                        role: api_role.to_string(),
-                        content: content.clone(),
-                    });
-                }
+                Node::Message {
+                    id, role, content, ..
+                } => match role {
+                    Role::System => {}
+                    Role::User => {
+                        messages.push(ChatMessage::text("user", content));
+                    }
+                    Role::Assistant => {
+                        let (asst_msg, result_msgs) =
+                            self.build_assistant_message_with_tools(*id, content);
+                        messages.push(asst_msg);
+                        messages.extend(result_msgs);
+                    }
+                },
                 // Non-conversation node types are skipped in LLM context
                 Node::WorkItem { .. }
                 | Node::GitFile { .. }
                 | Node::Tool { .. }
                 | Node::BackgroundTask { .. }
-                | Node::ThinkBlock { .. } => {}
+                | Node::ThinkBlock { .. }
+                | Node::ToolCall { .. }
+                | Node::ToolResult { .. } => {}
             }
         }
 
@@ -138,7 +149,7 @@ impl App {
             .await?;
 
         if token_count > max_tokens {
-            let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+            let total_chars: usize = messages.iter().map(|m| m.content.char_len()).sum();
             let ratio = f64::from(max_tokens) / f64::from(token_count);
             // Truncation/sign-loss/precision-loss are acceptable here: total_chars and ratio
             // are both non-negative and the result fits comfortably in usize for any realistic
@@ -153,7 +164,19 @@ impl App {
             let mut current_chars = total_chars;
             while current_chars > target_chars && messages.len() > 1 {
                 let removed = messages.remove(0);
-                current_chars -= removed.content.len();
+                current_chars -= removed.content.char_len();
+            }
+        }
+
+        // Drop orphaned tool_result user messages at the front after truncation.
+        // The Anthropic API rejects tool_result blocks without a preceding tool_use.
+        while messages.len() > 1 && messages[0].role == "user" {
+            let all_results = matches!(&messages[0].content,
+                ChatContent::Blocks(b) if b.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. })));
+            if all_results {
+                messages.remove(0);
+            } else {
+                break;
             }
         }
 
@@ -188,19 +211,20 @@ impl App {
                             Action::SendMessage(text) => {
                                 self.handle_send_message(text, &mut terminal, &mut event_stream).await?;
                             }
-                            Action::ScrollUp => {
-                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(3);
+                            Action::ScrollUp | Action::ScrollDown => {
+                                self.tui_state.scroll_offset = if matches!(action, Action::ScrollUp) {
+                                    self.tui_state.scroll_offset.saturating_sub(3)
+                                } else {
+                                    self.tui_state.scroll_offset.saturating_add(3)
+                                };
                             }
-                            Action::ScrollDown => {
-                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(3);
-                            }
-                            Action::PageUp => {
+                            Action::PageUp | Action::PageDown => {
                                 let page = terminal.size()?.height / 2;
-                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(page);
-                            }
-                            Action::PageDown => {
-                                let page = terminal.size()?.height / 2;
-                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(page);
+                                self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
+                                    self.tui_state.scroll_offset.saturating_sub(page)
+                                } else {
+                                    self.tui_state.scroll_offset.saturating_add(page)
+                                };
                             }
                             Action::None => {}
                         }
@@ -229,10 +253,7 @@ impl App {
             .branch_leaf(self.graph.active_branch())
             .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
 
-        let single = vec![ChatMessage {
-            role: "user".into(),
-            content: text.clone(),
-        }];
+        let single = vec![ChatMessage::text("user", &text)];
         let user_tokens = self
             .provider
             .count_tokens(&single, &self.config.anthropic_model, None)
@@ -259,28 +280,37 @@ impl App {
             ..ChatConfig::from_app_config(&self.config)
         };
 
-        let (response, think_text, output_tokens) = self
+        let result = self
             .stream_llm_response(messages, &config, terminal, event_stream)
             .await?;
 
-        if !response.is_empty() {
-            let leaf = self.graph.branch_leaf(self.graph.active_branch()).unwrap();
+        if !result.response.is_empty() || !result.tool_use_records.is_empty() {
+            let leaf = self
+                .graph
+                .branch_leaf(self.graph.active_branch())
+                .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
             let assistant_id = Uuid::new_v4();
             let assistant_node = Node::Message {
                 id: assistant_id,
                 role: Role::Assistant,
-                content: response,
+                content: result.response,
                 created_at: Utc::now(),
                 model: Some(config.model.clone()),
                 input_tokens: None,
-                output_tokens,
+                output_tokens: result.output_tokens,
             };
             self.graph.add_message(leaf, assistant_node)?;
 
-            if !think_text.is_empty() {
+            for record in &result.tool_use_records {
+                let args = crate::graph::parse_tool_arguments(&record.name, &record.input);
+                let api_id = Some(record.api_id.clone());
+                self.handle_tool_call_dispatched(record.tool_call_id, assistant_id, args, api_id);
+            }
+
+            if !result.think_text.is_empty() {
                 let think_node = Node::ThinkBlock {
                     id: Uuid::new_v4(),
-                    content: think_text,
+                    content: result.think_text,
                     parent_message_id: assistant_id,
                     created_at: Utc::now(),
                 };
@@ -310,252 +340,79 @@ impl App {
         }
     }
 
-    async fn stream_llm_response(
-        &mut self,
-        messages: Vec<ChatMessage>,
-        config: &ChatConfig,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-        event_stream: &mut EventStream,
-    ) -> anyhow::Result<(String, String, Option<u32>)> {
-        self.tui_state.streaming_response = Some(String::new());
-        self.tui_state.status_message = Some("Waiting for response...".to_string());
-        self.tui_state.auto_scroll = true;
-        self.tui_state.scroll_offset = u16::MAX;
-        terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
-
-        let mut stream = match self.provider.chat(messages, config).await {
-            Ok(s) => s,
-            Err(e) => {
-                self.tui_state.streaming_response = None;
-                self.tui_state.status_message = Some(format!("Error: {e}"));
-                return Ok((String::new(), String::new(), None));
+    /// Build assistant `ChatMessage` with `ToolUse` blocks and any following
+    /// user `ToolResult` messages. Ensures Anthropic API tool call/result pairing.
+    fn build_assistant_message_with_tools(
+        &self,
+        message_id: Uuid,
+        text_content: &str,
+    ) -> (ChatMessage, Vec<ChatMessage>) {
+        let tool_call_ids = self.graph.sources_by_edge(message_id, EdgeKind::Invoked);
+        let mut tool_use_blocks = Vec::new();
+        let mut result_blocks = Vec::new();
+        for tc_id in &tool_call_ids {
+            let Some(Node::ToolCall {
+                status,
+                arguments,
+                api_tool_use_id,
+                ..
+            }) = self.graph.node(*tc_id)
+            else {
+                continue;
+            };
+            if *status != ToolCallStatus::Completed && *status != ToolCallStatus::Failed {
+                continue;
             }
-        };
 
-        let mut think_splitter = ThinkSplitter::new();
-        let mut output_tokens = None;
-
-        loop {
-            tokio::select! {
-                maybe_chunk = stream.next() => {
-                    match maybe_chunk {
-                        Some(Ok(StreamChunk::TextDelta(text))) => {
-                            think_splitter.push(&text);
-                            self.tui_state.streaming_response = Some(think_splitter.visible().to_string());
-                            self.tui_state.status_message = Some(
-                                if think_splitter.is_thinking() { "Thinking..." } else { "Receiving..." }.to_string()
-                            );
-                            if self.tui_state.auto_scroll {
-                                self.tui_state.scroll_offset = u16::MAX;
-                            }
-                        }
-                        Some(Ok(StreamChunk::Done { output_tokens: ot })) => {
-                            output_tokens = ot;
-                            break;
-                        }
-                        Some(Ok(StreamChunk::Error(e))) => {
-                            self.tui_state.status_message = Some(format!("API Error: {e}"));
-                            break;
-                        }
-                        Some(Err(e)) => {
-                            self.tui_state.status_message = Some(format!("Stream error: {e}"));
-                            break;
-                        }
-                        None => break,
-                    }
-                }
-                maybe_event = event_stream.next() => {
-                    if let Some(Ok(Event::Key(key))) = maybe_event {
-                        let action = input::handle_key_event(key, &mut self.tui_state);
-                        match action {
-                            Action::Quit => {
-                                self.tui_state.should_quit = true;
-                                break;
-                            }
-                            Action::ScrollUp => {
-                                self.tui_state.auto_scroll = false;
-                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(3);
-                            }
-                            Action::ScrollDown => {
-                                self.tui_state.auto_scroll = false;
-                                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(3);
-                            }
-                            Action::PageUp => {
-                                self.tui_state.auto_scroll = false;
-                                if let Ok(size) = terminal.size() {
-                                    let page = size.height / 2;
-                                    self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(page);
-                                }
-                            }
-                            Action::PageDown => {
-                                self.tui_state.auto_scroll = false;
-                                if let Ok(size) = terminal.size() {
-                                    let page = size.height / 2;
-                                    self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_add(page);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
+            // Take only the first ToolResult per ToolCall (Anthropic API expects 1:1 pairing).
+            let result_id = self
+                .graph
+                .sources_by_edge(*tc_id, EdgeKind::Produced)
+                .into_iter()
+                .next();
+            let Some(result_id) = result_id else {
+                continue;
+            };
+            let Some(Node::ToolResult {
+                content, is_error, ..
+            }) = self.graph.node(result_id)
+            else {
+                continue;
+            };
+            let use_id = api_tool_use_id.clone().unwrap_or_else(|| tc_id.to_string());
+            tool_use_blocks.push(ContentBlock::ToolUse {
+                id: use_id.clone(),
+                name: arguments.tool_name().to_string(),
+                input: RawJson(arguments.to_input_json()),
+            });
+            result_blocks.push(ContentBlock::ToolResult {
+                tool_use_id: use_id,
+                content: content.clone(),
+                is_error: *is_error,
+            });
         }
 
-        let (clean_response, think_content) = think_splitter.finish();
-        Ok((clean_response, think_content, output_tokens))
+        if tool_use_blocks.is_empty() {
+            return (ChatMessage::text("assistant", text_content), vec![]);
+        }
+        let mut blocks = vec![ContentBlock::Text {
+            text: text_content.to_string(),
+        }];
+        blocks.extend(tool_use_blocks);
+        let asst = ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::Blocks(blocks),
+        };
+        let results = ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::Blocks(result_blocks),
+        };
+        (asst, vec![results])
     }
 
     fn save(&self) -> anyhow::Result<()> {
         let mut metadata = self.metadata.clone();
         metadata.last_modified = Utc::now();
         persistence::save_conversation(&metadata.id, &metadata, &self.graph)
-    }
-}
-
-/// Incrementally splits streaming text into visible content and think blocks.
-/// Handles multiple `<think>...</think>` blocks and single-chunk edge cases.
-struct ThinkSplitter {
-    visible: String,
-    think_blocks: Vec<String>,
-    buffer: String,
-    in_think: bool,
-}
-
-impl ThinkSplitter {
-    fn new() -> Self {
-        Self {
-            visible: String::new(),
-            think_blocks: Vec::new(),
-            buffer: String::new(),
-            in_think: false,
-        }
-    }
-
-    fn push(&mut self, chunk: &str) {
-        self.buffer.push_str(chunk);
-        self.drain_buffer();
-    }
-
-    fn drain_buffer(&mut self) {
-        loop {
-            if self.in_think {
-                match self.buffer.find("</think>") {
-                    Some(end) => {
-                        self.think_blocks.push(self.buffer[..end].to_string());
-                        self.buffer = self.buffer[end + 8..].to_string();
-                        self.in_think = false;
-                    }
-                    None => break,
-                }
-            } else if let Some(start) = self.buffer.find("<think>") {
-                self.visible.push_str(&self.buffer[..start]);
-                self.buffer = self.buffer[start + 7..].to_string();
-                self.in_think = true;
-            } else {
-                // Keep a tail that could be a partial `<think>` tag.
-                // Walk back to a char boundary to avoid slicing inside multi-byte chars.
-                let mut safe = self.buffer.len().saturating_sub(6);
-                while safe > 0 && !self.buffer.is_char_boundary(safe) {
-                    safe -= 1;
-                }
-                self.visible.push_str(&self.buffer[..safe]);
-                self.buffer = self.buffer[safe..].to_string();
-                break;
-            }
-        }
-    }
-
-    fn visible(&self) -> &str {
-        &self.visible
-    }
-
-    fn is_thinking(&self) -> bool {
-        self.in_think
-    }
-
-    /// Finalize: flush remaining buffer and return (visible, `think_content`).
-    fn finish(mut self) -> (String, String) {
-        if self.in_think {
-            // Unclosed think block — treat remaining buffer as think content
-            self.think_blocks.push(std::mem::take(&mut self.buffer));
-        } else {
-            self.visible.push_str(&self.buffer);
-        }
-        let think = self.think_blocks.join("\n");
-        (self.visible, think)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ThinkSplitter;
-
-    #[test]
-    fn no_think_tags() {
-        let mut s = ThinkSplitter::new();
-        s.push("Hello world");
-        let (visible, think) = s.finish();
-        assert_eq!(visible, "Hello world");
-        assert!(think.is_empty());
-    }
-
-    #[test]
-    fn single_think_block() {
-        let mut s = ThinkSplitter::new();
-        s.push("<think>reasoning</think>answer");
-        let (visible, think) = s.finish();
-        assert_eq!(visible, "answer");
-        assert_eq!(think, "reasoning");
-    }
-
-    #[test]
-    fn think_block_across_chunks() {
-        let mut s = ThinkSplitter::new();
-        s.push("<thi");
-        s.push("nk>reas");
-        s.push("oning</thi");
-        s.push("nk>answer");
-        let (visible, think) = s.finish();
-        assert_eq!(visible, "answer");
-        assert_eq!(think, "reasoning");
-    }
-
-    #[test]
-    fn multiple_think_blocks() {
-        let mut s = ThinkSplitter::new();
-        s.push("before<think>first</think>middle<think>second</think>after");
-        let (visible, think) = s.finish();
-        assert_eq!(visible, "beforemiddleafter");
-        assert_eq!(think, "first\nsecond");
-    }
-
-    #[test]
-    fn unclosed_think_block() {
-        let mut s = ThinkSplitter::new();
-        s.push("visible<think>partial thinking");
-        let (visible, think) = s.finish();
-        assert_eq!(visible, "visible");
-        assert_eq!(think, "partial thinking");
-    }
-
-    /// Bug: saturating_sub(6) on a buffer with multi-byte chars (e.g. emoji) lands
-    /// inside a char, panicking on slice. The safe offset must snap to a char boundary.
-    #[test]
-    fn multibyte_chars_dont_panic() {
-        let mut s = ThinkSplitter::new();
-        s.push(" Test 🎨\n\n##");
-        let (visible, _) = s.finish();
-        assert!(visible.contains("🎨"));
-    }
-
-    #[test]
-    fn is_thinking_state() {
-        let mut s = ThinkSplitter::new();
-        assert!(!s.is_thinking());
-        s.push("<think>thinking");
-        assert!(s.is_thinking());
-        s.push("</think>done");
-        assert!(!s.is_thinking());
     }
 }

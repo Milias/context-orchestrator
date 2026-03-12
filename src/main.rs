@@ -5,6 +5,7 @@ mod llm;
 mod migration;
 mod persistence;
 mod tasks;
+mod tool_executor;
 mod tools;
 mod tui;
 

@@ -1,3 +1,4 @@
+use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{ConversationGraph, Node, Role};
 use crate::tui::{ContextTab, FocusPanel, TuiState};
 use ratatui::prelude::*;
@@ -204,6 +205,40 @@ fn format_node_line(node: &Node) -> Line<'static> {
                 Span::styled(title.clone(), Style::default().fg(Color::White)),
             ])
         }
+        Node::ToolCall {
+            arguments, status, ..
+        } => {
+            let (marker, color) = match status {
+                ToolCallStatus::Pending => ("○", Color::DarkGray),
+                ToolCallStatus::Running => ("◉", Color::Yellow),
+                ToolCallStatus::Completed => ("✓", Color::Green),
+                ToolCallStatus::Failed => ("✗", Color::Red),
+                ToolCallStatus::Cancelled => ("⊘", Color::DarkGray),
+            };
+            Line::from(vec![
+                Span::styled(format!("{marker} "), Style::default().fg(color)),
+                Span::styled(
+                    arguments.tool_name().to_string(),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])
+        }
+        Node::ToolResult {
+            content, is_error, ..
+        } => {
+            let (marker, color) = if *is_error {
+                ("✗→", Color::Red)
+            } else {
+                ("→", Color::Green)
+            };
+            let truncated: String = content.chars().take(60).collect();
+            Line::from(vec![
+                Span::styled(format!("{marker} "), Style::default().fg(color)),
+                Span::styled(truncated, Style::default().fg(Color::DarkGray)),
+            ])
+        }
         _ => Line::from(node.content().to_string()),
     }
 }
@@ -264,7 +299,10 @@ fn is_tool(node: &Node) -> bool {
 }
 
 fn is_background_task(node: &Node) -> bool {
-    matches!(node, Node::BackgroundTask { .. })
+    matches!(
+        node,
+        Node::BackgroundTask { .. } | Node::ToolCall { .. } | Node::ToolResult { .. }
+    )
 }
 
 fn is_work_item(node: &Node) -> bool {

@@ -1085,6 +1085,15 @@ For now, the semaphore combined with the manual nature of `~tool` triggers (user
 explicitly) provides sufficient protection. Automated background tasks (like summarization
 triggered by message count thresholds) will need budget controls before being enabled by default.
 
+### Tool Call Infrastructure (see Design 03)
+
+The background LLM infrastructure established here — `Arc<dyn LlmProvider>`, semaphore,
+`TaskMessage` channels, `ContextSnapshot` — is the foundation for the tool call system described
+in [03-tool-call-foundation.md](./03-tool-call-foundation.md). That design extends `TaskMessage`
+with `ToolCallDispatched`/`ToolCallCompleted` variants, adds `ToolCall`/`ToolResult` graph nodes
+with `Invoked`/`Produced` edges, and integrates Anthropic `tool_use` API support. The channel
+architecture, snapshot pattern, and semaphore-based concurrency control carry forward unchanged.
+
 ---
 
 ## Trade-offs and Alternatives

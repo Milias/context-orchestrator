@@ -96,10 +96,10 @@ async fn run_plan_extraction(
         description: format!("Extracting plan: {truncated_desc}"),
     });
 
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: build_plan_prompt(&user_args, &snapshot),
-    }];
+    let messages = vec![ChatMessage::text(
+        "user",
+        build_plan_prompt(&user_args, &snapshot),
+    )];
     let config = bg_config.to_chat_config(Some(
         "You extract structured data from user requests. \
          Respond with ONLY valid JSON, no markdown fences, no explanation."
@@ -150,7 +150,10 @@ fn build_plan_prompt(user_args: &str, snapshot: &ContextSnapshot) -> String {
         .rev()
         .take(6)
         .rev()
-        .map(|m| format!("{}: {}", m.role, truncate_content(&m.content, 200)))
+        .map(|m| {
+            let text = m.text_content().unwrap_or("");
+            format!("{}: {}", m.role, truncate_content(text, 200))
+        })
         .collect();
 
     let tool_list: String = snapshot

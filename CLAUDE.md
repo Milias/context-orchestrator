@@ -8,3 +8,4 @@
 - Tests MUST be in a separate file: `tests.rs` if the source is a module directory, or `<name>_tests.rs` if not.
 - Every test MUST answer the question "what bug does this test catch?". If you can't articulate a specific bug or invariant violation the test would detect, don't write it. No low-effort tests that just call a function and assert "it doesn't crash" or "the output is non-empty".
 - You MUST complete ALL phases of EVERY plan. Do NOT stop after a phase to summarize, ask for confirmation, or check in. Keep working continuously until every single phase is done. No exceptions.
+- Do NOT directly repeat this rules in the plan UNLESS you are anticipating work related to them.
