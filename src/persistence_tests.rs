@@ -1,5 +1,7 @@
 use super::*;
-use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus};
+use crate::graph::tool_types::{
+    ImageSource, ToolCallArguments, ToolCallStatus, ToolResultContent, ToolResultContentBlock,
+};
 use crate::graph::{ConversationGraph, EdgeKind, Node};
 
 #[test]
@@ -133,4 +135,92 @@ fn test_tool_call_persistence_roundtrip() {
     let invoked_targets = loaded.sources_by_edge(asst_id, EdgeKind::Invoked);
     assert_eq!(invoked_targets.len(), 1);
     assert_eq!(invoked_targets[0], tc_id);
+}
+
+/// `ToolResultContent::Blocks` (with images) must survive the full persistence
+/// roundtrip, not just the `Text` variant tested above.
+#[test]
+fn test_blocks_content_persistence_roundtrip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+
+    let mut graph = ConversationGraph::new("System prompt");
+    let root_id = graph.branch_leaf("main").unwrap();
+
+    let asst_id = uuid::Uuid::new_v4();
+    graph
+        .add_message(
+            root_id,
+            Node::Message {
+                id: asst_id,
+                role: crate::graph::Role::Assistant,
+                content: "Here's the screenshot.".to_string(),
+                created_at: Utc::now(),
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+            },
+        )
+        .unwrap();
+
+    let tc_id = uuid::Uuid::new_v4();
+    graph.add_node(Node::ToolCall {
+        id: tc_id,
+        api_tool_use_id: None,
+        arguments: ToolCallArguments::ReadFile {
+            path: "/tmp/img.png".to_string(),
+        },
+        status: ToolCallStatus::Completed,
+        parent_message_id: asst_id,
+        created_at: Utc::now(),
+        completed_at: Some(Utc::now()),
+    });
+    graph.add_edge(tc_id, asst_id, EdgeKind::Invoked).unwrap();
+
+    let result_id = uuid::Uuid::new_v4();
+    let blocks_content = ToolResultContent::Blocks(vec![
+        ToolResultContentBlock::Text {
+            text: "screenshot captured".to_string(),
+        },
+        ToolResultContentBlock::Image {
+            source: ImageSource::Base64 {
+                media_type: "image/png".to_string(),
+                data: "iVBORw0KGgo=".to_string(),
+            },
+        },
+    ]);
+    graph.add_node(Node::ToolResult {
+        id: result_id,
+        tool_call_id: tc_id,
+        content: blocks_content,
+        is_error: false,
+        created_at: Utc::now(),
+    });
+    graph
+        .add_edge(result_id, tc_id, EdgeKind::Produced)
+        .unwrap();
+
+    let metadata = ConversationMetadata {
+        id: "blocks-test".to_string(),
+        name: "Blocks Test".to_string(),
+        created_at: Utc::now(),
+        last_modified: Utc::now(),
+    };
+
+    save_conversation_to(base, "blocks-test", &metadata, &graph).unwrap();
+    let (_, loaded) = load_conversation_from(base, "blocks-test").unwrap();
+
+    let results: Vec<_> = loaded
+        .nodes_by(|n| matches!(n, Node::ToolResult { .. }))
+        .into_iter()
+        .collect();
+    assert_eq!(results.len(), 1);
+
+    if let Node::ToolResult { content, .. } = results[0] {
+        assert_eq!(content.text_content(), "screenshot captured");
+        assert!(content.has_images());
+        assert_eq!(content.char_len(), 19 + 12); // "screenshot captured" (19) + base64 data (12)
+    } else {
+        panic!("Expected ToolResult node");
+    }
 }

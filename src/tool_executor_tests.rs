@@ -41,7 +41,10 @@ async fn test_read_file_rejects_path_outside_cwd() {
     };
     let result = execute_tool(&args).await;
     assert!(result.is_error);
-    assert!(result.content.text_content().contains("escapes working directory"));
+    assert!(result
+        .content
+        .text_content()
+        .contains("escapes working directory"));
 }
 
 #[tokio::test]
@@ -55,7 +58,10 @@ async fn test_read_file_truncates_large_files() {
     };
     let result = execute_tool(&args).await;
     assert!(!result.is_error);
-    assert!(result.content.text_content().contains("[truncated, 150000 bytes total]"));
+    assert!(result
+        .content
+        .text_content()
+        .contains("[truncated, 150000 bytes total]"));
     assert!(result.content.char_len() < 150_000);
 }
 

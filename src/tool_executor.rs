@@ -37,7 +37,9 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
         ToolCallArguments::ReadFile { path } => {
             let Ok(cwd) = std::env::current_dir() else {
                 return ToolExecutionResult {
-                    content: ToolResultContent::text("Error: could not determine working directory"),
+                    content: ToolResultContent::text(
+                        "Error: could not determine working directory",
+                    ),
                     is_error: true,
                 };
             };
@@ -98,7 +100,9 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
             }
         }
         ToolCallArguments::WriteFile { path, .. } => ToolExecutionResult {
-            content: ToolResultContent::text(format!("write_file not yet implemented (path: {path})")),
+            content: ToolResultContent::text(format!(
+                "write_file not yet implemented (path: {path})"
+            )),
             is_error: true,
         },
         ToolCallArguments::WebSearch { query } => ToolExecutionResult {

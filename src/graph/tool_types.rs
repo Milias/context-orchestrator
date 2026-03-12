@@ -79,6 +79,12 @@ impl ToolCallArguments {
 // ── Tool result content types ─────────────────────────────────────
 
 /// A content block within a structured tool result.
+///
+/// Currently supports `text` and `image` block types. The Anthropic API also
+/// defines `document`, `search_result`, and `tool_reference` types — these are
+/// not modeled here. Deserializing an unsupported block type will fail; this is
+/// acceptable because `ToolResultContent` is only constructed client-side and
+/// never deserialized from API responses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ToolResultContentBlock {
@@ -113,7 +119,8 @@ impl ToolResultContent {
         Self::Text(s.into())
     }
 
-    /// First text content as `&str`, or `""` for image-only results.
+    /// Returns the first text block as `&str`, or `""` if there are no text blocks.
+    /// For `Blocks` with multiple `Text` entries, only the first is returned.
     pub fn text_content(&self) -> &str {
         match self {
             Self::Text(s) => s,
@@ -128,6 +135,9 @@ impl ToolResultContent {
     }
 
     /// Approximate byte length for token budget calculations.
+    /// For images, uses base64 data length as a rough proxy — actual API token
+    /// cost is dimension-based, but this suffices for heuristic context truncation
+    /// since precise counting is done via the `count_tokens` API endpoint.
     pub fn char_len(&self) -> usize {
         match self {
             Self::Text(s) => s.len(),

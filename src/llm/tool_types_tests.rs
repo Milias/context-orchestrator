@@ -69,6 +69,11 @@ fn test_chat_content_blocks_serde_roundtrip() {
     let json = serde_json::to_string(&content).unwrap();
     let parsed: ChatContent = serde_json::from_str(&json).unwrap();
 
+    // Verify intermediate JSON shape matches Anthropic API format
+    assert!(json.contains(r#""type":"tool_result""#));
+    assert!(json.contains(r#""tool_use_id":"tu_123""#));
+    assert!(json.contains(r#""content":"file contents""#));
+
     match parsed {
         ChatContent::Blocks(b) => assert_eq!(b.len(), 3),
         ChatContent::Text(_) => panic!("Expected Blocks variant"),

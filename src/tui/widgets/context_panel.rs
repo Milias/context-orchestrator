@@ -235,7 +235,7 @@ fn format_node_line(node: &Node) -> Line<'static> {
             };
             let text = content.text_content();
             let suffix = if content.has_images() { " [img]" } else { "" };
-            let max_text = 60 - suffix.len();
+            let max_text = 60usize.saturating_sub(suffix.len());
             let truncated: String = text.chars().take(max_text).chain(suffix.chars()).collect();
             Line::from(vec![
                 Span::styled(format!("{marker} "), Style::default().fg(color)),
