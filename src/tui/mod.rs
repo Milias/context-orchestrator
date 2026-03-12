@@ -7,7 +7,9 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
+use std::collections::HashMap;
 use std::io;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusPanel {
@@ -91,6 +93,17 @@ pub struct TuiState {
     /// When true, new streaming chunks auto-scroll to the bottom.
     /// Set to false when the user manually scrolls during streaming.
     pub auto_scroll: bool,
+    /// Cached rendered markdown + height per message node ID.
+    /// Avoids re-parsing markdown for historical messages on every frame.
+    pub render_cache: HashMap<Uuid, CachedRender>,
+}
+
+#[derive(Debug)]
+pub struct CachedRender {
+    pub styled_text: Text<'static>,
+    pub height: usize,
+    pub has_thinking: bool,
+    pub cached_width: usize,
 }
 
 impl TuiState {
@@ -107,6 +120,7 @@ impl TuiState {
             context_tab: ContextTab::Outline,
             context_list_offset: 0,
             auto_scroll: true,
+            render_cache: HashMap::new(),
         }
     }
 }

@@ -1,6 +1,6 @@
 use crate::graph::{ConversationGraph, Node, Role};
 use crate::tui::widgets::markdown::render_markdown;
-use crate::tui::TuiState;
+use crate::tui::{CachedRender, TuiState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
@@ -25,7 +25,7 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         return;
     }
 
-    let entries = build_entries(&history, graph, tui_state, msg_content_width);
+    let entries = build_entries(&history, graph, &mut *tui_state, msg_content_width);
 
     // All values in this scroll math are bounded by terminal dimensions (u16) and message
     // counts, so casts between i32/u16/usize cannot overflow in practice.
@@ -89,10 +89,11 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
             match entry {
                 MessageEntry::Node {
                     node,
-                    styled_text,
+                    cache_key,
                     height,
                     has_thinking,
                 } => {
+                    let styled_text = &tui_state.render_cache[cache_key].styled_text;
                     render_message(
                         frame,
                         msg_area,
@@ -119,7 +120,7 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
 enum MessageEntry<'a> {
     Node {
         node: &'a Node,
-        styled_text: Text<'static>,
+        cache_key: uuid::Uuid,
         height: usize,
         has_thinking: bool,
     },
@@ -140,28 +141,42 @@ impl MessageEntry<'_> {
 fn build_entries<'a>(
     history: &[&'a Node],
     graph: &ConversationGraph,
-    tui_state: &TuiState,
+    tui_state: &mut TuiState,
     msg_content_width: usize,
 ) -> Vec<MessageEntry<'a>> {
     let mut entries: Vec<MessageEntry<'a>> = history
         .iter()
         .filter(|node| !matches!(node, Node::ThinkBlock { .. }))
         .map(|node| {
-            let styled = render_markdown(node.content());
-            let has_thinking = graph.has_think_block(node.id());
-            let height = compute_styled_height(&styled, msg_content_width, has_thinking);
+            let id = node.id();
+            let cached = tui_state.render_cache.get(&id);
+            let valid = cached.is_some_and(|c| c.cached_width == msg_content_width);
+            if !valid {
+                let styled = render_markdown(node.content());
+                let has_thinking = graph.has_think_block(id);
+                let height = compute_styled_height(&styled, msg_content_width, has_thinking);
+                tui_state.render_cache.insert(
+                    id,
+                    CachedRender {
+                        styled_text: styled,
+                        height,
+                        has_thinking,
+                        cached_width: msg_content_width,
+                    },
+                );
+            }
+            let c = &tui_state.render_cache[&id];
             MessageEntry::Node {
                 node,
-                styled_text: styled,
-                height,
-                has_thinking,
+                cache_key: id,
+                height: c.height,
+                has_thinking: c.has_thinking,
             }
         })
         .collect();
 
     if let Some(ref streaming) = tui_state.streaming_response {
         let mut styled = render_markdown(streaming);
-        // Append cursor as a styled span after parsing, to avoid corrupting parser state
         if let Some(last_line) = styled.lines.last_mut() {
             last_line
                 .spans

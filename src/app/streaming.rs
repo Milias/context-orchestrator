@@ -9,6 +9,7 @@ use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use ratatui::prelude::*;
 use std::io;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// A `tool_use` block received during streaming, recorded for provenance after
@@ -59,38 +60,19 @@ impl App {
         let mut output_tokens = None;
         let mut tool_use_records = Vec::new();
         let mut stop_reason = None;
+        let mut last_draw = Instant::now();
+        let frame_budget = Duration::from_millis(16);
         loop {
+            let mut needs_draw = false;
             tokio::select! {
                 biased; // event branch first so user input isn't starved by SSE bursts
 
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
-                        let action = input::handle_key_event(key, &mut self.tui_state);
-                        match action {
-                            Action::Quit => {
-                                self.tui_state.should_quit = true;
-                                break;
-                            }
-                            Action::ScrollUp | Action::ScrollDown => {
-                                self.tui_state.auto_scroll = false;
-                                self.tui_state.scroll_offset = match action {
-                                    Action::ScrollUp => self.tui_state.scroll_offset.saturating_sub(3),
-                                    _ => self.tui_state.scroll_offset.saturating_add(3),
-                                };
-                            }
-                            Action::PageUp | Action::PageDown => {
-                                self.tui_state.auto_scroll = false;
-                                if let Ok(size) = terminal.size() {
-                                    let page = size.height / 2;
-                                    self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
-                                        self.tui_state.scroll_offset.saturating_sub(page)
-                                    } else {
-                                        self.tui_state.scroll_offset.saturating_add(page)
-                                    };
-                                }
-                            }
-                            _ => {}
+                        if self.handle_streaming_key(key, terminal) {
+                            break;
                         }
+                        needs_draw = true;
                     }
                 }
 
@@ -103,6 +85,10 @@ impl App {
                                 if think_splitter.is_thinking() { "Thinking..." } else { "Receiving..." }.to_string()
                             );
                             if self.tui_state.auto_scroll { self.tui_state.scroll_offset = u16::MAX; }
+                            // Throttle: only draw if frame budget elapsed
+                            if last_draw.elapsed() >= frame_budget {
+                                needs_draw = true;
+                            }
                         }
                         Some(Ok(StreamChunk::ToolUse { id, name, input })) => {
                             let tool_call_id = Uuid::new_v4();
@@ -125,10 +111,16 @@ impl App {
                     }
                 }
             }
-            terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
+            if needs_draw {
+                terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
+                last_draw = Instant::now();
+            }
         }
+        // Final draw to ensure last state is visible
+        terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
 
         let (clean_response, think_content) = think_splitter.finish();
+        self.tui_state.streaming_response = None;
         Ok(StreamResult {
             response: clean_response,
             think_text: think_content,
@@ -136,5 +128,40 @@ impl App {
             tool_use_records,
             stop_reason,
         })
+    }
+
+    /// Handle a key event during streaming. Returns `true` if the loop should break (quit).
+    fn handle_streaming_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> bool {
+        let action = input::handle_key_event(key, &mut self.tui_state);
+        match action {
+            Action::Quit => {
+                self.tui_state.should_quit = true;
+                return true;
+            }
+            Action::ScrollUp | Action::ScrollDown => {
+                self.tui_state.auto_scroll = false;
+                self.tui_state.scroll_offset = match action {
+                    Action::ScrollUp => self.tui_state.scroll_offset.saturating_sub(3),
+                    _ => self.tui_state.scroll_offset.saturating_add(3),
+                };
+            }
+            Action::PageUp | Action::PageDown => {
+                self.tui_state.auto_scroll = false;
+                if let Ok(size) = terminal.size() {
+                    let page = size.height / 2;
+                    self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
+                        self.tui_state.scroll_offset.saturating_sub(page)
+                    } else {
+                        self.tui_state.scroll_offset.saturating_add(page)
+                    };
+                }
+            }
+            _ => {}
+        }
+        false
     }
 }
