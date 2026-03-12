@@ -97,7 +97,7 @@ fn test_tool_call_persistence_roundtrip() {
     graph.add_node(Node::ToolResult {
         id: result_id,
         tool_call_id: tc_id,
-        content: "Found 42 results".to_string(),
+        content: crate::graph::tool_types::ToolResultContent::text("Found 42 results"),
         is_error: false,
         created_at: Utc::now(),
     });

@@ -1,4 +1,4 @@
-use crate::graph::{BackgroundTaskKind, GitFileStatus, TaskStatus};
+use crate::graph::{BackgroundTaskKind, GitFileStatus, TaskStatus, ToolResultContent};
 use crate::llm::ChatMessage;
 use crate::tools::PlanExtractionResult;
 use serde::{Deserialize, Serialize};
@@ -48,7 +48,7 @@ pub enum TaskMessage {
     },
     ToolCallCompleted {
         tool_call_id: Uuid,
-        content: String,
+        content: ToolResultContent,
         is_error: bool,
     },
 }

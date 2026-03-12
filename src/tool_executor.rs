@@ -1,4 +1,4 @@
-use crate::graph::tool_types::ToolCallArguments;
+use crate::graph::tool_types::{ToolCallArguments, ToolResultContent};
 use crate::llm::tool_types::{SchemaProperty, SchemaType, ToolDefinition, ToolInputSchema};
 use crate::tasks::TaskMessage;
 use tokio::sync::mpsc;
@@ -21,7 +21,7 @@ pub fn registered_tool_definitions() -> Vec<ToolDefinition> {
 }
 
 pub struct ToolExecutionResult {
-    pub content: String,
+    pub content: ToolResultContent,
     pub is_error: bool,
 }
 
@@ -31,13 +31,13 @@ const MAX_READ_FILE_BYTES: usize = 100_000;
 pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult {
     match arguments {
         ToolCallArguments::Plan { .. } => ToolExecutionResult {
-            content: "Plan tool execution not yet implemented".to_string(),
+            content: ToolResultContent::text("Plan tool execution not yet implemented"),
             is_error: true,
         },
         ToolCallArguments::ReadFile { path } => {
             let Ok(cwd) = std::env::current_dir() else {
                 return ToolExecutionResult {
-                    content: "Error: could not determine working directory".to_string(),
+                    content: ToolResultContent::text("Error: could not determine working directory"),
                     is_error: true,
                 };
             };
@@ -50,20 +50,22 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
                 Ok(p) => p,
                 Err(e) => {
                     return ToolExecutionResult {
-                        content: format!("Error reading file: {e}"),
+                        content: ToolResultContent::text(format!("Error reading file: {e}")),
                         is_error: true,
                     }
                 }
             };
             let Ok(canonical_cwd) = tokio::fs::canonicalize(&cwd).await else {
                 return ToolExecutionResult {
-                    content: "Error: could not resolve working directory".to_string(),
+                    content: ToolResultContent::text("Error: could not resolve working directory"),
                     is_error: true,
                 };
             };
             if !canonical.starts_with(&canonical_cwd) {
                 return ToolExecutionResult {
-                    content: format!("Error: path escapes working directory: {path}"),
+                    content: ToolResultContent::text(format!(
+                        "Error: path escapes working directory: {path}"
+                    )),
                     is_error: true,
                 };
             }
@@ -75,36 +77,40 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
                             boundary -= 1;
                         }
                         ToolExecutionResult {
-                            content: format!(
+                            content: ToolResultContent::text(format!(
                                 "{}\n\n[truncated, {} bytes total]",
                                 &contents[..boundary],
                                 contents.len()
-                            ),
+                            )),
                             is_error: false,
                         }
                     } else {
                         ToolExecutionResult {
-                            content: contents,
+                            content: ToolResultContent::text(contents),
                             is_error: false,
                         }
                     }
                 }
                 Err(e) => ToolExecutionResult {
-                    content: format!("Error reading file: {e}"),
+                    content: ToolResultContent::text(format!("Error reading file: {e}")),
                     is_error: true,
                 },
             }
         }
         ToolCallArguments::WriteFile { path, .. } => ToolExecutionResult {
-            content: format!("write_file not yet implemented (path: {path})"),
+            content: ToolResultContent::text(format!("write_file not yet implemented (path: {path})")),
             is_error: true,
         },
         ToolCallArguments::WebSearch { query } => ToolExecutionResult {
-            content: format!("web_search not yet implemented (query: {query})"),
+            content: ToolResultContent::text(format!(
+                "web_search not yet implemented (query: {query})"
+            )),
             is_error: true,
         },
         ToolCallArguments::Unknown { tool_name, .. } => ToolExecutionResult {
-            content: format!("Unrecognized tool or invalid arguments: {tool_name}"),
+            content: ToolResultContent::text(format!(
+                "Unrecognized tool or invalid arguments: {tool_name}"
+            )),
             is_error: true,
         },
     }

@@ -21,7 +21,7 @@ async fn test_read_file_returns_contents() {
     };
     let result = execute_tool(&args).await;
     assert!(!result.is_error);
-    assert_eq!(result.content, "hello world");
+    assert_eq!(result.content.text_content(), "hello world");
 }
 
 #[tokio::test]
@@ -31,7 +31,7 @@ async fn test_read_file_nonexistent_returns_error() {
     };
     let result = execute_tool(&args).await;
     assert!(result.is_error);
-    assert!(result.content.contains("Error reading file"));
+    assert!(result.content.text_content().contains("Error reading file"));
 }
 
 #[tokio::test]
@@ -41,7 +41,7 @@ async fn test_read_file_rejects_path_outside_cwd() {
     };
     let result = execute_tool(&args).await;
     assert!(result.is_error);
-    assert!(result.content.contains("escapes working directory"));
+    assert!(result.content.text_content().contains("escapes working directory"));
 }
 
 #[tokio::test]
@@ -55,8 +55,8 @@ async fn test_read_file_truncates_large_files() {
     };
     let result = execute_tool(&args).await;
     assert!(!result.is_error);
-    assert!(result.content.contains("[truncated, 150000 bytes total]"));
-    assert!(result.content.len() < 150_000);
+    assert!(result.content.text_content().contains("[truncated, 150000 bytes total]"));
+    assert!(result.content.char_len() < 150_000);
 }
 
 #[tokio::test]
@@ -84,7 +84,7 @@ async fn test_spawn_execution_sends_completion() {
         } => {
             assert_eq!(tool_call_id, tc_id);
             assert!(!is_error);
-            assert_eq!(content, "spawn content");
+            assert_eq!(content.text_content(), "spawn content");
         }
         other => panic!("Expected ToolCallCompleted, got: {other:?}"),
     }
@@ -100,7 +100,7 @@ async fn test_execute_unknown_tool_returns_error() {
     };
     let result = execute_tool(&args).await;
     assert!(result.is_error);
-    assert!(result.content.contains("nonexistent"));
+    assert!(result.content.text_content().contains("nonexistent"));
 }
 
 /// Catches plan execution stub returning success before implementation.

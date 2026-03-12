@@ -76,6 +76,80 @@ impl ToolCallArguments {
     }
 }
 
+// ── Tool result content types ─────────────────────────────────────
+
+/// A content block within a structured tool result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ToolResultContentBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image")]
+    Image { source: ImageSource },
+}
+
+/// Source data for an image content block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ImageSource {
+    #[serde(rename = "base64")]
+    Base64 { media_type: String, data: String },
+}
+
+/// Tool result content: plain string or array of content blocks (text + images).
+/// Matches the Anthropic API `tool_result.content` format.
+///
+/// `#[serde(untagged)]` with `Text` first ensures existing V2 graphs with
+/// `"content": "string"` deserialize correctly — no migration needed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolResultContent {
+    Text(String),
+    Blocks(Vec<ToolResultContentBlock>),
+}
+
+impl ToolResultContent {
+    pub fn text(s: impl Into<String>) -> Self {
+        Self::Text(s.into())
+    }
+
+    /// First text content as `&str`, or `""` for image-only results.
+    pub fn text_content(&self) -> &str {
+        match self {
+            Self::Text(s) => s,
+            Self::Blocks(blocks) => blocks
+                .iter()
+                .find_map(|b| match b {
+                    ToolResultContentBlock::Text { text } => Some(text.as_str()),
+                    ToolResultContentBlock::Image { .. } => None,
+                })
+                .unwrap_or(""),
+        }
+    }
+
+    /// Approximate byte length for token budget calculations.
+    pub fn char_len(&self) -> usize {
+        match self {
+            Self::Text(s) => s.len(),
+            Self::Blocks(blocks) => blocks
+                .iter()
+                .map(|b| match b {
+                    ToolResultContentBlock::Text { text } => text.len(),
+                    ToolResultContentBlock::Image { source } => match source {
+                        ImageSource::Base64 { data, .. } => data.len(),
+                    },
+                })
+                .sum(),
+        }
+    }
+
+    pub fn has_images(&self) -> bool {
+        matches!(self, Self::Blocks(blocks) if blocks.iter().any(
+            |b| matches!(b, ToolResultContentBlock::Image { .. })
+        ))
+    }
+}
+
 /// Parse raw JSON from an LLM `tool_use` response into a typed `ToolCallArguments`.
 /// Dispatches on tool name, attempts typed deserialization, falls back to `Unknown`.
 pub fn parse_tool_arguments(name: &str, raw_json: &str) -> ToolCallArguments {

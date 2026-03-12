@@ -1,3 +1,4 @@
+use crate::graph::tool_types::ToolResultContent;
 use serde::{Deserialize, Serialize};
 
 /// A tool definition that can be sent to the LLM API.
@@ -193,7 +194,7 @@ impl ChatContent {
                 .map(|b| match b {
                     ContentBlock::Text { text } => text.len(),
                     ContentBlock::ToolUse { ref input, .. } => input.len(),
-                    ContentBlock::ToolResult { content, .. } => content.len(),
+                    ContentBlock::ToolResult { content, .. } => content.char_len(),
                 })
                 .sum(),
         }
@@ -215,7 +216,7 @@ pub enum ContentBlock {
     #[serde(rename = "tool_result")]
     ToolResult {
         tool_use_id: String,
-        content: String,
+        content: ToolResultContent,
         is_error: bool,
     },
 }

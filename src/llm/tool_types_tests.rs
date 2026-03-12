@@ -60,7 +60,7 @@ fn test_chat_content_blocks_serde_roundtrip() {
         },
         ContentBlock::ToolResult {
             tool_use_id: "tu_123".to_string(),
-            content: "file contents".to_string(),
+            content: crate::graph::tool_types::ToolResultContent::text("file contents"),
             is_error: false,
         },
     ];

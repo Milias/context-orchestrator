@@ -1,4 +1,4 @@
-use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus};
+use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
 use crate::graph::{EdgeKind, Node};
 use crate::tasks::{TaskMessage, ToolExtractionOutcome};
 use crate::tool_executor;
@@ -116,7 +116,7 @@ impl App {
     pub(super) fn handle_tool_call_completed(
         &mut self,
         tool_call_id: Uuid,
-        content: String,
+        content: ToolResultContent,
         is_error: bool,
     ) {
         // Skip stale completions for tool calls already resolved (e.g. timed out).

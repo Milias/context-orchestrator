@@ -72,7 +72,7 @@ fn test_tool_result_linked_to_tool_call() {
     let result = Node::ToolResult {
         id: result_id,
         tool_call_id: tc_id,
-        content: "file contents".to_string(),
+        content: ToolResultContent::text("file contents"),
         is_error: false,
         created_at: Utc::now(),
     };
@@ -272,7 +272,7 @@ fn test_tool_call_provenance_chain_query() {
     graph.add_node(Node::ToolResult {
         id: r1_id,
         tool_call_id: tc1_id,
-        content: "result 1".to_string(),
+        content: ToolResultContent::text("result 1"),
         is_error: false,
         created_at: Utc::now(),
     });
@@ -282,7 +282,7 @@ fn test_tool_call_provenance_chain_query() {
     graph.add_node(Node::ToolResult {
         id: r2_id,
         tool_call_id: tc2_id,
-        content: "result 2".to_string(),
+        content: ToolResultContent::text("result 2"),
         is_error: false,
         created_at: Utc::now(),
     });
@@ -393,4 +393,64 @@ fn test_to_input_json_strips_tag() {
         raw_json: "not valid json {{{".to_string(),
     };
     assert_eq!(bad_json.to_input_json(), "{}");
+}
+
+#[test]
+fn test_tool_result_content_text_serde_roundtrip() {
+    let content = ToolResultContent::text("hello");
+    let json = serde_json::to_string(&content).unwrap();
+    assert_eq!(json, r#""hello""#);
+    let parsed: ToolResultContent = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.text_content(), "hello");
+    assert!(!parsed.has_images());
+}
+
+#[test]
+fn test_tool_result_content_blocks_serde_roundtrip() {
+    use crate::graph::tool_types::{ImageSource, ToolResultContentBlock};
+
+    let content = ToolResultContent::Blocks(vec![
+        ToolResultContentBlock::Text {
+            text: "here is the image".to_string(),
+        },
+        ToolResultContentBlock::Image {
+            source: ImageSource::Base64 {
+                media_type: "image/png".to_string(),
+                data: "iVBOR".to_string(),
+            },
+        },
+    ]);
+    let json = serde_json::to_string(&content).unwrap();
+    let parsed: ToolResultContent = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.text_content(), "here is the image");
+    assert!(parsed.has_images());
+}
+
+#[test]
+fn test_tool_result_content_backward_compat_v2() {
+    let old_json = r#""file contents here""#;
+    let parsed: ToolResultContent = serde_json::from_str(old_json).unwrap();
+    assert_eq!(parsed.text_content(), "file contents here");
+    assert!(!parsed.has_images());
+}
+
+#[test]
+fn test_tool_result_content_char_len() {
+    use crate::graph::tool_types::{ImageSource, ToolResultContentBlock};
+
+    let text = ToolResultContent::text("hello");
+    assert_eq!(text.char_len(), 5);
+
+    let blocks = ToolResultContent::Blocks(vec![
+        ToolResultContentBlock::Text {
+            text: "abc".to_string(),
+        },
+        ToolResultContentBlock::Image {
+            source: ImageSource::Base64 {
+                media_type: "image/png".to_string(),
+                data: "AAAA".to_string(),
+            },
+        },
+    ]);
+    assert_eq!(blocks.char_len(), 7); // 3 + 4
 }

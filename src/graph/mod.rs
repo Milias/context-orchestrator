@@ -1,6 +1,6 @@
 pub mod tool_types;
 
-pub use tool_types::{parse_tool_arguments, ToolCallArguments, ToolCallStatus};
+pub use tool_types::{parse_tool_arguments, ToolCallArguments, ToolCallStatus, ToolResultContent};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -141,7 +141,7 @@ pub enum Node {
     ToolResult {
         id: Uuid,
         tool_call_id: Uuid,
-        content: String,
+        content: ToolResultContent,
         is_error: bool,
         created_at: DateTime<Utc>,
     },
@@ -166,8 +166,8 @@ impl Node {
         match self {
             Node::Message { content, .. }
             | Node::SystemDirective { content, .. }
-            | Node::ThinkBlock { content, .. }
-            | Node::ToolResult { content, .. } => content,
+            | Node::ThinkBlock { content, .. } => content,
+            Node::ToolResult { content, .. } => content.text_content(),
             Node::WorkItem { title, .. } => title,
             Node::GitFile { path, .. } => path,
             Node::Tool { name, .. } => name,

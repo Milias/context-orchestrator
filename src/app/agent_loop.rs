@@ -1,4 +1,4 @@
-use crate::graph::tool_types::ToolCallStatus;
+use crate::graph::tool_types::{ToolCallStatus, ToolResultContent};
 use crate::graph::{EdgeKind, Node};
 use crate::llm::ChatConfig;
 use crate::tasks::TaskMessage;
@@ -190,7 +190,8 @@ impl App {
                         let result_node = Node::ToolResult {
                             id: result_id,
                             tool_call_id: tc_id,
-                            content: "Tool execution timed out".to_string(),
+
+                            content: ToolResultContent::text("Tool execution timed out"),
                             is_error: true,
                             created_at: Utc::now(),
                         };
