@@ -1,3 +1,8 @@
+---
+name: research
+description: Conduct structured technical research and produce comprehensive documents in docs/research/. Launches parallel agents for investigation, writes a research document, then red/green team audits the findings.
+---
+
 # Research Document Skill
 
 Conduct structured technical research and produce a comprehensive document in `docs/research/`.
