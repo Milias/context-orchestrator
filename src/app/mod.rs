@@ -140,17 +140,21 @@ impl App {
         }
 
         let max_tokens = self.config.max_context_tokens;
+        let tools = crate::tool_executor::registered_tool_definitions();
         let token_count = self
             .provider
             .count_tokens(
                 &messages,
                 &self.config.anthropic_model,
                 system_prompt.as_deref(),
+                &tools,
             )
             .await
             .unwrap_or(0);
 
         if token_count > max_tokens {
+            // char_len() returns byte length, not character count. This is an acceptable
+            // approximation for the ratio-based truncation heuristic.
             let total_chars: usize = messages.iter().map(|m| m.content.char_len()).sum();
             let ratio = f64::from(max_tokens) / f64::from(token_count);
             // Truncation/sign-loss/precision-loss are acceptable here: total_chars and ratio
@@ -163,15 +167,22 @@ impl App {
             )]
             let target_chars = (total_chars as f64 * ratio) as usize;
 
+            // M-3: find cutoff index in one pass, then drain once — O(n) not O(n²).
             let mut current_chars = total_chars;
-            while current_chars > target_chars && messages.len() > 1 {
-                let removed = messages.remove(0);
-                current_chars -= removed.content.char_len();
+            let mut remove_count = 0;
+            while current_chars > target_chars && remove_count < messages.len() - 1 {
+                current_chars -= messages[remove_count].content.char_len();
+                remove_count += 1;
+            }
+            if remove_count > 0 {
+                messages.drain(0..remove_count);
             }
         }
 
         // Drop orphaned tool_result user messages at the front after truncation.
         // The Anthropic API rejects tool_result blocks without a preceding tool_use.
+        // Note: build_assistant_message_with_tools creates pure ToolResult user messages
+        // (no mixed Text+ToolResult), so checking all() is correct here.
         while messages.len() > 1 && messages[0].role == "user" {
             let all_results = matches!(&messages[0].content,
                 ChatContent::Blocks(b) if b.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. })));
@@ -182,14 +193,23 @@ impl App {
             }
         }
 
-        // Drop trailing assistant messages with tool_use blocks that lack a following tool_result.
-        if messages.len() > 1 {
-            if let Some(last) = messages.last() {
-                let has_tool_use = matches!(&last.content,
-                    ChatContent::Blocks(b) if b.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })));
-                if last.role == "assistant" && has_tool_use {
-                    messages.pop();
-                }
+        // H-3: Drop leading assistant messages — API requires conversation start with user.
+        while messages.len() > 1 && messages[0].role == "assistant" {
+            messages.remove(0);
+        }
+
+        // H-2: Drop trailing assistant messages with tool_use blocks that lack a following
+        // tool_result. Loop to handle multiple stacked orphans.
+        while messages.len() > 1 {
+            let dominated = messages.last().is_some_and(|last| {
+                last.role == "assistant"
+                    && matches!(&last.content,
+                        ChatContent::Blocks(b) if b.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })))
+            });
+            if dominated {
+                messages.pop();
+            } else {
+                break;
             }
         }
 
@@ -269,7 +289,7 @@ impl App {
         let single = vec![ChatMessage::text("user", &text)];
         let user_tokens = self
             .provider
-            .count_tokens(&single, &self.config.anthropic_model, None)
+            .count_tokens(&single, &self.config.anthropic_model, None, &[])
             .await
             .ok();
 
@@ -365,9 +385,12 @@ impl App {
         if tool_use_blocks.is_empty() {
             return (ChatMessage::text("assistant", text_content), vec![]);
         }
-        let mut blocks = vec![ContentBlock::Text {
-            text: text_content.to_string(),
-        }];
+        let mut blocks = Vec::new();
+        if !text_content.is_empty() {
+            blocks.push(ContentBlock::Text {
+                text: text_content.to_string(),
+            });
+        }
         blocks.extend(tool_use_blocks);
         let asst = ChatMessage {
             role: "assistant".to_string(),

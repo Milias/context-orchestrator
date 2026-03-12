@@ -34,33 +34,67 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
             content: "Plan tool execution not yet implemented".to_string(),
             is_error: true,
         },
-        ToolCallArguments::ReadFile { path } => match tokio::fs::read_to_string(path).await {
-            Ok(contents) => {
-                if contents.len() > MAX_READ_FILE_BYTES {
-                    let mut boundary = MAX_READ_FILE_BYTES;
-                    while boundary > 0 && !contents.is_char_boundary(boundary) {
-                        boundary -= 1;
-                    }
-                    ToolExecutionResult {
-                        content: format!(
-                            "{}\n\n[truncated, {} bytes total]",
-                            &contents[..boundary],
-                            contents.len()
-                        ),
-                        is_error: false,
-                    }
-                } else {
-                    ToolExecutionResult {
-                        content: contents,
-                        is_error: false,
+        ToolCallArguments::ReadFile { path } => {
+            let Ok(cwd) = std::env::current_dir() else {
+                return ToolExecutionResult {
+                    content: "Error: could not determine working directory".to_string(),
+                    is_error: true,
+                };
+            };
+            let requested = if std::path::Path::new(path).is_absolute() {
+                std::path::PathBuf::from(path)
+            } else {
+                cwd.join(path)
+            };
+            let canonical = match tokio::fs::canonicalize(&requested).await {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolExecutionResult {
+                        content: format!("Error reading file: {e}"),
+                        is_error: true,
                     }
                 }
+            };
+            let Ok(canonical_cwd) = tokio::fs::canonicalize(&cwd).await else {
+                return ToolExecutionResult {
+                    content: "Error: could not resolve working directory".to_string(),
+                    is_error: true,
+                };
+            };
+            if !canonical.starts_with(&canonical_cwd) {
+                return ToolExecutionResult {
+                    content: format!("Error: path escapes working directory: {path}"),
+                    is_error: true,
+                };
             }
-            Err(e) => ToolExecutionResult {
-                content: format!("Error reading file: {e}"),
-                is_error: true,
-            },
-        },
+            match tokio::fs::read_to_string(&canonical).await {
+                Ok(contents) => {
+                    if contents.len() > MAX_READ_FILE_BYTES {
+                        let mut boundary = MAX_READ_FILE_BYTES;
+                        while boundary > 0 && !contents.is_char_boundary(boundary) {
+                            boundary -= 1;
+                        }
+                        ToolExecutionResult {
+                            content: format!(
+                                "{}\n\n[truncated, {} bytes total]",
+                                &contents[..boundary],
+                                contents.len()
+                            ),
+                            is_error: false,
+                        }
+                    } else {
+                        ToolExecutionResult {
+                            content: contents,
+                            is_error: false,
+                        }
+                    }
+                }
+                Err(e) => ToolExecutionResult {
+                    content: format!("Error reading file: {e}"),
+                    is_error: true,
+                },
+            }
+        }
         ToolCallArguments::WriteFile { path, .. } => ToolExecutionResult {
             content: format!("write_file not yet implemented (path: {path})"),
             is_error: true,
@@ -70,7 +104,7 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
             is_error: true,
         },
         ToolCallArguments::Unknown { tool_name, .. } => ToolExecutionResult {
-            content: format!("Unknown tool: {tool_name}"),
+            content: format!("Unrecognized tool or invalid arguments: {tool_name}"),
             is_error: true,
         },
     }

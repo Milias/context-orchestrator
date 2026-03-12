@@ -47,6 +47,8 @@ struct CountTokensRequest {
     messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<ApiToolDefinition>,
 }
 
 #[derive(Deserialize)]
@@ -101,11 +103,15 @@ impl LlmProvider for AnthropicProvider {
         messages: &[ChatMessage],
         model: &str,
         system_prompt: Option<&str>,
+        tools: &[ToolDefinition],
     ) -> anyhow::Result<u32> {
+        let api_tools: Vec<ApiToolDefinition> =
+            tools.iter().map(ToolDefinition::to_api).collect();
         let body = CountTokensRequest {
             model: model.to_string(),
             messages: messages.to_vec(),
             system: system_prompt.map(std::string::ToString::to_string),
+            tools: api_tools,
         };
 
         let response = self

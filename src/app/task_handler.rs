@@ -126,6 +126,13 @@ impl App {
         content: String,
         is_error: bool,
     ) {
+        // Skip stale completions for tool calls already resolved (e.g. timed out).
+        if let Some(Node::ToolCall { status, .. }) = self.graph.node(tool_call_id) {
+            if *status == ToolCallStatus::Completed || *status == ToolCallStatus::Failed {
+                return;
+            }
+        }
+
         let new_status = if is_error {
             ToolCallStatus::Failed
         } else {

@@ -40,63 +40,72 @@ impl App {
                 break;
             }
 
-            if !result.response.is_empty() || !result.tool_use_records.is_empty() {
-                let leaf = self
-                    .graph
-                    .branch_leaf(self.graph.active_branch())
-                    .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
-                let assistant_id = Uuid::new_v4();
-                let assistant_node = Node::Message {
-                    id: assistant_id,
-                    role: crate::graph::Role::Assistant,
-                    content: result.response,
+            if result.response.is_empty() && result.tool_use_records.is_empty() {
+                break;
+            }
+
+            let leaf = self
+                .graph
+                .branch_leaf(self.graph.active_branch())
+                .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
+            let assistant_id = Uuid::new_v4();
+            let assistant_node = Node::Message {
+                id: assistant_id,
+                role: crate::graph::Role::Assistant,
+                content: result.response,
+                created_at: Utc::now(),
+                model: Some(loop_config.model.clone()),
+                input_tokens: None,
+                output_tokens: result.output_tokens,
+            };
+            self.graph.add_message(leaf, assistant_node)?;
+
+            if !result.think_text.is_empty() {
+                let think_node = Node::ThinkBlock {
+                    id: Uuid::new_v4(),
+                    content: result.think_text,
+                    parent_message_id: assistant_id,
                     created_at: Utc::now(),
-                    model: Some(loop_config.model.clone()),
-                    input_tokens: None,
-                    output_tokens: result.output_tokens,
                 };
-                self.graph.add_message(leaf, assistant_node)?;
+                let think_id = self.graph.add_node(think_node);
+                self.graph
+                    .add_edge(think_id, assistant_id, EdgeKind::ThinkingOf)?;
+            }
 
-                if !result.think_text.is_empty() {
-                    let think_node = Node::ThinkBlock {
-                        id: Uuid::new_v4(),
-                        content: result.think_text,
-                        parent_message_id: assistant_id,
-                        created_at: Utc::now(),
-                    };
-                    let think_id = self.graph.add_node(think_node);
-                    self.graph
-                        .add_edge(think_id, assistant_id, EdgeKind::ThinkingOf)?;
+            let is_tool_use = result.stop_reason.as_deref() == Some("tool_use")
+                && !result.tool_use_records.is_empty();
+
+            if !is_tool_use {
+                // M-2: warn if LLM signaled tool_use but no blocks were parsed
+                if result.stop_reason.as_deref() == Some("tool_use") {
+                    self.tui_state.status_message =
+                        Some("Warning: LLM requested tool_use but no tool calls received".into());
                 }
+                break;
+            }
 
-                let is_tool_use = result.stop_reason.as_deref() == Some("tool_use")
-                    && !result.tool_use_records.is_empty();
+            // Clear stale streaming text before tool execution (M-4)
+            self.tui_state.streaming_response = None;
 
-                if !is_tool_use {
-                    break;
-                }
+            let mut pending_ids = HashSet::new();
+            for record in &result.tool_use_records {
+                let args = crate::graph::parse_tool_arguments(&record.name, &record.input);
+                let api_id = Some(record.api_id.clone());
+                self.handle_tool_call_dispatched(
+                    record.tool_call_id,
+                    assistant_id,
+                    args,
+                    api_id,
+                );
+                pending_ids.insert(record.tool_call_id);
+            }
 
-                let mut pending_ids = HashSet::new();
-                for record in &result.tool_use_records {
-                    let args =
-                        crate::graph::parse_tool_arguments(&record.name, &record.input);
-                    let api_id = Some(record.api_id.clone());
-                    self.handle_tool_call_dispatched(
-                        record.tool_call_id,
-                        assistant_id,
-                        args,
-                        api_id,
-                    );
-                    pending_ids.insert(record.tool_call_id);
-                }
+            let timed_out = self
+                .wait_for_tool_completions(&mut pending_ids, terminal, event_stream)
+                .await?;
 
-                self.wait_for_tool_completions(&mut pending_ids, terminal, event_stream)
-                    .await?;
-
-                if self.tui_state.should_quit {
-                    break;
-                }
-            } else {
+            // M-1: don't retry after timeout — the LLM will just retry the same tools
+            if timed_out || self.tui_state.should_quit {
                 break;
             }
         }
@@ -108,28 +117,55 @@ impl App {
     }
 
     /// Wait for all pending tool calls to complete, keeping the TUI responsive.
+    /// Returns `true` if a timeout occurred.
     async fn wait_for_tool_completions(
         &mut self,
         pending_ids: &mut HashSet<Uuid>,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         event_stream: &mut EventStream,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         self.tui_state.status_message =
             Some(format!("Executing {} tool call(s)...", pending_ids.len()));
         terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
 
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut timed_out = false;
 
         while !pending_ids.is_empty() {
             tokio::select! {
-                biased;
+                // H-5: no `biased` — fair polling prevents starving task completions
 
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
                         let action = input::handle_key_event(key, &mut self.tui_state);
-                        if matches!(action, Action::Quit) {
-                            self.tui_state.should_quit = true;
-                            break;
+                        match action {
+                            Action::Quit => {
+                                self.tui_state.should_quit = true;
+                                break;
+                            }
+                            // H-1: handle scroll/page so TUI stays navigable
+                            Action::ScrollUp | Action::ScrollDown => {
+                                self.tui_state.scroll_offset = match action {
+                                    Action::ScrollUp => self.tui_state.scroll_offset.saturating_sub(3),
+                                    _ => self.tui_state.scroll_offset.saturating_add(3),
+                                };
+                            }
+                            Action::PageUp | Action::PageDown => {
+                                if let Ok(size) = terminal.size() {
+                                    let page = size.height / 2;
+                                    self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
+                                        self.tui_state.scroll_offset.saturating_sub(page)
+                                    } else {
+                                        self.tui_state.scroll_offset.saturating_add(page)
+                                    };
+                                }
+                            }
+                            // H-1: restore consumed input text — can't send during tool execution
+                            Action::SendMessage(text) => {
+                                self.tui_state.input_text = text;
+                                self.tui_state.input_cursor = self.tui_state.input_text.chars().count();
+                            }
+                            Action::None => {}
                         }
                     }
                 }
@@ -167,12 +203,13 @@ impl App {
                         let _ = self.graph.add_edge(result_id, tc_id, EdgeKind::Produced);
                     }
                     self.tui_state.status_message = Some("Tool call(s) timed out".to_string());
+                    timed_out = true;
                     break;
                 }
             }
             terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
         }
 
-        Ok(())
+        Ok(timed_out)
     }
 }

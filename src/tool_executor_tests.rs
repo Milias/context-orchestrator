@@ -13,7 +13,7 @@ fn test_registered_tools_includes_read_file() {
 
 #[tokio::test]
 async fn test_read_file_returns_contents() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::TempDir::new_in(".").unwrap();
     let path = dir.path().join("hello.txt");
     std::fs::write(&path, "hello world").unwrap();
     let args = ToolCallArguments::ReadFile {
@@ -27,7 +27,7 @@ async fn test_read_file_returns_contents() {
 #[tokio::test]
 async fn test_read_file_nonexistent_returns_error() {
     let args = ToolCallArguments::ReadFile {
-        path: "/tmp/nonexistent_file_abc123xyz".to_string(),
+        path: "nonexistent_file_abc123xyz.txt".to_string(),
     };
     let result = execute_tool(&args).await;
     assert!(result.is_error);
@@ -35,8 +35,18 @@ async fn test_read_file_nonexistent_returns_error() {
 }
 
 #[tokio::test]
+async fn test_read_file_rejects_path_outside_cwd() {
+    let args = ToolCallArguments::ReadFile {
+        path: "/etc/passwd".to_string(),
+    };
+    let result = execute_tool(&args).await;
+    assert!(result.is_error);
+    assert!(result.content.contains("escapes working directory"));
+}
+
+#[tokio::test]
 async fn test_read_file_truncates_large_files() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::TempDir::new_in(".").unwrap();
     let path = dir.path().join("large.txt");
     let content = "a".repeat(150_000);
     std::fs::write(&path, &content).unwrap();
@@ -51,7 +61,7 @@ async fn test_read_file_truncates_large_files() {
 
 #[tokio::test]
 async fn test_spawn_execution_sends_completion() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::TempDir::new_in(".").unwrap();
     let path = dir.path().join("spawn_test.txt");
     std::fs::write(&path, "spawn content").unwrap();
 

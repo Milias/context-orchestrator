@@ -79,6 +79,7 @@ pub trait LlmProvider: Send + Sync {
         messages: &[ChatMessage],
         model: &str,
         system_prompt: Option<&str>,
+        tools: &[ToolDefinition],
     ) -> anyhow::Result<u32>;
 }
 
