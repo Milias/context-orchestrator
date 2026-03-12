@@ -76,13 +76,6 @@ impl App {
                         Some(format!("Work item created: {}", plan.title));
                 }
             },
-            TaskMessage::ToolCallDispatched {
-                tool_call_id,
-                parent_message_id,
-                arguments,
-            } => {
-                self.handle_tool_call_dispatched(tool_call_id, parent_message_id, arguments, None);
-            }
             TaskMessage::ToolCallCompleted {
                 tool_call_id,
                 content,

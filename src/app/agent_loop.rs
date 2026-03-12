@@ -91,12 +91,7 @@ impl App {
             for record in &result.tool_use_records {
                 let args = crate::graph::parse_tool_arguments(&record.name, &record.input);
                 let api_id = Some(record.api_id.clone());
-                self.handle_tool_call_dispatched(
-                    record.tool_call_id,
-                    assistant_id,
-                    args,
-                    api_id,
-                );
+                self.handle_tool_call_dispatched(record.tool_call_id, assistant_id, args, api_id);
                 pending_ids.insert(record.tool_call_id);
             }
 

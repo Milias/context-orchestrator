@@ -1,4 +1,3 @@
-use crate::graph::tool_types::ToolCallArguments;
 use crate::graph::{BackgroundTaskKind, GitFileStatus, TaskStatus};
 use crate::llm::ChatMessage;
 use crate::tools::PlanExtractionResult;
@@ -46,11 +45,6 @@ pub enum TaskMessage {
     ToolExtractionComplete {
         trigger_message_id: Uuid,
         result: ToolExtractionOutcome,
-    },
-    ToolCallDispatched {
-        tool_call_id: Uuid,
-        parent_message_id: Uuid,
-        arguments: ToolCallArguments,
     },
     ToolCallCompleted {
         tool_call_id: Uuid,

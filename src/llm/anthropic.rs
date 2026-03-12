@@ -105,8 +105,7 @@ impl LlmProvider for AnthropicProvider {
         system_prompt: Option<&str>,
         tools: &[ToolDefinition],
     ) -> anyhow::Result<u32> {
-        let api_tools: Vec<ApiToolDefinition> =
-            tools.iter().map(ToolDefinition::to_api).collect();
+        let api_tools: Vec<ApiToolDefinition> = tools.iter().map(ToolDefinition::to_api).collect();
         let body = CountTokensRequest {
             model: model.to_string(),
             messages: messages.to_vec(),

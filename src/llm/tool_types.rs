@@ -24,7 +24,10 @@ pub struct SchemaProperty {
 }
 
 /// JSON Schema types supported in tool definitions.
+/// All JSON Schema primitives are represented for completeness; only `String`
+/// is used so far but the rest are needed as tool definitions expand.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum SchemaType {
     String,
     Integer,

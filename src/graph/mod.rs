@@ -402,16 +402,6 @@ impl ConversationGraph {
         self.nodes.values().filter(|n| filter(n)).collect()
     }
 
-    /// Find all nodes connected from `source` via edges of the given kind.
-    /// Returns node ids where an edge `(source) --[kind]--> (target)` exists.
-    pub fn targets_by_edge(&self, source: Uuid, kind: EdgeKind) -> Vec<Uuid> {
-        self.edges
-            .iter()
-            .filter(|e| e.from == source && e.kind == kind)
-            .map(|e| e.to)
-            .collect()
-    }
-
     /// Find all nodes connected to `target` via edges of the given kind.
     /// Returns node ids where an edge `(source) --[kind]--> (target)` exists.
     pub fn sources_by_edge(&self, target: Uuid, kind: EdgeKind) -> Vec<Uuid> {
