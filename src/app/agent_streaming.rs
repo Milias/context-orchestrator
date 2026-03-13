@@ -22,6 +22,9 @@ pub(super) struct StreamResult {
     pub tool_use_records: Vec<ToolUseRecord>,
     pub stop_reason: Option<String>,
     pub cancelled: bool,
+    /// Phase ID for the Receiving phase, created during connection.
+    /// Caller must send `PhaseCompleted` for this ID when streaming ends.
+    pub recv_phase_id: Option<Uuid>,
 }
 
 pub(super) async fn stream_llm_response(
@@ -31,7 +34,7 @@ pub(super) async fn stream_llm_response(
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<StreamResult> {
-    let Some(mut stream) = try_connect_chat(
+    let Some((mut stream, mut recv_phase_id)) = try_connect_chat(
         provider,
         &messages,
         config,
@@ -72,7 +75,7 @@ pub(super) async fn stream_llm_response(
                 break;
             }
             Some(Ok(StreamChunk::Error(e))) => {
-                if let Some(new) = try_reconnect(
+                if let Some((new_stream, new_recv)) = try_reconnect(
                     &mut state.retries,
                     provider,
                     &messages,
@@ -82,7 +85,9 @@ pub(super) async fn stream_llm_response(
                 )
                 .await?
                 {
-                    stream = new;
+                    send(task_tx, AgentEvent::PhaseCompleted { phase_id: recv_phase_id });
+                    stream = new_stream;
+                    recv_phase_id = new_recv;
                     state.think_splitter = ThinkSplitter::new();
                     continue;
                 }
@@ -96,7 +101,7 @@ pub(super) async fn stream_llm_response(
                     .downcast_ref::<ApiError>()
                     .is_some_and(ApiError::is_retryable);
                 if retryable {
-                    if let Some(new) = try_reconnect(
+                    if let Some((new_stream, new_recv)) = try_reconnect(
                         &mut state.retries,
                         provider,
                         &messages,
@@ -106,7 +111,9 @@ pub(super) async fn stream_llm_response(
                     )
                     .await?
                     {
-                        stream = new;
+                        send(task_tx, AgentEvent::PhaseCompleted { phase_id: recv_phase_id });
+                        stream = new_stream;
+                        recv_phase_id = new_recv;
                         state.think_splitter = ThinkSplitter::new();
                         continue;
                     }
@@ -119,16 +126,7 @@ pub(super) async fn stream_llm_response(
     }
 
     send_delta(&state.think_splitter, task_tx);
-
-    let (clean_response, think_content) = state.think_splitter.finish();
-    Ok(StreamResult {
-        response: clean_response,
-        think_text: think_content,
-        output_tokens: state.output_tokens,
-        tool_use_records: state.tool_use_records,
-        stop_reason: state.stop_reason,
-        cancelled: false,
-    })
+    Ok(state.into_result(recv_phase_id))
 }
 
 struct StreamState {
@@ -153,6 +151,19 @@ impl StreamState {
             send_budget: Duration::from_millis(16),
         }
     }
+
+    fn into_result(self, recv_phase_id: Uuid) -> StreamResult {
+        let (response, think_text) = self.think_splitter.finish();
+        StreamResult {
+            response,
+            think_text,
+            output_tokens: self.output_tokens,
+            tool_use_records: self.tool_use_records,
+            stop_reason: self.stop_reason,
+            cancelled: false,
+            recv_phase_id: Some(recv_phase_id),
+        }
+    }
 }
 
 type ChatStream = Pin<Box<dyn futures::Stream<Item = anyhow::Result<StreamChunk>> + Send>>;
@@ -165,7 +176,7 @@ async fn try_reconnect(
     config: &ChatConfig,
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
     cancel_token: &CancellationToken,
-) -> anyhow::Result<Option<ChatStream>> {
+) -> anyhow::Result<Option<(ChatStream, Uuid)>> {
     if *retries >= MAX_STREAM_RETRIES {
         return Ok(None);
     }
@@ -182,6 +193,7 @@ async fn try_reconnect(
 }
 
 /// Try to establish a chat stream with retry and cancellation.
+/// On success returns `(stream, recv_phase_id)` — the Receiving phase is left Running.
 async fn try_connect_chat(
     provider: &Arc<dyn LlmProvider>,
     messages: &[ChatMessage],
@@ -189,7 +201,7 @@ async fn try_connect_chat(
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
     cancel_token: &CancellationToken,
     context_label: &str,
-) -> anyhow::Result<Option<ChatStream>> {
+) -> anyhow::Result<Option<(ChatStream, Uuid)>> {
     let retry_config = RetryConfig::default();
 
     for attempt in 1..=retry_config.max_attempts {
@@ -221,8 +233,7 @@ async fn try_connect_chat(
                         phase: AgentPhase::Receiving,
                     },
                 );
-                // Receiving phase stays Running until stream completes (caller handles)
-                return Ok(Some(s));
+                return Ok(Some((s, recv_phase)));
             }
             Err(e) => {
                 let retryable = e
@@ -279,6 +290,7 @@ fn cancelled_result() -> StreamResult {
         tool_use_records: Vec::new(),
         stop_reason: None,
         cancelled: true,
+        recv_phase_id: None,
     }
 }
 

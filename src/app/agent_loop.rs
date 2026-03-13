@@ -105,7 +105,8 @@ async fn run_agent_loop(
             ..chat_config.clone()
         };
 
-        // Connecting + Receiving phases are emitted by stream_llm_response internally
+        // Connecting + Receiving phases are emitted by stream_llm_response internally.
+        // recv_phase_id is returned so we can complete it here when streaming ends.
         let result = agent_streaming::stream_llm_response(
             &provider,
             messages,
@@ -114,6 +115,10 @@ async fn run_agent_loop(
             &cancel_token,
         )
         .await?;
+
+        if let Some(recv_id) = result.recv_phase_id {
+            send(task_tx, AgentEvent::PhaseCompleted { phase_id: recv_id });
+        }
 
         if result.cancelled || (result.response.is_empty() && result.tool_use_records.is_empty()) {
             break;

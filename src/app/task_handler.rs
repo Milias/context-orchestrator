@@ -242,9 +242,18 @@ impl App {
         self.active_phase_ids.insert(phase_id);
     }
 
+    /// Complete a specific phase. Also handles late-arriving completions where
+    /// `Finished` has already drained `active_phase_ids` (e.g. fire-and-forget
+    /// token counting sending `PhaseCompleted` after the agent loop ends).
     fn complete_phase(&mut self, phase_id: Uuid) {
-        if self.active_phase_ids.remove(&phase_id) {
-            if let Some(Node::BackgroundTask { description, .. }) = self.graph.node(phase_id) {
+        self.active_phase_ids.remove(&phase_id);
+        if let Some(Node::BackgroundTask {
+            status,
+            description,
+            ..
+        }) = self.graph.node(phase_id)
+        {
+            if *status == TaskStatus::Running {
                 let desc = description.clone();
                 let _ =
                     self.graph
