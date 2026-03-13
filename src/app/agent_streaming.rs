@@ -34,7 +34,7 @@ pub(super) async fn stream_llm_response(
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<StreamResult> {
-    let Some((mut stream, mut recv_phase_id)) = try_connect_chat(
+    let Some((stream, recv_phase_id)) = try_connect_chat(
         provider,
         &messages,
         config,
@@ -47,6 +47,18 @@ pub(super) async fn stream_llm_response(
         return Ok(cancelled_result());
     };
 
+    consume_stream(stream, recv_phase_id, provider, &messages, config, task_tx, cancel_token).await
+}
+
+async fn consume_stream(
+    mut stream: ChatStream,
+    mut recv_phase_id: Uuid,
+    provider: &Arc<dyn LlmProvider>,
+    messages: &[ChatMessage],
+    config: &ChatConfig,
+    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    cancel_token: &CancellationToken,
+) -> anyhow::Result<StreamResult> {
     let mut state = StreamState::new();
 
     loop {
@@ -76,8 +88,15 @@ pub(super) async fn stream_llm_response(
             }
             Some(Ok(StreamChunk::Error(e))) => {
                 if let Some(r) = try_reconnect(
-                    &mut state.retries, provider, &messages, config, task_tx, cancel_token,
-                ).await? {
+                    &mut state.retries,
+                    provider,
+                    messages,
+                    config,
+                    task_tx,
+                    cancel_token,
+                )
+                .await?
+                {
                     complete_phase(task_tx, recv_phase_id);
                     (stream, recv_phase_id) = r;
                     state.think_splitter = ThinkSplitter::new();
@@ -94,8 +113,15 @@ pub(super) async fn stream_llm_response(
                     .is_some_and(ApiError::is_retryable);
                 if retryable {
                     if let Some(r) = try_reconnect(
-                        &mut state.retries, provider, &messages, config, task_tx, cancel_token,
-                    ).await? {
+                        &mut state.retries,
+                        provider,
+                        messages,
+                        config,
+                        task_tx,
+                        cancel_token,
+                    )
+                    .await?
+                    {
                         complete_phase(task_tx, recv_phase_id);
                         (stream, recv_phase_id) = r;
                         state.think_splitter = ThinkSplitter::new();
