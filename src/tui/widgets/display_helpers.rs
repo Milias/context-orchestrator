@@ -69,6 +69,14 @@ fn file_read_extension(graph: &ConversationGraph, tool_call_id: uuid::Uuid) -> O
     }
 }
 
+pub fn format_scroll_indicator(offset: u16, max: u16) -> String {
+    match () {
+        () if max == 0 => String::new(),
+        () if offset >= max => " [END] ".to_string(),
+        () => format!(" [{}%] ", (u32::from(offset) * 100) / u32::from(max)),
+    }
+}
+
 /// Compute the rendered height of styled text within a given content width.
 /// +2 for the message block border. +1 if `has_thinking`.
 pub fn compute_styled_height(text: &Text<'_>, content_width: usize, has_thinking: bool) -> usize {

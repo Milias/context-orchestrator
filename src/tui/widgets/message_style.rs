@@ -1,4 +1,5 @@
 use crate::graph::{Node, Role};
+use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
@@ -39,15 +40,83 @@ pub fn role_color(node: &Node) -> Color {
     }
 }
 
-pub fn metadata_string(node: &Node) -> String {
-    let tokens = node.input_tokens().or(node.output_tokens());
-    match tokens {
-        Some(t) => format!("{t} tokens"),
-        None => String::new(),
+pub fn metadata_string(node: &Node, prev_created_at: Option<DateTime<Utc>>) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    // Model name for assistant messages
+    if let Some(model) = node.model() {
+        parts.push(short_model_name(model).to_string());
     }
+
+    // Token counts
+    match (node.input_tokens(), node.output_tokens()) {
+        (Some(i), Some(o)) => parts.push(format!("{i}in/{o}out")),
+        (Some(t), None) | (None, Some(t)) => parts.push(format!("{t} tok")),
+        _ => {}
+    }
+
+    // Elapsed time (user → assistant)
+    if matches!(
+        node,
+        Node::Message {
+            role: Role::Assistant,
+            ..
+        }
+    ) {
+        if let Some(prev) = prev_created_at {
+            let dur = node.created_at() - prev;
+            if dur.num_milliseconds() > 0 {
+                parts.push(format_duration(dur));
+            }
+        }
+    }
+
+    // Tool call duration
+    if let Node::ToolCall {
+        created_at,
+        completed_at: Some(completed),
+        ..
+    } = node
+    {
+        let dur = *completed - *created_at;
+        if dur.num_milliseconds() > 0 {
+            parts.push(format_duration(dur));
+        }
+    }
+
+    parts.join(" | ")
 }
 
-fn build_block(label: &str, metadata: &str, color: Color) -> Block<'static> {
+fn short_model_name(model: &str) -> &str {
+    model.strip_prefix("claude-").unwrap_or(model)
+}
+
+fn format_duration(dur: chrono::TimeDelta) -> String {
+    let total_ms = dur.num_milliseconds();
+    if total_ms < 1000 {
+        return format!("{total_ms}ms");
+    }
+    let secs = dur.num_seconds();
+    if secs < 60 {
+        return format!("{secs}.{}s", (total_ms % 1000) / 100);
+    }
+    format!("{}m {}s", secs / 60, secs % 60)
+}
+
+fn timestamp_string(node: &Node) -> String {
+    node.created_at()
+        .with_timezone(&chrono::Local)
+        .format("%H:%M")
+        .to_string()
+}
+
+fn build_block(
+    label: &str,
+    metadata: &str,
+    timestamp: &str,
+    border_width: u16,
+    color: Color,
+) -> Block<'static> {
     let mut block = Block::default()
         .title(Line::styled(
             format!(" {label} "),
@@ -56,7 +125,9 @@ fn build_block(label: &str, metadata: &str, color: Color) -> Block<'static> {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(color));
 
-    if !metadata.is_empty() {
+    // Only show metadata if it fits without overlapping the label
+    let fits = metadata.len() + label.len() + 6 <= border_width as usize;
+    if !metadata.is_empty() && fits {
         block = block.title(
             Line::styled(
                 format!(" {metadata} "),
@@ -64,6 +135,13 @@ fn build_block(label: &str, metadata: &str, color: Color) -> Block<'static> {
             )
             .alignment(Alignment::Right),
         );
+    }
+
+    if !timestamp.is_empty() {
+        block = block.title_bottom(Line::styled(
+            format!(" {timestamp} "),
+            Style::default().fg(Color::DarkGray),
+        ));
     }
 
     block
@@ -86,18 +164,31 @@ fn render_block_paragraph(
     frame.render_widget(paragraph, render_area);
 }
 
+pub struct MessageRenderParams {
+    pub prev_created_at: Option<DateTime<Utc>>,
+    pub clip_top: u16,
+    pub full_height: u16,
+    pub has_thinking: bool,
+}
+
 pub fn render_message(
     frame: &mut Frame,
     area: Rect,
     node: &Node,
     styled_text: &Text<'static>,
-    clip_top: u16,
-    full_height: u16,
-    has_thinking: bool,
+    params: &MessageRenderParams,
 ) {
-    let block = build_block(role_label(node), &metadata_string(node), role_color(node));
+    let metadata = metadata_string(node, params.prev_created_at);
+    let timestamp = timestamp_string(node);
+    let block = build_block(
+        role_label(node),
+        &metadata,
+        &timestamp,
+        area.width,
+        role_color(node),
+    );
     let mut content = styled_text.clone();
-    if has_thinking {
+    if params.has_thinking {
         content.lines.insert(
             0,
             Line::styled(
@@ -106,7 +197,14 @@ pub fn render_message(
             ),
         );
     }
-    render_block_paragraph(frame, area, block, content, clip_top, full_height);
+    render_block_paragraph(
+        frame,
+        area,
+        block,
+        content,
+        params.clip_top,
+        params.full_height,
+    );
 }
 
 pub fn render_streaming(
@@ -116,7 +214,8 @@ pub fn render_streaming(
     clip_top: u16,
     full_height: u16,
 ) {
-    let block = build_block("assistant", "", Color::Green);
+    let now = chrono::Local::now().format("%H:%M").to_string();
+    let block = build_block("assistant", "", &now, area.width, Color::Green);
     render_block_paragraph(
         frame,
         area,

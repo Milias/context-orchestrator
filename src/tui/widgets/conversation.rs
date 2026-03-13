@@ -1,9 +1,14 @@
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
-use crate::tui::widgets::display_helpers::{compute_styled_height, display_content};
+use crate::tui::widgets::display_helpers::{
+    compute_styled_height, display_content, format_scroll_indicator,
+};
 use crate::tui::widgets::markdown::render_markdown;
-use crate::tui::widgets::message_style::{render_agent_activity, render_message, render_streaming};
+use crate::tui::widgets::message_style::{
+    render_agent_activity, render_message, render_streaming, MessageRenderParams,
+};
 use crate::tui::widgets::trigger_highlight::highlight_triggers;
 use crate::tui::{AgentVisualPhase, CachedRender, TuiState, CURSOR_FRAMES};
+use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders};
 
@@ -99,20 +104,19 @@ fn render_entries(
         match entry {
             MessageEntry::Node {
                 node,
+                prev_created_at,
                 cache_key,
                 height,
                 has_thinking,
             } => {
                 let styled_text = &tui_state.render_cache[cache_key].styled_text;
-                render_message(
-                    frame,
-                    msg_area,
-                    node,
-                    styled_text,
+                let params = MessageRenderParams {
+                    prev_created_at: *prev_created_at,
                     clip_top,
-                    *height as u16,
-                    *has_thinking,
-                );
+                    full_height: *height as u16,
+                    has_thinking: *has_thinking,
+                };
+                render_message(frame, msg_area, node, styled_text, &params);
             }
             MessageEntry::Streaming {
                 styled_text,
@@ -132,6 +136,7 @@ fn render_entries(
 enum MessageEntry<'a> {
     Node {
         node: &'a Node,
+        prev_created_at: Option<DateTime<Utc>>,
         cache_key: uuid::Uuid,
         height: usize,
         has_thinking: bool,
@@ -169,6 +174,8 @@ fn build_entries<'a>(
         .as_ref()
         .map_or_else(Vec::new, |d| d.iteration_node_ids.clone());
 
+    let mut last_user_created_at: Option<DateTime<Utc>> = None;
+
     for node in history
         .iter()
         .filter(|n| !matches!(n, Node::ThinkBlock { .. }))
@@ -194,7 +201,35 @@ fn build_entries<'a>(
             }
         }
 
-        push_node_entry(node, graph, tui_state, msg_content_width, &mut entries);
+        let prev = if matches!(
+            node,
+            Node::Message {
+                role: Role::Assistant,
+                ..
+            }
+        ) {
+            last_user_created_at
+        } else {
+            None
+        };
+        push_node_entry(
+            node,
+            prev,
+            graph,
+            tui_state,
+            msg_content_width,
+            &mut entries,
+        );
+
+        if matches!(
+            node,
+            Node::Message {
+                role: Role::User,
+                ..
+            }
+        ) {
+            last_user_created_at = Some(node.created_at());
+        }
 
         if matches!(
             node,
@@ -230,11 +265,11 @@ fn push_tool_indicators<'a>(
     let tool_call_ids = graph.sources_by_edge(assistant_id, EdgeKind::Invoked);
     for tc_id in &tool_call_ids {
         if let Some(tc_node) = graph.node(*tc_id) {
-            push_node_entry(tc_node, graph, tui_state, msg_content_width, entries);
+            push_node_entry(tc_node, None, graph, tui_state, msg_content_width, entries);
             let result_ids = graph.sources_by_edge(*tc_id, EdgeKind::Produced);
             for r_id in &result_ids {
                 if let Some(r_node) = graph.node(*r_id) {
-                    push_node_entry(r_node, graph, tui_state, msg_content_width, entries);
+                    push_node_entry(r_node, None, graph, tui_state, msg_content_width, entries);
                 }
             }
         }
@@ -340,6 +375,7 @@ fn append_cursor(styled: &mut Text<'static>, tick: usize) {
 
 fn push_node_entry<'a>(
     node: &'a Node,
+    prev_created_at: Option<DateTime<Utc>>,
     graph: &ConversationGraph,
     tui_state: &mut TuiState,
     msg_content_width: usize,
@@ -377,16 +413,9 @@ fn push_node_entry<'a>(
     let c = &tui_state.render_cache[&id];
     entries.push(MessageEntry::Node {
         node,
+        prev_created_at,
         cache_key: id,
         height: c.height,
         has_thinking: c.has_thinking,
     });
-}
-
-fn format_scroll_indicator(offset: u16, max: u16) -> String {
-    match () {
-        () if max == 0 => String::new(),
-        () if offset >= max => " [END] ".to_string(),
-        () => format!(" [{}%] ", (u32::from(offset) * 100) / u32::from(max)),
-    }
 }
