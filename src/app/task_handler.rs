@@ -32,6 +32,13 @@ impl App {
                 self.graph
                     .remove_nodes_by(|n| matches!(n, Node::Tool { .. }));
                 let root_id = self.graph.branch_leaf(self.graph.active_branch());
+                self.tui_state.available_tools = tools
+                    .iter()
+                    .map(|t| crate::tui::CompletionCandidate {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                    })
+                    .collect();
                 for tool in tools {
                     let node = Node::Tool {
                         id: Uuid::new_v4(),

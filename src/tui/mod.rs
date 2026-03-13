@@ -78,6 +78,21 @@ impl ContextTab {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CompletionCandidate {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Default)]
+pub struct AutocompleteState {
+    pub active: bool,
+    pub trigger_char: char,
+    pub prefix: String,
+    pub candidates: Vec<CompletionCandidate>,
+    pub selected: usize,
+}
+
 #[derive(Debug)]
 pub struct TuiState {
     pub input_text: String,
@@ -96,6 +111,8 @@ pub struct TuiState {
     /// Cached rendered markdown + height per message node ID.
     /// Avoids re-parsing markdown for historical messages on every frame.
     pub render_cache: HashMap<Uuid, CachedRender>,
+    pub autocomplete: AutocompleteState,
+    pub available_tools: Vec<CompletionCandidate>,
 }
 
 #[derive(Debug)]
@@ -121,6 +138,8 @@ impl TuiState {
             context_list_offset: 0,
             auto_scroll: true,
             render_cache: HashMap::new(),
+            autocomplete: AutocompleteState::default(),
+            available_tools: Vec::new(),
         }
     }
 }

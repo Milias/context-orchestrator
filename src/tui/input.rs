@@ -29,6 +29,14 @@ pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     }
 
     if key.code == KeyCode::Tab {
+        // Autocomplete takes priority over focus toggle
+        if tui_state.focus == FocusPanel::Input
+            && tui_state.autocomplete.active
+            && !tui_state.autocomplete.candidates.is_empty()
+        {
+            accept_completion(tui_state);
+            return Action::None;
+        }
         tui_state.focus = match tui_state.focus {
             FocusPanel::Input if tui_state.context_panel_visible => FocusPanel::ContextPanel,
             _ => FocusPanel::Input,
@@ -43,7 +51,32 @@ pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
 }
 
 fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
-    match key.code {
+    // Autocomplete interception: Enter/Up/Down/Esc when popup is active
+    if tui_state.autocomplete.active && !tui_state.autocomplete.candidates.is_empty() {
+        match key.code {
+            KeyCode::Enter => {
+                accept_completion(tui_state);
+                return Action::None;
+            }
+            KeyCode::Up => {
+                let len = tui_state.autocomplete.candidates.len();
+                tui_state.autocomplete.selected = (tui_state.autocomplete.selected + len - 1) % len;
+                return Action::None;
+            }
+            KeyCode::Down => {
+                let len = tui_state.autocomplete.candidates.len();
+                tui_state.autocomplete.selected = (tui_state.autocomplete.selected + 1) % len;
+                return Action::None;
+            }
+            KeyCode::Esc => {
+                tui_state.autocomplete.active = false;
+                return Action::None;
+            }
+            _ => {} // fall through to normal handling, then re-filter
+        }
+    }
+
+    let action = match key.code {
         KeyCode::Enter => {
             let text = tui_state.input_text.trim().to_string();
             if text.is_empty() {
@@ -51,6 +84,7 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
             }
             tui_state.input_text.clear();
             tui_state.input_cursor = 0;
+            tui_state.autocomplete.active = false;
             Action::SendMessage(text)
         }
         KeyCode::Char(c) => {
@@ -92,7 +126,106 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
         KeyCode::PageUp => Action::PageUp,
         KeyCode::PageDown => Action::PageDown,
         _ => Action::None,
+    };
+
+    // Re-filter autocomplete after text/cursor changes
+    match key.code {
+        KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Left | KeyCode::Right => {
+            update_autocomplete(tui_state);
+        }
+        _ => {}
     }
+
+    action
+}
+
+/// Detect `~` trigger and filter autocomplete candidates.
+fn update_autocomplete(tui_state: &mut TuiState) {
+    let chars: Vec<char> = tui_state.input_text.chars().collect();
+    let cursor = tui_state.input_cursor;
+
+    // Scan backwards from cursor to find `~`
+    let before_cursor = &chars[..cursor];
+    let mut tilde_pos = None;
+    for i in (0..before_cursor.len()).rev() {
+        if before_cursor[i] == '~' {
+            // `~` must be at position 0 or preceded by whitespace
+            if i == 0 || before_cursor[i - 1].is_whitespace() {
+                tilde_pos = Some(i);
+            }
+            break;
+        }
+        // If we hit whitespace before finding `~`, no active trigger
+        if before_cursor[i].is_whitespace() {
+            break;
+        }
+    }
+
+    let Some(tpos) = tilde_pos else {
+        tui_state.autocomplete.active = false;
+        return;
+    };
+
+    let prefix: String = before_cursor[tpos + 1..cursor].iter().collect();
+
+    // If prefix contains whitespace, user is past the tool name (typing args)
+    if prefix.contains(char::is_whitespace) {
+        tui_state.autocomplete.active = false;
+        return;
+    }
+
+    let prefix_lower = prefix.to_lowercase();
+    let candidates: Vec<_> = tui_state
+        .available_tools
+        .iter()
+        .filter(|t| t.name.to_lowercase().starts_with(&prefix_lower))
+        .cloned()
+        .collect();
+
+    tui_state.autocomplete.active = true;
+    tui_state.autocomplete.trigger_char = '~';
+    tui_state.autocomplete.prefix = prefix;
+    tui_state.autocomplete.selected = tui_state
+        .autocomplete
+        .selected
+        .min(candidates.len().saturating_sub(1));
+    tui_state.autocomplete.candidates = candidates;
+}
+
+/// Accept the selected completion: replace `~prefix` with `~name `.
+fn accept_completion(tui_state: &mut TuiState) {
+    let Some(candidate) = tui_state
+        .autocomplete
+        .candidates
+        .get(tui_state.autocomplete.selected)
+    else {
+        return;
+    };
+    let replacement = format!("~{} ", candidate.name);
+
+    let chars: Vec<char> = tui_state.input_text.chars().collect();
+    let cursor = tui_state.input_cursor;
+
+    // Find the tilde position (scan backwards)
+    let before_cursor = &chars[..cursor];
+    let mut tilde_pos = None;
+    for i in (0..before_cursor.len()).rev() {
+        if before_cursor[i] == '~' {
+            tilde_pos = Some(i);
+            break;
+        }
+    }
+
+    let Some(tpos) = tilde_pos else {
+        return;
+    };
+
+    // Build new text: everything before `~` + replacement + everything after cursor
+    let before: String = chars[..tpos].iter().collect();
+    let after: String = chars[cursor..].iter().collect();
+    tui_state.input_text = format!("{before}{replacement}{after}");
+    tui_state.input_cursor = tpos + replacement.chars().count();
+    tui_state.autocomplete.active = false;
 }
 
 fn handle_context_panel_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {

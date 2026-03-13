@@ -33,11 +33,11 @@ pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &mut TuiSta
         draw_status_bar(frame, vertical[0], graph, tui_state);
         context_panel::render(frame, vertical[1], graph, tui_state);
         conversation::render(frame, vertical[2], graph, tui_state);
-        input_box::render(frame, vertical[3], tui_state);
+        input_box::render(frame, vertical[3], area, tui_state);
     } else {
         draw_status_bar(frame, vertical[0], graph, tui_state);
         conversation::render(frame, vertical[1], graph, tui_state);
-        input_box::render(frame, vertical[2], tui_state);
+        input_box::render(frame, vertical[2], area, tui_state);
     }
 }
 
