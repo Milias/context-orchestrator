@@ -154,13 +154,15 @@ impl TuiState {
 pub fn setup_terminal() -> anyhow::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    // Push AFTER entering alternate screen — Kitty clears the keyboard
+    // enhancement stack on screen switch, so pushing before would be lost.
     if supports_keyboard_enhancement().unwrap_or(false) {
         execute!(
             stdout,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
     }
-    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     Ok(terminal)

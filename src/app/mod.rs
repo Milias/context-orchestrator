@@ -182,7 +182,7 @@ impl App {
         {
             Ok(count) => Some(count),
             Err(e) => {
-                eprintln!("Warning: user token count failed: {e}");
+                self.tui_state.error_message = Some(format!("Token count failed: {e}"));
                 None
             }
         };

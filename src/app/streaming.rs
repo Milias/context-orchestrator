@@ -113,6 +113,11 @@ impl App {
                         }
                         Some(Ok(StreamChunk::ToolUse { id, name, input })) => {
                             let tool_call_id = Uuid::new_v4();
+                            let summary = format_tool_summary(&name, &input);
+                            think_splitter.push(&format!("\n\n> **{summary}**"));
+                            self.tui_state.streaming_response = Some(think_splitter.visible().to_string());
+                            self.tui_state.status_message = Some(format!("Tool call: {name}"));
+                            needs_draw = true;
                             tool_use_records.push(ToolUseRecord { tool_call_id, api_id: id, name, input });
                         }
                         Some(Ok(StreamChunk::Done { output_tokens: ot, stop_reason: sr })) => {
@@ -121,9 +126,9 @@ impl App {
                             break;
                         }
                         Some(Ok(StreamChunk::Error(e))) => {
+                            self.tui_state.error_message = Some(format!("Stream error: {e}"));
                             if stream_retries < MAX_STREAM_RETRIES {
                                 stream_retries += 1;
-                                self.tui_state.error_message = Some(format!("Stream error: {e}"));
                                 if let Some(new) = self.try_connect_chat(
                                     messages, config, terminal, event_stream, "Reconnecting",
                                 ).await? {
@@ -132,17 +137,15 @@ impl App {
                                     self.tui_state.error_message = None;
                                     continue;
                                 }
-                                break;
                             }
-                            self.tui_state.error_message = Some(format!("Stream error: {e}"));
                             break;
                         }
                         Some(Err(e)) => {
                             let retryable = e.downcast_ref::<ApiError>()
                                 .is_some_and(ApiError::is_retryable);
+                            self.tui_state.error_message = Some(format_error(&e));
                             if retryable && stream_retries < MAX_STREAM_RETRIES {
                                 stream_retries += 1;
-                                self.tui_state.error_message = Some(format_error(&e));
                                 if let Some(new) = self.try_connect_chat(
                                     messages, config, terminal, event_stream, "Reconnecting",
                                 ).await? {
@@ -151,9 +154,7 @@ impl App {
                                     self.tui_state.error_message = None;
                                     continue;
                                 }
-                                break;
                             }
-                            self.tui_state.error_message = Some(format_error(&e));
                             break;
                         }
                         None => break,
@@ -281,4 +282,31 @@ impl App {
 fn format_error(e: &anyhow::Error) -> String {
     e.downcast_ref::<ApiError>()
         .map_or_else(|| format!("{e}"), ToString::to_string)
+}
+
+/// Fields extracted from tool input JSON for display summaries.
+/// Uses `Option` for all fields since each tool only provides a subset.
+#[derive(serde::Deserialize)]
+struct ToolInputFields {
+    path: Option<String>,
+    pattern: Option<String>,
+    query: Option<String>,
+}
+
+/// Extract a concise one-line summary from a tool call for display during streaming.
+fn format_tool_summary(name: &str, input_json: &str) -> String {
+    let fields: ToolInputFields = match serde_json::from_str(input_json) {
+        Ok(f) => f,
+        Err(_) => return name.to_string(),
+    };
+    let key_value = match name {
+        "read_file" | "write_file" | "list_directory" => fields.path,
+        "search_files" => fields.pattern,
+        "web_search" => fields.query,
+        _ => None,
+    };
+    match key_value {
+        Some(v) => format!("{name}: {v}"),
+        None => name.to_string(),
+    }
 }

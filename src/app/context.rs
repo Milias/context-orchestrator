@@ -43,7 +43,7 @@ impl App {
 
         let max_tokens = self.config.max_context_tokens;
         let tools = crate::tool_executor::registered_tool_definitions();
-        let token_count = match self
+        let token_count = self
             .provider
             .count_tokens(
                 &messages,
@@ -52,13 +52,7 @@ impl App {
                 &tools,
             )
             .await
-        {
-            Ok(count) => count,
-            Err(e) => {
-                eprintln!("Warning: token count failed: {e}");
-                0
-            }
-        };
+            .unwrap_or_default();
 
         if token_count > max_tokens {
             truncate_messages(&mut messages, max_tokens, token_count);

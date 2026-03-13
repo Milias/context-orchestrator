@@ -54,6 +54,36 @@ impl ToolCallArguments {
         }
     }
 
+    /// One-line summary for display in the conversation view,
+    /// e.g. `"read_file: src/main.rs"`.
+    pub fn display_summary(&self) -> String {
+        match self {
+            Self::Plan { description, .. } => match description {
+                Some(d) => format!("plan: {d}"),
+                None => "plan".to_string(),
+            },
+            Self::ReadFile { path } => format!("read_file: {path}"),
+            Self::WriteFile { path, .. } => format!("write_file: {path}"),
+            Self::ListDirectory { path, .. } => format!("list_directory: {path}"),
+            Self::SearchFiles { pattern, path } => match path {
+                Some(p) => format!("search_files: {pattern} in {p}"),
+                None => format!("search_files: {pattern}"),
+            },
+            Self::WebSearch { query } => format!("web_search: {query}"),
+            Self::Unknown {
+                tool_name,
+                raw_json,
+            } => {
+                let truncated: String = raw_json.chars().take(80).collect();
+                if raw_json.len() > 80 {
+                    format!("{tool_name}: {truncated}...")
+                } else {
+                    format!("{tool_name}: {truncated}")
+                }
+            }
+        }
+    }
+
     /// Serialize the tool's input fields as a raw JSON string (without the
     /// `#[serde(tag)]` discriminant). Used to reconstruct `ToolUse` content
     /// blocks for the Anthropic API.

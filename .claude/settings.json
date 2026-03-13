@@ -1,15 +1,16 @@
 {
-  "hooks": {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd /home/develop/truevoid/context-manager && cargo fmt --all && cargo clippy --all-targets 2>&1"
-          }
+    "effortLevel": "max",
+    "hooks": {
+        "Stop": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "cargo fmt --all && cargo clippy --all-targets 2>&1"
+                    }
+                ]
+            }
         ]
-      }
-    ]
-  }
+    }
 }

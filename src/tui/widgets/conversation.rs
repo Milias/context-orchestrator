@@ -1,9 +1,11 @@
-use crate::graph::{ConversationGraph, Node, Role};
+use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::tui::widgets::markdown::render_markdown;
+use crate::tui::widgets::message_style::{render_message, render_streaming};
 use crate::tui::widgets::trigger_highlight::highlight_triggers;
 use crate::tui::{CachedRender, TuiState};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders};
+use std::borrow::Cow;
 
 pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let history = graph
@@ -141,49 +143,46 @@ impl MessageEntry<'_> {
 
 fn build_entries<'a>(
     history: &[&'a Node],
-    graph: &ConversationGraph,
+    graph: &'a ConversationGraph,
     tui_state: &mut TuiState,
     msg_content_width: usize,
 ) -> Vec<MessageEntry<'a>> {
-    let mut entries: Vec<MessageEntry<'a>> = history
+    let mut entries: Vec<MessageEntry<'a>> = Vec::new();
+
+    for node in history
         .iter()
-        .filter(|node| !matches!(node, Node::ThinkBlock { .. }))
-        .map(|node| {
-            let id = node.id();
-            let cached = tui_state.render_cache.get(&id);
-            let valid = cached.is_some_and(|c| c.cached_width == msg_content_width);
-            if !valid {
-                let mut styled = render_markdown(node.content());
-                if matches!(
-                    node,
-                    Node::Message {
-                        role: Role::User,
-                        ..
+        .filter(|n| !matches!(n, Node::ThinkBlock { .. }))
+    {
+        push_node_entry(node, graph, tui_state, msg_content_width, &mut entries);
+
+        // After an assistant message, inject its tool calls and results
+        if matches!(
+            node,
+            Node::Message {
+                role: Role::Assistant,
+                ..
+            }
+        ) {
+            let tool_call_ids = graph.sources_by_edge(node.id(), EdgeKind::Invoked);
+            for tc_id in &tool_call_ids {
+                if let Some(tc_node) = graph.node(*tc_id) {
+                    push_node_entry(tc_node, graph, tui_state, msg_content_width, &mut entries);
+                    let result_ids = graph.sources_by_edge(*tc_id, EdgeKind::Produced);
+                    for r_id in &result_ids {
+                        if let Some(r_node) = graph.node(*r_id) {
+                            push_node_entry(
+                                r_node,
+                                graph,
+                                tui_state,
+                                msg_content_width,
+                                &mut entries,
+                            );
+                        }
                     }
-                ) {
-                    highlight_triggers(&mut styled);
                 }
-                let has_thinking = graph.has_think_block(id);
-                let height = compute_styled_height(&styled, msg_content_width, has_thinking);
-                tui_state.render_cache.insert(
-                    id,
-                    CachedRender {
-                        styled_text: styled,
-                        height,
-                        has_thinking,
-                        cached_width: msg_content_width,
-                    },
-                );
             }
-            let c = &tui_state.render_cache[&id];
-            MessageEntry::Node {
-                node,
-                cache_key: id,
-                height: c.height,
-                has_thinking: c.has_thinking,
-            }
-        })
-        .collect();
+        }
+    }
 
     if let Some(ref streaming) = tui_state.streaming_response {
         let mut styled = render_markdown(streaming);
@@ -205,6 +204,75 @@ fn build_entries<'a>(
     }
 
     entries
+}
+
+fn push_node_entry<'a>(
+    node: &'a Node,
+    graph: &ConversationGraph,
+    tui_state: &mut TuiState,
+    msg_content_width: usize,
+    entries: &mut Vec<MessageEntry<'a>>,
+) {
+    let id = node.id();
+    let cached = tui_state.render_cache.get(&id);
+    let valid = cached.is_some_and(|c| c.cached_width == msg_content_width);
+    if !valid {
+        let content = display_content(node);
+        let mut styled = render_markdown(&content);
+        if matches!(
+            node,
+            Node::Message {
+                role: Role::User,
+                ..
+            }
+        ) {
+            highlight_triggers(&mut styled);
+        }
+        let has_thinking = graph.has_think_block(id);
+        let height = compute_styled_height(&styled, msg_content_width, has_thinking);
+        tui_state.render_cache.insert(
+            id,
+            CachedRender {
+                styled_text: styled,
+                height,
+                has_thinking,
+                cached_width: msg_content_width,
+            },
+        );
+    }
+    let c = &tui_state.render_cache[&id];
+    entries.push(MessageEntry::Node {
+        node,
+        cache_key: id,
+        height: c.height,
+        has_thinking: c.has_thinking,
+    });
+}
+
+const MAX_RESULT_LINES: usize = 20;
+
+fn display_content(node: &Node) -> Cow<'_, str> {
+    match node {
+        Node::ToolCall { arguments, .. } => Cow::Owned(arguments.display_summary()),
+        Node::ToolResult { content, .. } => {
+            let text = content.text_content();
+            let line_count = text.lines().count();
+            if line_count > MAX_RESULT_LINES {
+                let truncated: String = text
+                    .lines()
+                    .take(MAX_RESULT_LINES)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Cow::Owned(format!(
+                    "{truncated}\n[... {} more lines]",
+                    line_count - MAX_RESULT_LINES
+                ))
+            } else {
+                Cow::Borrowed(text)
+            }
+        }
+        _ => Cow::Borrowed(node.content()),
+    }
 }
 
 /// Compute the rendered height of styled text within a given content width.
@@ -230,123 +298,4 @@ fn compute_styled_height(text: &Text<'_>, content_width: usize, has_thinking: bo
         total_lines = 1;
     }
     total_lines + 2 // +2 for top/bottom border
-}
-
-fn role_label(node: &Node) -> &'static str {
-    match node {
-        Node::SystemDirective { .. } => "system",
-        Node::Message { role, .. } => match role {
-            Role::User => "you",
-            Role::Assistant => "assistant",
-            Role::System => "system",
-        },
-        Node::WorkItem { .. } => "task",
-        Node::GitFile { .. } => "file",
-        Node::Tool { .. } => "tool",
-        Node::BackgroundTask { .. } => "bg",
-        Node::ToolCall { .. } => "call",
-        Node::ToolResult { .. } => "result",
-        // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
-        Node::ThinkBlock { .. } => "think",
-    }
-}
-
-fn role_color(node: &Node) -> Color {
-    match node {
-        Node::Message { role, .. } => match role {
-            Role::User => Color::Cyan,
-            Role::Assistant => Color::Green,
-            Role::System => Color::DarkGray,
-        },
-        Node::WorkItem { .. } => Color::Yellow,
-        Node::GitFile { .. } => Color::Blue,
-        Node::Tool { .. } | Node::ToolCall { .. } => Color::Magenta,
-        Node::ToolResult { .. } => Color::Cyan,
-        // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
-        Node::SystemDirective { .. } | Node::BackgroundTask { .. } | Node::ThinkBlock { .. } => {
-            Color::DarkGray
-        }
-    }
-}
-
-fn metadata_string(node: &Node) -> String {
-    let tokens = node.input_tokens().or(node.output_tokens());
-    match tokens {
-        Some(t) => format!("{t} tokens"),
-        None => String::new(),
-    }
-}
-
-fn build_block(label: &str, metadata: &str, color: Color) -> Block<'static> {
-    let mut block = Block::default()
-        .title(Line::styled(
-            format!(" {label} "),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(color));
-
-    if !metadata.is_empty() {
-        block = block.title(
-            Line::styled(
-                format!(" {metadata} "),
-                Style::default().fg(Color::DarkGray),
-            )
-            .alignment(Alignment::Right),
-        );
-    }
-
-    block
-}
-
-fn render_message(
-    frame: &mut Frame,
-    area: Rect,
-    node: &Node,
-    styled_text: &Text<'static>,
-    clip_top: u16,
-    full_height: u16,
-    has_thinking: bool,
-) {
-    let label = role_label(node);
-    let color = role_color(node);
-    let metadata = metadata_string(node);
-    let block = build_block(label, &metadata, color);
-
-    let mut content = styled_text.clone();
-    if has_thinking {
-        content.lines.insert(
-            0,
-            Line::styled(
-                "[thinking...]",
-                Style::default().fg(Color::DarkGray).italic(),
-            ),
-        );
-    }
-
-    let paragraph = Paragraph::new(content)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((clip_top, 0));
-
-    let render_area = Rect::new(area.x, area.y, area.width, area.height.min(full_height));
-    frame.render_widget(paragraph, render_area);
-}
-
-fn render_streaming(
-    frame: &mut Frame,
-    area: Rect,
-    styled_text: &Text<'static>,
-    clip_top: u16,
-    full_height: u16,
-) {
-    let block = build_block("assistant", "", Color::Green);
-
-    let paragraph = Paragraph::new(styled_text.clone())
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((clip_top, 0));
-
-    let render_area = Rect::new(area.x, area.y, area.width, area.height.min(full_height));
-    frame.render_widget(paragraph, render_area);
 }
