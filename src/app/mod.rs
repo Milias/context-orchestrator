@@ -167,7 +167,7 @@ impl App {
                                 }
                             }
                             Action::ScrollUp | Action::ScrollDown => {
-                                self.tui_state.auto_scroll = false;
+                                self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
                                 self.tui_state.scroll_offset = if matches!(action, Action::ScrollUp) {
                                     self.tui_state.scroll_offset.saturating_sub(3)
                                 } else {
@@ -175,7 +175,7 @@ impl App {
                                 };
                             }
                             Action::PageUp | Action::PageDown => {
-                                self.tui_state.auto_scroll = false;
+                                self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
                                 let page = terminal.size()?.height / 2;
                                 self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
                                     self.tui_state.scroll_offset.saturating_sub(page)
@@ -240,7 +240,7 @@ impl App {
         // Set UI state for immediate feedback
         self.tui_state.agent_display = Some(AgentDisplayState::default());
         self.tui_state.status_message = Some("Counting tokens...".to_string());
-        self.tui_state.auto_scroll = true;
+        self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
         self.tui_state.scroll_offset = u16::MAX;
 
         // Create channels and cancellation for agent ↔ main loop communication

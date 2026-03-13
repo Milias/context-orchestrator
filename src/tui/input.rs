@@ -23,6 +23,11 @@ pub fn handle_key_event(
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('q') => return Action::Quit,
+            KeyCode::Char('e') => {
+                tui_state.tool_display = tui_state.tool_display.toggle();
+                tui_state.render_cache.clear();
+                return Action::None;
+            }
             KeyCode::Char('b') => {
                 tui_state.context_panel_visible = !tui_state.context_panel_visible;
                 if !tui_state.context_panel_visible && tui_state.focus == FocusPanel::ContextPanel {

@@ -137,6 +137,37 @@ impl AgentDisplayState {
     }
 }
 
+// ── UI toggle enums (avoid bare bools — clippy::struct_excessive_bools) ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollMode {
+    /// Automatically scroll to bottom on new content.
+    Auto,
+    /// User has manually scrolled; stay at current position.
+    Manual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolDisplayMode {
+    /// Show compact status lines only (icon + name + duration).
+    Compact,
+    /// Show status lines with result content expanded below.
+    Expanded,
+}
+
+impl ToolDisplayMode {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Compact => Self::Expanded,
+            Self::Expanded => Self::Compact,
+        }
+    }
+
+    pub fn is_expanded(self) -> bool {
+        self == Self::Expanded
+    }
+}
+
 // ── TUI state ────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -152,9 +183,7 @@ pub struct TuiState {
     pub context_panel_visible: bool,
     pub context_tab: ContextTab,
     pub context_list_offset: usize,
-    /// When true, new streaming chunks auto-scroll to the bottom.
-    /// Set to false when the user manually scrolls during streaming.
-    pub auto_scroll: bool,
+    pub scroll_mode: ScrollMode,
     /// Cached rendered markdown + height per message node ID.
     /// Avoids re-parsing markdown for historical messages on every frame.
     pub render_cache: HashMap<Uuid, CachedRender>,
@@ -166,6 +195,8 @@ pub struct TuiState {
     /// Node IDs of active tasks in the Running panel, updated each frame by the task list widget.
     /// Used by the input handler to map selection index → task UUID.
     pub active_task_ids: Vec<Uuid>,
+    /// Controls whether tool call results are shown inline in the conversation.
+    pub tool_display: ToolDisplayMode,
 }
 
 #[derive(Debug)]
@@ -189,12 +220,13 @@ impl TuiState {
             context_panel_visible: true,
             context_tab: ContextTab::Outline,
             context_list_offset: 0,
-            auto_scroll: true,
+            scroll_mode: ScrollMode::Auto,
             render_cache: HashMap::new(),
             autocomplete: AutocompleteState::default(),
             agent_display: None,
             task_selection: None,
             active_task_ids: Vec::new(),
+            tool_display: ToolDisplayMode::Compact,
         }
     }
 }

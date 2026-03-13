@@ -42,7 +42,7 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
     {
         let total_height: u16 = entries.iter().map(|e| e.height() as u16).sum();
         let max_scroll = total_height.saturating_sub(inner.height);
-        if tui_state.auto_scroll {
+        if tui_state.scroll_mode == crate::tui::ScrollMode::Auto {
             tui_state.scroll_offset = max_scroll;
         } else {
             tui_state.scroll_offset = tui_state.scroll_offset.min(max_scroll);
@@ -159,6 +159,11 @@ fn build_entries<'a>(
 ) -> Vec<MessageEntry<'a>> {
     let mut entries: Vec<MessageEntry<'a>> = Vec::new();
     let mut last_user_created_at: Option<DateTime<Utc>> = None;
+    let spinner_tick = tui_state
+        .agent_display
+        .as_ref()
+        .map_or(0, |d| d.spinner_tick);
+    let expanded = tui_state.tool_display.is_expanded();
 
     for node in history
         .iter()
@@ -176,7 +181,14 @@ fn build_entries<'a>(
                     .sources_by_edge(node.id(), EdgeKind::Invoked)
                     .is_empty()
             {
-                push_tool_indicators(node.id(), graph, tui_state, msg_content_width, &mut entries);
+                push_tool_status(
+                    node.id(),
+                    graph,
+                    spinner_tick,
+                    expanded,
+                    msg_content_width,
+                    &mut entries,
+                );
                 continue;
             }
         }
@@ -218,7 +230,14 @@ fn build_entries<'a>(
                 ..
             }
         ) {
-            push_tool_indicators(node.id(), graph, tui_state, msg_content_width, &mut entries);
+            push_tool_status(
+                node.id(),
+                graph,
+                spinner_tick,
+                expanded,
+                msg_content_width,
+                &mut entries,
+            );
         }
     }
 
@@ -234,25 +253,31 @@ fn build_entries<'a>(
     entries
 }
 
-fn push_tool_indicators<'a>(
+/// Render compact tool status lines for an assistant message's tool calls.
+fn push_tool_status(
     assistant_id: uuid::Uuid,
-    graph: &'a ConversationGraph,
-    tui_state: &mut TuiState,
+    graph: &ConversationGraph,
+    spinner_tick: usize,
+    expanded: bool,
     msg_content_width: usize,
-    entries: &mut Vec<MessageEntry<'a>>,
+    entries: &mut Vec<MessageEntry<'_>>,
 ) {
-    let tool_call_ids = graph.sources_by_edge(assistant_id, EdgeKind::Invoked);
-    for tc_id in &tool_call_ids {
-        if let Some(tc_node) = graph.node(*tc_id) {
-            push_node_entry(tc_node, None, graph, tui_state, msg_content_width, entries);
-            let result_ids = graph.sources_by_edge(*tc_id, EdgeKind::Produced);
-            for r_id in &result_ids {
-                if let Some(r_node) = graph.node(*r_id) {
-                    push_node_entry(r_node, None, graph, tui_state, msg_content_width, entries);
-                }
-            }
-        }
+    let lines = super::tool_status::build_tool_lines(
+        graph,
+        assistant_id,
+        spinner_tick,
+        msg_content_width,
+        expanded,
+    );
+    if lines.is_empty() {
+        return;
     }
+    let styled = Text::from(lines);
+    let height = compute_styled_height(&styled, msg_content_width, false);
+    entries.push(MessageEntry::Streaming {
+        styled_text: styled,
+        height,
+    });
 }
 
 fn append_agent_display(

@@ -150,7 +150,7 @@ impl App {
                 if let Some(ref mut d) = self.tui_state.agent_display {
                     d.phase = AgentVisualPhase::Streaming { text, is_thinking };
                 }
-                if self.tui_state.auto_scroll {
+                if self.tui_state.scroll_mode == crate::tui::ScrollMode::Auto {
                     self.tui_state.scroll_offset = u16::MAX;
                 }
             }
