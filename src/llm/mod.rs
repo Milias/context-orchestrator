@@ -42,17 +42,6 @@ pub struct ChatConfig {
     pub tools: Vec<ToolDefinition>,
 }
 
-impl ChatConfig {
-    pub fn from_app_config(config: &AppConfig) -> Self {
-        Self {
-            model: config.anthropic_model.clone(),
-            max_tokens: config.max_tokens,
-            system_prompt: None,
-            tools: Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum StreamChunk {
     TextDelta(String),

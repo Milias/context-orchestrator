@@ -1,212 +1,305 @@
 use crate::graph::tool_types::{ToolCallStatus, ToolResultContent};
-use crate::graph::{EdgeKind, Node};
-use crate::llm::ChatConfig;
-use crate::tasks::TaskMessage;
-use crate::tui::input::{self, Action};
-use crate::tui::ui;
+use crate::graph::{parse_tool_arguments, ConversationGraph, EdgeKind, Node, Role};
+use crate::llm::{ChatConfig, ChatMessage, LlmProvider, ToolDefinition};
+use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
+
+use super::agent_streaming::{self, send, StreamResult};
+use super::context;
 
 use chrono::Utc;
-use crossterm::event::{Event, EventStream, KeyEventKind};
-use futures::StreamExt;
-use ratatui::prelude::*;
 use std::collections::HashSet;
-use std::io;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
-use super::App;
+/// Configuration extracted from `AppConfig` for the agent loop.
+pub(super) struct AgentLoopConfig {
+    pub model: String,
+    pub max_tokens: u32,
+    pub max_context_tokens: u32,
+    pub max_tool_loop_iterations: usize,
+    pub tools: Vec<ToolDefinition>,
+}
 
-impl App {
-    /// Run the agent loop: stream LLM response, dispatch tool calls, wait for
-    /// results, and repeat until the LLM stops requesting tools or the iteration
-    /// limit is reached.
-    pub(super) async fn run_agent_loop(
-        &mut self,
-        config: &ChatConfig,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-        event_stream: &mut EventStream,
-    ) -> anyhow::Result<()> {
-        for _ in 0..self.config.max_tool_loop_iterations {
-            let (system_prompt, messages) = self.build_context().await?;
-            let loop_config = ChatConfig {
-                system_prompt,
-                ..config.clone()
-            };
+/// Spawn the agent loop as a background task.
+pub(super) fn spawn_agent_loop(
+    graph: ConversationGraph,
+    provider: Arc<dyn LlmProvider>,
+    config: AgentLoopConfig,
+    user_msg_id: Uuid,
+    task_tx: mpsc::UnboundedSender<TaskMessage>,
+    tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
+    cancel_rx: watch::Receiver<bool>,
+) {
+    tokio::spawn(async move {
+        let result = run_agent_loop(
+            graph,
+            provider,
+            config,
+            user_msg_id,
+            &task_tx,
+            tool_result_rx,
+            cancel_rx,
+        )
+        .await;
+        if let Err(e) = result {
+            let _ = task_tx.send(TaskMessage::Agent(AgentEvent::Error(e.to_string())));
+        }
+        let _ = task_tx.send(TaskMessage::Agent(AgentEvent::Finished));
+    });
+}
 
-            let result = self
-                .stream_llm_response(messages, &loop_config, terminal, event_stream)
-                .await?;
+async fn run_agent_loop(
+    mut graph: ConversationGraph,
+    provider: Arc<dyn LlmProvider>,
+    config: AgentLoopConfig,
+    user_msg_id: Uuid,
+    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    mut tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
+    cancel_rx: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    count_user_tokens(&graph, &provider, &config, user_msg_id, task_tx).await;
 
-            if self.tui_state.should_quit {
-                break;
-            }
+    let chat_config = ChatConfig {
+        model: config.model.clone(),
+        max_tokens: config.max_tokens,
+        system_prompt: None,
+        tools: config.tools.clone(),
+    };
 
-            if result.response.is_empty() && result.tool_use_records.is_empty() {
-                break;
-            }
+    for _ in 0..config.max_tool_loop_iterations {
+        send(task_tx, AgentEvent::Progress(AgentPhase::BuildingContext));
+        let (system_prompt, messages) = context::build_context(
+            &graph,
+            provider.as_ref(),
+            &config.model,
+            config.max_context_tokens,
+            &config.tools,
+        )
+        .await?;
 
-            let leaf = self
-                .graph
-                .branch_leaf(self.graph.active_branch())
-                .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
-            let assistant_id = Uuid::new_v4();
-            let assistant_node = Node::Message {
-                id: assistant_id,
-                role: crate::graph::Role::Assistant,
-                content: result.response,
-                created_at: Utc::now(),
-                model: Some(loop_config.model.clone()),
-                input_tokens: None,
-                output_tokens: result.output_tokens,
-            };
-            self.graph.add_message(leaf, assistant_node)?;
+        let loop_config = ChatConfig {
+            system_prompt,
+            ..chat_config.clone()
+        };
 
-            if !result.think_text.is_empty() {
-                let think_node = Node::ThinkBlock {
-                    id: Uuid::new_v4(),
-                    content: result.think_text,
-                    parent_message_id: assistant_id,
-                    created_at: Utc::now(),
-                };
-                let think_id = self.graph.add_node(think_node);
-                self.graph
-                    .add_edge(think_id, assistant_id, EdgeKind::ThinkingOf)?;
-            }
+        let result = agent_streaming::stream_llm_response(
+            &provider,
+            messages,
+            &loop_config,
+            task_tx,
+            &cancel_rx,
+        )
+        .await?;
 
-            let is_tool_use = result.stop_reason.as_deref() == Some("tool_use")
-                && !result.tool_use_records.is_empty();
-
-            if !is_tool_use {
-                // M-2: warn if LLM signaled tool_use but no blocks were parsed
-                if result.stop_reason.as_deref() == Some("tool_use") {
-                    self.tui_state.status_message =
-                        Some("Warning: LLM requested tool_use but no tool calls received".into());
-                }
-                break;
-            }
-
-            // Clear stale streaming text before tool execution (M-4)
-            self.tui_state.streaming_response = None;
-
-            let mut pending_ids = HashSet::new();
-            for record in &result.tool_use_records {
-                let args = crate::graph::parse_tool_arguments(&record.name, &record.input);
-                let api_id = Some(record.api_id.clone());
-                self.handle_tool_call_dispatched(record.tool_call_id, assistant_id, args, api_id);
-                pending_ids.insert(record.tool_call_id);
-            }
-
-            let timed_out = self
-                .wait_for_tool_completions(&mut pending_ids, terminal, event_stream)
-                .await?;
-
-            // M-1: don't retry after timeout — the LLM will just retry the same tools
-            if timed_out || self.tui_state.should_quit {
-                break;
-            }
+        if result.cancelled || (result.response.is_empty() && result.tool_use_records.is_empty()) {
+            break;
         }
 
-        self.tui_state.streaming_response = None;
-        self.tui_state.status_message = None;
-        self.save()?;
-        Ok(())
+        let assistant_id = apply_iteration_to_graph(&mut graph, &result, &loop_config, task_tx)?;
+
+        let is_tool_use = result.stop_reason.as_deref() == Some("tool_use")
+            && !result.tool_use_records.is_empty();
+
+        if !is_tool_use {
+            break;
+        }
+
+        let timed_out = dispatch_and_wait_for_tools(
+            &mut graph,
+            &result,
+            assistant_id,
+            &mut tool_result_rx,
+            task_tx,
+        )
+        .await;
+
+        if timed_out {
+            break;
+        }
     }
 
-    /// Wait for all pending tool calls to complete, keeping the TUI responsive.
-    /// Returns `true` if a timeout occurred.
-    async fn wait_for_tool_completions(
-        &mut self,
-        pending_ids: &mut HashSet<Uuid>,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-        event_stream: &mut EventStream,
-    ) -> anyhow::Result<bool> {
-        self.tui_state.status_message =
-            Some(format!("Executing {} tool call(s)...", pending_ids.len()));
-        terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
+    Ok(())
+}
 
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
-        let mut timed_out = false;
+/// Count user message tokens and notify the main loop.
+async fn count_user_tokens(
+    graph: &ConversationGraph,
+    provider: &Arc<dyn LlmProvider>,
+    config: &AgentLoopConfig,
+    user_msg_id: Uuid,
+    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+) {
+    send(task_tx, AgentEvent::Progress(AgentPhase::CountingTokens));
+    if let Some(Node::Message { content, .. }) = graph.node(user_msg_id) {
+        let msg = vec![ChatMessage::text("user", content)];
+        if let Ok(count) = provider.count_tokens(&msg, &config.model, None, &[]).await {
+            send(
+                task_tx,
+                AgentEvent::UserTokensCounted {
+                    node_id: user_msg_id,
+                    count,
+                },
+            );
+        }
+    }
+}
 
-        while !pending_ids.is_empty() {
-            tokio::select! {
-                // H-5: no `biased` — fair polling prevents starving task completions
+/// Add the assistant response and think block to the local graph, send `IterationDone`.
+fn apply_iteration_to_graph(
+    graph: &mut ConversationGraph,
+    result: &StreamResult,
+    config: &ChatConfig,
+    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+) -> anyhow::Result<Uuid> {
+    let assistant_id = Uuid::new_v4();
+    send(
+        task_tx,
+        AgentEvent::IterationDone {
+            response: result.response.clone(),
+            think_text: result.think_text.clone(),
+            output_tokens: result.output_tokens,
+            stop_reason: result.stop_reason.clone(),
+        },
+    );
 
-                maybe_event = event_stream.next() => {
-                    if let Some(Ok(Event::Key(key))) = maybe_event {
-                        if key.kind != KeyEventKind::Press { continue; }
-                        let action = input::handle_key_event(key, &mut self.tui_state);
-                        match action {
-                            Action::Quit => {
-                                self.tui_state.should_quit = true;
-                                break;
-                            }
-                            // H-1: handle scroll/page so TUI stays navigable
-                            Action::ScrollUp | Action::ScrollDown => {
-                                self.tui_state.scroll_offset = match action {
-                                    Action::ScrollUp => self.tui_state.scroll_offset.saturating_sub(3),
-                                    _ => self.tui_state.scroll_offset.saturating_add(3),
-                                };
-                            }
-                            Action::PageUp | Action::PageDown => {
-                                if let Ok(size) = terminal.size() {
-                                    let page = size.height / 2;
-                                    self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
-                                        self.tui_state.scroll_offset.saturating_sub(page)
-                                    } else {
-                                        self.tui_state.scroll_offset.saturating_add(page)
-                                    };
-                                }
-                            }
-                            // H-1: restore consumed input text — can't send during tool execution
-                            Action::SendMessage(text) => {
-                                self.tui_state.input_text = text;
-                                self.tui_state.input_cursor = self.tui_state.input_text.chars().count();
-                            }
-                            Action::None => {}
-                        }
-                    }
-                }
+    let leaf = graph
+        .branch_leaf(graph.active_branch())
+        .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
+    let assistant_node = Node::Message {
+        id: assistant_id,
+        role: Role::Assistant,
+        content: result.response.clone(),
+        created_at: Utc::now(),
+        model: Some(config.model.clone()),
+        input_tokens: None,
+        output_tokens: result.output_tokens,
+    };
+    graph.add_message(leaf, assistant_node)?;
 
-                Some(task_msg) = self.task_rx.recv() => {
-                    if let TaskMessage::ToolCallCompleted { tool_call_id, content, is_error } = task_msg {
-                        self.handle_tool_call_completed(tool_call_id, content, is_error);
-                        pending_ids.remove(&tool_call_id);
-                        self.tui_state.status_message = if pending_ids.is_empty() {
-                            None
-                        } else {
-                            Some(format!("Executing {} tool call(s)...", pending_ids.len()))
-                        };
-                    } else {
-                        self.handle_task_message(task_msg);
-                    }
-                }
+    if !result.think_text.is_empty() {
+        let think_node = Node::ThinkBlock {
+            id: Uuid::new_v4(),
+            content: result.think_text.clone(),
+            parent_message_id: assistant_id,
+            created_at: Utc::now(),
+        };
+        let think_id = graph.add_node(think_node);
+        graph.add_edge(think_id, assistant_id, EdgeKind::ThinkingOf)?;
+    }
 
-                () = tokio::time::sleep_until(deadline) => {
-                    for tc_id in pending_ids.drain() {
-                        let _ = self.graph.update_tool_call_status(
-                            tc_id,
-                            ToolCallStatus::Failed,
-                            Some(Utc::now()),
-                        );
-                        let result_id = Uuid::new_v4();
-                        let result_node = Node::ToolResult {
-                            id: result_id,
-                            tool_call_id: tc_id,
+    Ok(assistant_id)
+}
 
-                            content: ToolResultContent::text("Tool execution timed out"),
-                            is_error: true,
-                            created_at: Utc::now(),
-                        };
-                        self.graph.add_node(result_node);
-                        let _ = self.graph.add_edge(result_id, tc_id, EdgeKind::Produced);
-                    }
-                    self.tui_state.status_message = Some("Tool call(s) timed out".to_string());
-                    timed_out = true;
-                    break;
+/// Send tool call requests to main loop, add them to local graph, wait for results.
+async fn dispatch_and_wait_for_tools(
+    graph: &mut ConversationGraph,
+    result: &StreamResult,
+    assistant_id: Uuid,
+    tool_result_rx: &mut mpsc::UnboundedReceiver<AgentToolResult>,
+    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+) -> bool {
+    let mut pending_ids = HashSet::new();
+    for record in &result.tool_use_records {
+        send(
+            task_tx,
+            AgentEvent::ToolCallRequest {
+                tool_call_id: record.tool_call_id,
+                assistant_id,
+                api_id: record.api_id.clone(),
+                name: record.name.clone(),
+                input: record.input.clone(),
+            },
+        );
+        pending_ids.insert(record.tool_call_id);
+
+        let args = parse_tool_arguments(&record.name, &record.input);
+        let tool_call = Node::ToolCall {
+            id: record.tool_call_id,
+            api_tool_use_id: Some(record.api_id.clone()),
+            arguments: args,
+            status: ToolCallStatus::Running,
+            parent_message_id: assistant_id,
+            created_at: Utc::now(),
+            completed_at: None,
+        };
+        graph.add_node(tool_call);
+        let _ = graph.add_edge(record.tool_call_id, assistant_id, EdgeKind::Invoked);
+    }
+
+    send(
+        task_tx,
+        AgentEvent::Progress(AgentPhase::ExecutingTools {
+            count: pending_ids.len(),
+        }),
+    );
+
+    wait_for_tool_results(graph, &mut pending_ids, tool_result_rx, task_tx).await
+}
+
+/// Wait for all pending tool calls to complete. Returns `true` if timed out.
+async fn wait_for_tool_results(
+    graph: &mut ConversationGraph,
+    pending_ids: &mut HashSet<Uuid>,
+    tool_result_rx: &mut mpsc::UnboundedReceiver<AgentToolResult>,
+    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
+    while !pending_ids.is_empty() {
+        tokio::select! {
+            Some(result) = tool_result_rx.recv() => {
+                apply_tool_result(graph, &result);
+                pending_ids.remove(&result.tool_call_id);
+                if !pending_ids.is_empty() {
+                    send(task_tx, AgentEvent::Progress(AgentPhase::ExecutingTools {
+                        count: pending_ids.len(),
+                    }));
                 }
             }
-            terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
+            () = tokio::time::sleep_until(deadline) => {
+                timeout_pending_tools(graph, pending_ids);
+                send(task_tx, AgentEvent::Error("Tool call(s) timed out".into()));
+                return true;
+            }
         }
+    }
 
-        Ok(timed_out)
+    false
+}
+
+fn apply_tool_result(graph: &mut ConversationGraph, result: &AgentToolResult) {
+    let status = if result.is_error {
+        ToolCallStatus::Failed
+    } else {
+        ToolCallStatus::Completed
+    };
+    let _ = graph.update_tool_call_status(result.tool_call_id, status, Some(Utc::now()));
+    let result_id = Uuid::new_v4();
+    let result_node = Node::ToolResult {
+        id: result_id,
+        tool_call_id: result.tool_call_id,
+        content: result.content.clone(),
+        is_error: result.is_error,
+        created_at: Utc::now(),
+    };
+    graph.add_node(result_node);
+    let _ = graph.add_edge(result_id, result.tool_call_id, EdgeKind::Produced);
+}
+
+fn timeout_pending_tools(graph: &mut ConversationGraph, pending_ids: &mut HashSet<Uuid>) {
+    for tc_id in pending_ids.drain() {
+        let _ = graph.update_tool_call_status(tc_id, ToolCallStatus::Failed, Some(Utc::now()));
+        let result_id = Uuid::new_v4();
+        let result_node = Node::ToolResult {
+            id: result_id,
+            tool_call_id: tc_id,
+            content: ToolResultContent::text("Tool execution timed out"),
+            is_error: true,
+            created_at: Utc::now(),
+        };
+        graph.add_node(result_node);
+        let _ = graph.add_edge(result_id, tc_id, EdgeKind::Produced);
     }
 }

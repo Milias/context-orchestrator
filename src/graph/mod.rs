@@ -424,6 +424,13 @@ impl ConversationGraph {
             .any(|e| e.to == node_id && e.kind == EdgeKind::ThinkingOf)
     }
 
+    /// Set the `input_tokens` field on a `Message` node.
+    pub fn set_input_tokens(&mut self, node_id: Uuid, tokens: u32) {
+        if let Some(Node::Message { input_tokens, .. }) = self.nodes.get_mut(&node_id) {
+            *input_tokens = Some(tokens);
+        }
+    }
+
     /// Remove all nodes (and their edges) matching a predicate.
     pub fn remove_nodes_by<F: Fn(&Node) -> bool>(&mut self, filter: F) {
         let to_remove: Vec<Uuid> = self

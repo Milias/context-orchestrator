@@ -97,6 +97,10 @@ pub struct AutocompleteState {
     pub selected: usize,
 }
 
+// TUI state naturally uses independent boolean flags for orthogonal display concerns
+// (quit, panel visibility, auto-scroll, agent status). A state machine would add
+// complexity without benefit since these flags are read/written independently.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 pub struct TuiState {
     pub input_text: String,
@@ -119,6 +123,8 @@ pub struct TuiState {
     pub render_cache: HashMap<Uuid, CachedRender>,
     pub autocomplete: AutocompleteState,
     pub available_tools: Vec<CompletionCandidate>,
+    /// When true, an agent loop is running in the background.
+    pub agent_running: bool,
 }
 
 #[derive(Debug)]
@@ -147,6 +153,7 @@ impl TuiState {
             render_cache: HashMap::new(),
             autocomplete: AutocompleteState::default(),
             available_tools: Vec::new(),
+            agent_running: false,
         }
     }
 }

@@ -2,6 +2,7 @@ use crate::graph::{BackgroundTaskKind, GitFileStatus, TaskStatus, ToolResultCont
 use crate::llm::ChatMessage;
 use crate::tools::PlanExtractionResult;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -32,6 +33,80 @@ pub enum ToolExtractionOutcome {
     Plan(PlanExtractionResult),
 }
 
+// ── Agent loop types ─────────────────────────────────────────────────
+
+/// A `tool_use` block received during streaming.
+#[derive(Debug)]
+pub struct ToolUseRecord {
+    pub tool_call_id: Uuid,
+    /// The Anthropic-assigned `tool_use` ID (e.g. `toolu_xxx`).
+    pub api_id: String,
+    pub name: String,
+    pub input: String,
+}
+
+/// Progress phase of the background agent loop.
+#[derive(Debug, Clone)]
+pub enum AgentPhase {
+    CountingTokens,
+    BuildingContext,
+    Connecting { attempt: u32, max: u32 },
+    Receiving,
+    ExecutingTools { count: usize },
+}
+
+impl fmt::Display for AgentPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CountingTokens => write!(f, "Counting tokens..."),
+            Self::BuildingContext => write!(f, "Building context..."),
+            Self::Connecting { attempt, max } if *attempt > 1 => {
+                write!(f, "Connecting ({attempt}/{max})...")
+            }
+            Self::Connecting { .. } => write!(f, "Connecting..."),
+            Self::Receiving => write!(f, "Receiving..."),
+            Self::ExecutingTools { count } => write!(f, "Executing {count} tool call(s)..."),
+        }
+    }
+}
+
+/// Events sent from the background agent loop to the main event loop.
+#[derive(Debug)]
+pub enum AgentEvent {
+    Progress(AgentPhase),
+    UserTokensCounted {
+        node_id: Uuid,
+        count: u32,
+    },
+    StreamDelta {
+        text: String,
+        is_thinking: bool,
+    },
+    IterationDone {
+        response: String,
+        think_text: String,
+        output_tokens: Option<u32>,
+        stop_reason: Option<String>,
+    },
+    ToolCallRequest {
+        tool_call_id: Uuid,
+        assistant_id: Uuid,
+        api_id: String,
+        name: String,
+        input: String,
+    },
+    Finished,
+    Error(String),
+}
+
+/// Tool result forwarded from the main loop to the agent task.
+#[derive(Debug)]
+pub struct AgentToolResult {
+    pub tool_call_id: Uuid,
+    pub content: ToolResultContent,
+    pub is_error: bool,
+}
+
 #[derive(Debug)]
 pub enum TaskMessage {
     GitFilesUpdated(Vec<GitFileSnapshot>),
@@ -51,6 +126,7 @@ pub enum TaskMessage {
         content: ToolResultContent,
         is_error: bool,
     },
+    Agent(AgentEvent),
 }
 
 pub fn spawn_git_watcher(tx: mpsc::UnboundedSender<TaskMessage>) {

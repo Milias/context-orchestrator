@@ -1,6 +1,6 @@
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
-use crate::graph::{EdgeKind, Node};
-use crate::tasks::{TaskMessage, ToolExtractionOutcome};
+use crate::graph::{EdgeKind, Node, Role};
+use crate::tasks::{AgentEvent, AgentToolResult, TaskMessage, ToolExtractionOutcome};
 use crate::tool_executor;
 
 use chrono::Utc;
@@ -88,7 +88,101 @@ impl App {
                 content,
                 is_error,
             } => {
+                // Forward to running agent before applying to graph
+                if let Some(tx) = &self.agent_tool_tx {
+                    let _ = tx.send(AgentToolResult {
+                        tool_call_id,
+                        content: content.clone(),
+                        is_error,
+                    });
+                }
                 self.handle_tool_call_completed(tool_call_id, content, is_error);
+            }
+            TaskMessage::Agent(event) => self.handle_agent_event(event),
+        }
+    }
+
+    fn handle_agent_event(&mut self, event: AgentEvent) {
+        match event {
+            AgentEvent::Progress(phase) => {
+                self.tui_state.status_message = Some(phase.to_string());
+            }
+            AgentEvent::UserTokensCounted { node_id, count } => {
+                self.graph.set_input_tokens(node_id, count);
+            }
+            AgentEvent::StreamDelta { text, is_thinking } => {
+                self.tui_state.streaming_response = Some(text);
+                if is_thinking {
+                    self.tui_state.status_message = Some("Thinking...".to_string());
+                }
+                if self.tui_state.auto_scroll {
+                    self.tui_state.scroll_offset = u16::MAX;
+                }
+            }
+            AgentEvent::IterationDone {
+                response,
+                think_text,
+                output_tokens,
+                stop_reason,
+            } => {
+                self.tui_state.streaming_response = None;
+
+                let leaf = self
+                    .graph
+                    .branch_leaf(self.graph.active_branch())
+                    .expect("No leaf node for active branch");
+                let assistant_id = Uuid::new_v4();
+                let assistant_node = Node::Message {
+                    id: assistant_id,
+                    role: Role::Assistant,
+                    content: response,
+                    created_at: Utc::now(),
+                    model: Some(self.config.anthropic_model.clone()),
+                    input_tokens: None,
+                    output_tokens,
+                };
+                let _ = self.graph.add_message(leaf, assistant_node);
+
+                if !think_text.is_empty() {
+                    let think_node = Node::ThinkBlock {
+                        id: Uuid::new_v4(),
+                        content: think_text,
+                        parent_message_id: assistant_id,
+                        created_at: Utc::now(),
+                    };
+                    let think_id = self.graph.add_node(think_node);
+                    let _ = self
+                        .graph
+                        .add_edge(think_id, assistant_id, EdgeKind::ThinkingOf);
+                }
+
+                // Invalidate render cache for the new message
+                self.tui_state.render_cache.remove(&assistant_id);
+
+                if stop_reason.as_deref() == Some("tool_use") {
+                    self.tui_state.streaming_response = Some(String::new());
+                }
+            }
+            AgentEvent::ToolCallRequest {
+                tool_call_id,
+                assistant_id,
+                api_id,
+                name,
+                input,
+            } => {
+                let args = crate::graph::parse_tool_arguments(&name, &input);
+                self.handle_tool_call_dispatched(tool_call_id, assistant_id, args, Some(api_id));
+            }
+            AgentEvent::Finished => {
+                self.tui_state.agent_running = false;
+                self.tui_state.streaming_response = None;
+                self.tui_state.status_message = None;
+                self.agent_tool_tx = None;
+                self.cancel_tx = None;
+                let _ = self.save();
+            }
+            AgentEvent::Error(msg) => {
+                self.tui_state.error_message = Some(msg);
             }
         }
     }

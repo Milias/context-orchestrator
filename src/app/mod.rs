@@ -1,14 +1,14 @@
 mod agent_loop;
+mod agent_streaming;
 mod context;
-mod streaming;
 mod task_handler;
 mod think_splitter;
 
 use crate::config::AppConfig;
 use crate::graph::{ConversationGraph, Node, Role};
-use crate::llm::{BackgroundLlmConfig, ChatConfig, ChatMessage, LlmProvider};
+use crate::llm::{BackgroundLlmConfig, ChatMessage, LlmProvider};
 use crate::persistence::{self, ConversationMetadata};
-use crate::tasks::{self, ContextSnapshot, TaskMessage};
+use crate::tasks::{self, AgentToolResult, ContextSnapshot, TaskMessage};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
 use crate::tui::{self, TuiState};
@@ -16,10 +16,8 @@ use crate::tui::{self, TuiState};
 use chrono::Utc;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
-use ratatui::prelude::*;
-use std::io;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, watch, Semaphore};
 use uuid::Uuid;
 
 pub struct App {
@@ -31,6 +29,10 @@ pub struct App {
     tui_state: TuiState,
     task_rx: mpsc::UnboundedReceiver<TaskMessage>,
     task_tx: mpsc::UnboundedSender<TaskMessage>,
+    /// Sender for forwarding tool completions to the running agent.
+    agent_tool_tx: Option<mpsc::UnboundedSender<AgentToolResult>>,
+    /// Sender to signal cancellation to the running agent.
+    cancel_tx: Option<watch::Sender<bool>>,
 }
 
 impl App {
@@ -51,6 +53,8 @@ impl App {
             tui_state: TuiState::new(),
             task_rx,
             task_tx,
+            agent_tool_tx: None,
+            cancel_tx: None,
         }
     }
 
@@ -124,13 +128,28 @@ impl App {
                         let action = input::handle_key_event(key, &mut self.tui_state);
                         match action {
                             Action::Quit => {
+                                // Signal cancellation to any running agent
+                                if let Some(tx) = self.cancel_tx.take() {
+                                    let _ = tx.send(true);
+                                }
+                                self.agent_tool_tx = None;
                                 self.save()?;
                                 break;
                             }
                             Action::SendMessage(text) => {
-                                self.handle_send_message(text, &mut terminal, &mut event_stream).await?;
+                                if self.tui_state.agent_running {
+                                    // Can't send while agent is running; restore input
+                                    self.tui_state.input_text = text;
+                                    self.tui_state.input_cursor =
+                                        self.tui_state.input_text.chars().count();
+                                } else {
+                                    self.handle_send_message(text)?;
+                                }
                             }
                             Action::ScrollUp | Action::ScrollDown => {
+                                if self.tui_state.agent_running {
+                                    self.tui_state.auto_scroll = false;
+                                }
                                 self.tui_state.scroll_offset = if matches!(action, Action::ScrollUp) {
                                     self.tui_state.scroll_offset.saturating_sub(3)
                                 } else {
@@ -138,6 +157,9 @@ impl App {
                                 };
                             }
                             Action::PageUp | Action::PageDown => {
+                                if self.tui_state.agent_running {
+                                    self.tui_state.auto_scroll = false;
+                                }
                                 let page = terminal.size()?.height / 2;
                                 self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
                                     self.tui_state.scroll_offset.saturating_sub(page)
@@ -161,31 +183,14 @@ impl App {
         Ok(())
     }
 
-    async fn handle_send_message(
-        &mut self,
-        text: String,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-        event_stream: &mut EventStream,
-    ) -> anyhow::Result<()> {
+    /// Send a message: add user node to graph, spawn agent loop, return immediately.
+    fn handle_send_message(&mut self, text: String) -> anyhow::Result<()> {
         self.tui_state.error_message = None;
 
         let parent_id = self
             .graph
             .branch_leaf(self.graph.active_branch())
             .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
-
-        let single = vec![ChatMessage::text("user", &text)];
-        let user_tokens = match self
-            .provider
-            .count_tokens(&single, &self.config.anthropic_model, None, &[])
-            .await
-        {
-            Ok(count) => Some(count),
-            Err(e) => {
-                self.tui_state.error_message = Some(format!("Token count failed: {e}"));
-                None
-            }
-        };
 
         let text_for_triggers = text.clone();
         let user_node = Node::Message {
@@ -194,20 +199,46 @@ impl App {
             content: text,
             created_at: Utc::now(),
             model: None,
-            input_tokens: user_tokens,
+            input_tokens: None, // filled asynchronously by agent
             output_tokens: None,
         };
         let user_msg_id = self.graph.add_message(parent_id, user_node)?;
 
         self.spawn_tool_triggers(&text_for_triggers, user_msg_id);
 
-        let config = ChatConfig {
-            system_prompt: None,
+        // Set UI state for immediate feedback
+        self.tui_state.agent_running = true;
+        self.tui_state.streaming_response = Some(String::new());
+        self.tui_state.status_message = Some("Counting tokens...".to_string());
+        self.tui_state.auto_scroll = true;
+        self.tui_state.scroll_offset = u16::MAX;
+
+        // Create channels for agent ↔ main loop communication
+        let (agent_tool_tx, agent_tool_rx) = mpsc::unbounded_channel();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        self.agent_tool_tx = Some(agent_tool_tx);
+        self.cancel_tx = Some(cancel_tx);
+
+        // Spawn agent loop with graph clone
+        let loop_config = agent_loop::AgentLoopConfig {
+            model: self.config.anthropic_model.clone(),
+            max_tokens: self.config.max_tokens,
+            max_context_tokens: self.config.max_context_tokens,
+            max_tool_loop_iterations: self.config.max_tool_loop_iterations,
             tools: crate::tool_executor::registered_tool_definitions(),
-            ..ChatConfig::from_app_config(&self.config)
         };
 
-        self.run_agent_loop(&config, terminal, event_stream).await
+        agent_loop::spawn_agent_loop(
+            self.graph.clone(),
+            Arc::clone(&self.provider),
+            loop_config,
+            user_msg_id,
+            self.task_tx.clone(),
+            agent_tool_rx,
+            cancel_rx,
+        );
+
+        Ok(())
     }
 
     fn spawn_tool_triggers(&self, text: &str, user_msg_id: Uuid) {
@@ -224,7 +255,7 @@ impl App {
         }
     }
 
-    fn save(&self) -> anyhow::Result<()> {
+    pub(super) fn save(&self) -> anyhow::Result<()> {
         let mut metadata = self.metadata.clone();
         metadata.last_modified = Utc::now();
         persistence::save_conversation(&metadata.id, &metadata, &self.graph)

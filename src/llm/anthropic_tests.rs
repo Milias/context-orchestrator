@@ -119,7 +119,12 @@ async fn test_real_api_call() {
     let app_config = AppConfig::load().unwrap();
     let provider = AnthropicProvider::from_config(&app_config).unwrap();
     let messages = vec![ChatMessage::text("user", "Say hello in exactly 3 words.")];
-    let config = ChatConfig::from_app_config(&app_config);
+    let config = ChatConfig {
+        model: app_config.anthropic_model.clone(),
+        max_tokens: app_config.max_tokens,
+        system_prompt: None,
+        tools: Vec::new(),
+    };
     let mut stream = provider.chat(messages, &config).await.unwrap();
 
     let mut full_text = String::new();
