@@ -99,12 +99,11 @@ impl App {
                 self.handle_tool_call_completed(tool_call_id, content, is_error);
             }
             TaskMessage::UserToolResult {
-                trigger_message_id,
-                tool_name,
+                arguments,
                 content,
                 is_error,
             } => {
-                self.handle_user_tool_result(trigger_message_id, &tool_name, &content, is_error);
+                self.handle_user_tool_result(&arguments, &content, is_error);
             }
             TaskMessage::Agent(event) => self.handle_agent_event(event),
         }
@@ -329,6 +328,18 @@ impl App {
             }
         }
 
+        // Apply `set` config mutation for both user-triggered and LLM-triggered calls.
+        if !is_error {
+            if let Some(Node::ToolCall {
+                arguments: ToolCallArguments::Set { key, value },
+                ..
+            }) = self.graph.node(tool_call_id)
+            {
+                let (k, v) = (key.clone(), value.clone());
+                crate::tool_executor::apply_config_set(&mut self.config, &k, &v);
+            }
+        }
+
         let new_status = if is_error {
             ToolCallStatus::Failed
         } else {
@@ -344,25 +355,16 @@ impl App {
     /// Handle the result of a user-triggered tool (via `/tool_name args`).
     fn handle_user_tool_result(
         &mut self,
-        trigger_message_id: Uuid,
-        tool_name: &str,
+        arguments: &ToolCallArguments,
         content: &ToolResultContent,
         is_error: bool,
     ) {
         // For the `set` tool, apply the config mutation in the main event loop
         // (the executor validated the key/value; we apply the side effect here
         // where `&mut self.config` is available).
-        if tool_name == "set" && !is_error {
-            if let Some(Node::Message { content, .. }) = self.graph.node(trigger_message_id) {
-                let content = content.clone();
-                for trigger in crate::tools::parse_triggers(&content) {
-                    if trigger.tool_name == "set" {
-                        let mut parts = trigger.args.splitn(2, ' ');
-                        let key = parts.next().unwrap_or("").trim();
-                        let value = parts.next().unwrap_or("").trim();
-                        crate::tool_executor::apply_config_set(&mut self.config, key, value);
-                    }
-                }
+        if let ToolCallArguments::Set { key, value } = arguments {
+            if !is_error {
+                crate::tool_executor::apply_config_set(&mut self.config, key, value);
             }
         }
         self.tui_state.status_message =

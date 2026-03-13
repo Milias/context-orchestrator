@@ -217,42 +217,56 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
 /// Validate a `set` command. The actual config mutation happens in the task handler
 /// (which has access to `&mut AppConfig`), not here.
 fn execute_set(key: &str, value: &str) -> ToolExecutionResult {
-    if !VALID_SET_KEYS.contains(&key) {
-        return ToolExecutionResult {
-            content: ToolResultContent::text(format!(
-                "Unknown config key: {key}. Valid keys: {}",
-                VALID_SET_KEYS.join(", ")
-            )),
-            is_error: true,
-        };
+    if value.is_empty() {
+        return set_err(format!("Missing value for {key}"));
     }
-    // Validate parsability for numeric keys
-    match key {
-        "max_tokens" | "max_context_tokens" => {
-            if value.parse::<u32>().is_err() {
-                return ToolExecutionResult {
-                    content: ToolResultContent::text(format!(
-                        "Invalid value for {key}: expected a number"
-                    )),
-                    is_error: true,
-                };
-            }
-        }
-        "max_tool_loop_iterations" => {
-            if value.parse::<usize>().is_err() {
-                return ToolExecutionResult {
-                    content: ToolResultContent::text(format!(
-                        "Invalid value for {key}: expected a number"
-                    )),
-                    is_error: true,
-                };
-            }
-        }
-        _ => {} // "model" accepts any string
+    if !VALID_SET_KEYS.contains(&key) {
+        return set_err(format!(
+            "Unknown config key: {key}. Valid keys: {}",
+            VALID_SET_KEYS.join(", ")
+        ));
+    }
+    if let Err(msg) = validate_set_value(key, value) {
+        return set_err(msg);
     }
     ToolExecutionResult {
         content: ToolResultContent::text(format!("{key} set to {value}")),
         is_error: false,
+    }
+}
+
+/// Validate value range for numeric config keys.
+fn validate_set_value(key: &str, value: &str) -> Result<(), String> {
+    match key {
+        "max_tokens" => validate_u32_range(key, value, 1, 128_000),
+        "max_context_tokens" => validate_u32_range(key, value, 1000, 1_000_000),
+        "max_tool_loop_iterations" => {
+            let v = value
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid value for {key}: expected a number"))?;
+            if v == 0 || v > 100 {
+                return Err(format!("{key} must be between 1 and 100"));
+            }
+            Ok(())
+        }
+        _ => Ok(()), // "model" accepts any non-empty string
+    }
+}
+
+fn validate_u32_range(key: &str, value: &str, min: u32, max: u32) -> Result<(), String> {
+    let v = value
+        .parse::<u32>()
+        .map_err(|_| format!("Invalid value for {key}: expected a number"))?;
+    if v < min || v > max {
+        return Err(format!("{key} must be between {min} and {max}"));
+    }
+    Ok(())
+}
+
+fn set_err(msg: String) -> ToolExecutionResult {
+    ToolExecutionResult {
+        content: ToolResultContent::text(msg),
+        is_error: true,
     }
 }
 

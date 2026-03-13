@@ -103,14 +103,11 @@ pub fn spawn_trigger_handler(
             run_plan_extraction(trigger.args, snapshot, provider, semaphore, bg_config, tx).await;
         });
     } else {
-        let args = parse_user_trigger_args(&trigger.tool_name, &trigger.args);
-        let tool_name = trigger.tool_name;
-        let trigger_id = snapshot.trigger_message_id;
+        let arguments = parse_user_trigger_args(&trigger.tool_name, &trigger.args);
         tokio::spawn(async move {
-            let result = crate::tool_executor::execute_tool(&args).await;
+            let result = crate::tool_executor::execute_tool(&arguments).await;
             let _ = tx.send(TaskMessage::UserToolResult {
-                trigger_message_id: trigger_id,
-                tool_name,
+                arguments,
                 content: result.content,
                 is_error: result.is_error,
             });

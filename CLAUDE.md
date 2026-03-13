@@ -1,5 +1,9 @@
 # Project Rules
 
+- Use Rust language features FIRST: enums, structs, traits. Keep arguments to
+  functions to a minimum, prefer builder pattern. Avoid individual functions
+  unless they are helpers or they meaningfully connect multiple other structs.
+  Write IDIOMATIC RUST.
 - Never use `serde_json::Value`. Always define typed structs with
   `Serialize`/`Deserialize`. This applies to both request bodies and response
   parsing.
@@ -32,9 +36,6 @@
   comments: `//` or `///`.
 - EVERY test must answer the question "what bug does this test catch?" If there
   isn't a valid answer, especially if it is low effort, remove the test.
-- Use Rust language features FIRST: enums, structs, traits. Keep arguments to
-  functions to a minimum, prefer builder pattern. Avoid individual functions
-  unless they are helpers or they meaningfully connect multiple other structs.
 
 # Planning
 

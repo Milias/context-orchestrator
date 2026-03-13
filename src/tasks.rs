@@ -135,8 +135,7 @@ pub enum TaskMessage {
     },
     /// Result of a user-triggered tool (via `/tool_name args`).
     UserToolResult {
-        trigger_message_id: Uuid,
-        tool_name: String,
+        arguments: crate::graph::ToolCallArguments,
         content: ToolResultContent,
         is_error: bool,
     },

@@ -148,7 +148,12 @@ async fn run_agent_loop(
             continuation_count = 0;
         }
 
-        if !is_tool_use && !is_truncated {
+        if is_tool_use {
+            // Execute tool calls and wait for results before next iteration.
+        } else if is_truncated {
+            // Auto-continue: skip tool dispatch, loop directly to next iteration.
+            continue;
+        } else {
             break;
         }
 
