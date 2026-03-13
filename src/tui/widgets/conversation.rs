@@ -154,7 +154,13 @@ fn build_entries<'a>(
             let valid = cached.is_some_and(|c| c.cached_width == msg_content_width);
             if !valid {
                 let mut styled = render_markdown(node.content());
-                if matches!(node, Node::Message { role: Role::User, .. }) {
+                if matches!(
+                    node,
+                    Node::Message {
+                        role: Role::User,
+                        ..
+                    }
+                ) {
                     highlight_triggers(&mut styled);
                 }
                 let has_thinking = graph.has_think_block(id);

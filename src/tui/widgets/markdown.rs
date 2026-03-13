@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use streamdown_parser::{InlineElement, ParseEvent, Parser};
+use streamdown_parser::{InlineElement, InlineParser, ParseEvent, Parser};
 use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
 
@@ -187,6 +187,16 @@ fn push_inline(spans: &mut Vec<Span<'static>>, elem: &InlineElement) {
     }
 }
 
+/// Parse inline markdown in a content string and return styled spans.
+fn parse_inline_spans(content: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let elements = InlineParser::new().parse(content);
+    for elem in &elements {
+        push_inline(&mut spans, elem);
+    }
+    spans
+}
+
 fn push_parse_inline(spans: &mut Vec<Span<'static>>, event: &ParseEvent) {
     match event {
         ParseEvent::Text(s) | ParseEvent::Prompt(s) => spans.push(Span::raw(s.clone())),
@@ -267,10 +277,12 @@ fn process_event(event: &ParseEvent, lines: &mut Vec<Line<'static>>, ctx: &mut R
         ParseEvent::Heading { level, content } => {
             ctx.flush_inline(lines);
             let prefix = "#".repeat(*level as usize);
-            lines.push(Line::styled(
-                format!("{prefix} {content}"),
-                heading_style(*level),
-            ));
+            let style = heading_style(*level);
+            let mut spans = vec![Span::styled(format!("{prefix} "), style)];
+            for span in parse_inline_spans(content) {
+                spans.push(Span::styled(span.content, style.patch(span.style)));
+            }
+            lines.push(Line::from(spans));
         }
         ParseEvent::InlineElements(elements) => {
             for elem in elements {
@@ -320,10 +332,12 @@ fn process_block_event(
                 streamdown_parser::ListBullet::Ordered(n) => format!("{n}."),
                 _ => "\u{2022}".to_string(),
             };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{pad}{marker} "), Style::default().fg(Color::Cyan)),
-                Span::raw(content.clone()),
-            ]));
+            let mut spans = vec![Span::styled(
+                format!("{pad}{marker} "),
+                Style::default().fg(Color::Cyan),
+            )];
+            spans.extend(parse_inline_spans(content));
+            lines.push(Line::from(spans));
         }
         ParseEvent::TableHeader(cells) => {
             ctx.flush_inline(lines);
@@ -344,10 +358,15 @@ fn process_block_event(
             table.flush(lines);
         }
         ParseEvent::BlockquoteLine(text) => {
-            lines.push(Line::from(vec![
-                Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-                Span::styled(text.clone(), Style::default().fg(Color::Gray)),
-            ]));
+            let base = Style::default().fg(Color::Gray);
+            let mut spans = vec![Span::styled(
+                "\u{2502} ",
+                Style::default().fg(Color::DarkGray),
+            )];
+            for span in parse_inline_spans(text) {
+                spans.push(Span::styled(span.content, base.patch(span.style)));
+            }
+            lines.push(Line::from(spans));
         }
         _ => {}
     }
@@ -466,6 +485,57 @@ mod tests {
     fn empty_content_produces_empty_text() {
         let text = render_markdown("");
         assert!(text.lines.is_empty());
+    }
+
+    #[test]
+    fn bold_in_list_item() {
+        let text = render_markdown("- **bold** item");
+        let spans: Vec<&Span> = text.lines.iter().flat_map(|l| l.spans.iter()).collect();
+        let bold_span = spans.iter().find(|s| s.content.contains("bold"));
+        assert!(bold_span.is_some(), "Should have a span containing 'bold'");
+        assert!(
+            bold_span
+                .unwrap()
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD),
+            "bold span should have BOLD modifier"
+        );
+    }
+
+    #[test]
+    fn bold_in_heading() {
+        let text = render_markdown("## **Important**");
+        let spans: Vec<&Span> = text.lines.iter().flat_map(|l| l.spans.iter()).collect();
+        let bold_span = spans.iter().find(|s| s.content.contains("Important"));
+        assert!(bold_span.is_some());
+        assert!(bold_span
+            .unwrap()
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn bold_in_blockquote() {
+        let text = render_markdown("> **quoted bold**");
+        let spans: Vec<&Span> = text.lines.iter().flat_map(|l| l.spans.iter()).collect();
+        let bold_span = spans.iter().find(|s| s.content.contains("quoted bold"));
+        assert!(bold_span.is_some());
+        assert!(bold_span
+            .unwrap()
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn inline_code_in_list_item() {
+        let text = render_markdown("- Use `code` here");
+        let spans: Vec<&Span> = text.lines.iter().flat_map(|l| l.spans.iter()).collect();
+        let code_span = spans.iter().find(|s| s.content.contains("code"));
+        assert!(code_span.is_some());
+        assert_eq!(code_span.unwrap().style.bg, Some(CODE_BG));
     }
 
     #[test]
