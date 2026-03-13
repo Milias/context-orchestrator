@@ -98,13 +98,6 @@ impl App {
                 }
                 self.handle_tool_call_completed(tool_call_id, content, is_error);
             }
-            TaskMessage::UserToolResult {
-                arguments,
-                content,
-                is_error,
-            } => {
-                self.handle_user_tool_result(&arguments, &content, is_error);
-            }
             TaskMessage::Agent(event) => self.handle_agent_event(event),
         }
     }
@@ -350,25 +343,6 @@ impl App {
             .update_tool_call_status(tool_call_id, new_status, Some(Utc::now()));
         self.graph.add_tool_result(tool_call_id, content, is_error);
         self.task_tokens.remove(&tool_call_id);
-    }
-
-    /// Handle the result of a user-triggered tool (via `/tool_name args`).
-    fn handle_user_tool_result(
-        &mut self,
-        arguments: &ToolCallArguments,
-        content: &ToolResultContent,
-        is_error: bool,
-    ) {
-        // For the `set` tool, apply the config mutation in the main event loop
-        // (the executor validated the key/value; we apply the side effect here
-        // where `&mut self.config` is available).
-        if let ToolCallArguments::Set { key, value } = arguments {
-            if !is_error {
-                crate::tool_executor::apply_config_set(&mut self.config, key, value);
-            }
-        }
-        self.tui_state.status_message =
-            Some(content.text_content().chars().take(80).collect::<String>());
     }
 
     /// Cancel a running task by its graph node ID.

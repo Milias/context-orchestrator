@@ -133,12 +133,6 @@ pub enum TaskMessage {
         content: ToolResultContent,
         is_error: bool,
     },
-    /// Result of a user-triggered tool (via `/tool_name args`).
-    UserToolResult {
-        arguments: crate::graph::ToolCallArguments,
-        content: ToolResultContent,
-        is_error: bool,
-    },
     Agent(AgentEvent),
 }
 

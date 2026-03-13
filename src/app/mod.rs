@@ -222,7 +222,7 @@ impl App {
 
         let parent_id = self.graph.active_leaf()?;
 
-        let text_for_triggers = text.clone();
+        let trigger_text = text.clone();
         let user_node = Node::Message {
             id: Uuid::new_v4(),
             role: Role::User,
@@ -235,7 +235,7 @@ impl App {
         };
         let user_msg_id = self.graph.add_message(parent_id, user_node)?;
 
-        self.spawn_tool_triggers(&text_for_triggers, user_msg_id);
+        self.dispatch_user_triggers(&trigger_text, user_msg_id);
 
         // Set UI state for immediate feedback
         self.tui_state.agent_display = Some(AgentDisplayState::default());
@@ -271,17 +271,26 @@ impl App {
         Ok(())
     }
 
-    fn spawn_tool_triggers(&self, text: &str, user_msg_id: Uuid) {
+    /// Dispatch user triggers through the same pipeline as LLM tool calls.
+    /// `/plan` uses LLM extraction (argument resolution); all others go through
+    /// `handle_tool_call_dispatched` → `spawn_tool_execution` → `ToolCallCompleted`.
+    fn dispatch_user_triggers(&mut self, text: &str, user_msg_id: Uuid) {
         for trigger in crate::tools::parse_triggers(text) {
-            let snapshot = self.snapshot_context(user_msg_id);
-            crate::tools::spawn_trigger_handler(
-                trigger,
-                snapshot,
-                Arc::clone(&self.provider),
-                Arc::clone(&self.background_semaphore),
-                BackgroundLlmConfig::from_app_config(&self.config),
-                self.task_tx.clone(),
-            );
+            if trigger.tool_name == "plan" {
+                let snapshot = self.snapshot_context(user_msg_id);
+                crate::tools::spawn_plan_extraction(
+                    trigger.args,
+                    snapshot,
+                    Arc::clone(&self.provider),
+                    Arc::clone(&self.background_semaphore),
+                    BackgroundLlmConfig::from_app_config(&self.config),
+                    self.task_tx.clone(),
+                );
+            } else {
+                let args = crate::tools::parse_user_trigger_args(&trigger.tool_name, &trigger.args);
+                let tool_call_id = Uuid::new_v4();
+                self.handle_tool_call_dispatched(tool_call_id, user_msg_id, args, None);
+            }
         }
     }
 

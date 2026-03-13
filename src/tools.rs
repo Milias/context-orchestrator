@@ -53,7 +53,7 @@ pub fn parse_triggers(text: &str) -> Vec<ParsedTrigger> {
 }
 
 /// Parse positional user trigger args into typed `ToolCallArguments`.
-fn parse_user_trigger_args(tool_name: &str, args: &str) -> ToolCallArguments {
+pub fn parse_user_trigger_args(tool_name: &str, args: &str) -> ToolCallArguments {
     match tool_name {
         "set" => {
             let mut parts = args.splitn(2, ' ');
@@ -85,37 +85,23 @@ fn parse_user_trigger_args(tool_name: &str, args: &str) -> ToolCallArguments {
     }
 }
 
-// ── Trigger Dispatch ────────────────────────────────────────────────
+// ── LLM Extraction (plan) ──────────────────────────────────────────
 
-/// Spawn the appropriate handler for a user trigger.
-/// - `plan` → LLM extraction (background LLM call to extract structured args)
-/// - Everything else → direct execution via `execute_tool()`
-pub fn spawn_trigger_handler(
-    trigger: ParsedTrigger,
+/// Spawn a background LLM call to extract structured plan args from free text.
+/// Only used for `/plan` triggers — all other tools go through the unified
+/// `handle_tool_call_dispatched` → `spawn_tool_execution` path.
+pub fn spawn_plan_extraction(
+    user_args: String,
     snapshot: ContextSnapshot,
     provider: Arc<dyn LlmProvider>,
     semaphore: Arc<Semaphore>,
     bg_config: BackgroundLlmConfig,
     tx: mpsc::UnboundedSender<TaskMessage>,
 ) {
-    if trigger.tool_name == "plan" {
-        tokio::spawn(async move {
-            run_plan_extraction(trigger.args, snapshot, provider, semaphore, bg_config, tx).await;
-        });
-    } else {
-        let arguments = parse_user_trigger_args(&trigger.tool_name, &trigger.args);
-        tokio::spawn(async move {
-            let result = crate::tool_executor::execute_tool(&arguments).await;
-            let _ = tx.send(TaskMessage::UserToolResult {
-                arguments,
-                content: result.content,
-                is_error: result.is_error,
-            });
-        });
-    }
+    tokio::spawn(async move {
+        run_plan_extraction(user_args, snapshot, provider, semaphore, bg_config, tx).await;
+    });
 }
-
-// ── LLM Extraction (plan) ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanExtractionResult {
