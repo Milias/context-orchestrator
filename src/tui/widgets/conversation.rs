@@ -157,22 +157,12 @@ fn build_entries<'a>(
     msg_content_width: usize,
 ) -> Vec<MessageEntry<'a>> {
     let mut entries: Vec<MessageEntry<'a>> = Vec::new();
-
-    let in_progress_ids: Vec<uuid::Uuid> = tui_state
-        .agent_display
-        .as_ref()
-        .map_or_else(Vec::new, |d| d.iteration_node_ids.clone());
-
     let mut last_user_created_at: Option<DateTime<Utc>> = None;
 
     for node in history
         .iter()
         .filter(|n| !matches!(n, Node::ThinkBlock { .. }))
     {
-        if in_progress_ids.contains(&node.id()) {
-            continue;
-        }
-
         // Skip empty assistant messages that have tool call children
         if let Node::Message {
             role: Role::Assistant,
@@ -231,26 +221,13 @@ fn build_entries<'a>(
         }
     }
 
-    // Clone info before mutable borrow for push_tool_indicators
-    let agent_info = tui_state.agent_display.as_ref().map(|d| {
-        (
-            d.iteration_node_ids.clone(),
-            tui_state.status_message.clone(),
-        )
-    });
-    if let Some((ids, status)) = &agent_info {
-        if let Some(ref display) = tui_state.agent_display {
-            append_agent_display(
-                display,
-                graph,
-                status.as_ref(),
-                msg_content_width,
-                &mut entries,
-            );
-        }
-        for id in ids {
-            push_tool_indicators(*id, graph, tui_state, msg_content_width, &mut entries);
-        }
+    if let Some(ref display) = tui_state.agent_display {
+        append_agent_display(
+            display,
+            tui_state.status_message.as_ref(),
+            msg_content_width,
+            &mut entries,
+        );
     }
 
     entries
@@ -279,22 +256,15 @@ fn push_tool_indicators<'a>(
 
 fn append_agent_display(
     display: &crate::tui::AgentDisplayState,
-    graph: &ConversationGraph,
     status_message: Option<&String>,
     msg_content_width: usize,
     entries: &mut Vec<MessageEntry<'_>>,
 ) {
-    let accumulated = display.accumulated_text(graph);
     match &display.phase {
-        AgentVisualPhase::Preparing => {
+        AgentVisualPhase::Preparing | AgentVisualPhase::ExecutingTools => {
             let status = status_message.map_or("Preparing...", String::as_str);
             let spinner = display.spinner_char();
-            let mut styled = if accumulated.is_empty() {
-                Text::default()
-            } else {
-                render_markdown(&accumulated)
-            };
-            styled.lines.push(Line::from(vec![
+            let styled = Text::from(Line::from(vec![
                 Span::styled(format!("{spinner} "), Style::default().fg(Color::Green)),
                 Span::styled(status.to_string(), Style::default().fg(Color::DarkGray)),
             ]));
@@ -305,8 +275,7 @@ fn append_agent_display(
             });
         }
         AgentVisualPhase::Streaming { text, is_thinking } => {
-            let full_text = combine_text(&accumulated, text);
-            let mut styled = render_markdown(&full_text);
+            let mut styled = render_markdown(text);
             if *is_thinking && text.is_empty() {
                 let spinner = display.spinner_char();
                 styled.lines.push(Line::styled(
@@ -321,26 +290,6 @@ fn append_agent_display(
                 height,
             });
         }
-        AgentVisualPhase::ExecutingTools => {
-            // Tool calls/results are rendered as full message blocks via push_tool_indicators
-            if !accumulated.is_empty() {
-                let mut styled = render_markdown(&accumulated);
-                append_cursor(&mut styled, display.spinner_tick);
-                let height = compute_styled_height(&styled, msg_content_width, false);
-                entries.push(MessageEntry::Streaming {
-                    styled_text: styled,
-                    height,
-                });
-            }
-        }
-    }
-}
-
-fn combine_text(accumulated: &str, current: &str) -> String {
-    match (accumulated.is_empty(), current.is_empty()) {
-        (true, _) => current.to_string(),
-        (_, true) => accumulated.to_string(),
-        _ => format!("{accumulated}\n\n{current}"),
     }
 }
 

@@ -135,21 +135,6 @@ impl AgentDisplayState {
     pub fn spinner_char(&self) -> &'static str {
         SPINNER_FRAMES[self.spinner_tick % SPINNER_FRAMES.len()]
     }
-
-    /// Build accumulated text from completed iteration nodes in the graph.
-    pub fn accumulated_text(&self, graph: &crate::graph::ConversationGraph) -> String {
-        self.iteration_node_ids
-            .iter()
-            .filter_map(|id| graph.node(*id))
-            .filter_map(|n| match n {
-                crate::graph::Node::Message { content, .. } if !content.is_empty() => {
-                    Some(content.as_str())
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    }
 }
 
 // ── TUI state ────────────────────────────────────────────────────────
