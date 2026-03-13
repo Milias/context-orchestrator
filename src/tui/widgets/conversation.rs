@@ -276,9 +276,9 @@ fn append_agent_display(
                 height,
             });
         }
-        AgentVisualPhase::ExecutingTools { tool_count } => {
+        AgentVisualPhase::ExecutingTools { tool_names } => {
             let spinner = display.spinner_char();
-            let tool_line = format!("{spinner} Executing {tool_count} tool call(s)...");
+            let tool_line = format!("{spinner} Executing {} tool call(s)...", tool_names.len());
             let full_text = combine_text(&display.accumulated_text, &tool_line);
             let mut styled = render_markdown(&full_text);
             append_cursor(&mut styled, display.spinner_tick);

@@ -44,13 +44,23 @@ pub enum BackgroundTaskKind {
     AgentPhase,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl BackgroundTaskKind {
+    pub fn is_service(&self) -> bool {
+        matches!(
+            self,
+            Self::GitIndex | Self::ToolDiscovery | Self::ContextSummarize
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     Pending,
     Running,
     Completed,
     Failed,
+    Stopped,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -379,8 +389,18 @@ impl ConversationGraph {
     }
 
     /// Mark all `Running`/`Pending` background tasks as `Failed`.
-    /// Called on startup to clean up stale tasks from previous sessions.
-    pub fn expire_running_background_tasks(&mut self) {
+    /// Called on startup — any still-running tasks survived a crash.
+    pub fn expire_stale_tasks(&mut self) {
+        self.transition_running_tasks(TaskStatus::Failed);
+    }
+
+    /// Mark all `Running`/`Pending` background tasks as `Stopped`.
+    /// Called on graceful shutdown.
+    pub fn stop_running_tasks(&mut self) {
+        self.transition_running_tasks(TaskStatus::Stopped);
+    }
+
+    fn transition_running_tasks(&mut self, new_status: TaskStatus) {
         let now = Utc::now();
         for node in self.nodes.values_mut() {
             if let Node::BackgroundTask {
@@ -388,7 +408,7 @@ impl ConversationGraph {
             } = node
             {
                 if matches!(status, TaskStatus::Running | TaskStatus::Pending) {
-                    *status = TaskStatus::Failed;
+                    *status = new_status;
                     *updated_at = now;
                 }
             }

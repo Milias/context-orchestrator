@@ -9,16 +9,21 @@ use std::time::Duration;
 
 pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
     let now = Utc::now();
+    let mut services: Vec<ServiceEntry> = Vec::new();
     let mut active: Vec<TaskEntry> = Vec::new();
     let mut history: Vec<TaskEntry> = Vec::new();
 
     for node in graph.nodes_by(is_task_node) {
-        if let Some(entry) = TaskEntry::from_node(node, now) {
-            if entry.is_active {
-                active.push(entry);
-            } else {
-                history.push(entry);
+        match TaskEntry::from_node(node, now) {
+            Some(entry) if entry.is_service => {
+                if entry.is_active {
+                    services.push(ServiceEntry::from(&entry));
+                }
+                // Services are never shown in history — they're noise
             }
+            Some(entry) if entry.is_active => active.push(entry),
+            Some(entry) => history.push(entry),
+            None => {}
         }
     }
 
@@ -30,13 +35,20 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    render_panel(frame, columns[0], "Active", &active, 0);
+    render_active_panel(frame, columns[0], &services, &active);
     render_history_panel(frame, columns[1], &history, tui_state.context_list_offset);
 }
 
-fn render_panel(frame: &mut Frame, area: Rect, title: &str, entries: &[TaskEntry], offset: usize) {
+// ── Left panel: services row + active tasks ──────────────────────────
+
+fn render_active_panel(
+    frame: &mut Frame,
+    area: Rect,
+    services: &[ServiceEntry],
+    tasks: &[TaskEntry],
+) {
     let block = Block::default()
-        .title(title)
+        .title("Running")
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(Color::DarkGray));
     let inner = block.inner(area);
@@ -46,26 +58,47 @@ fn render_panel(frame: &mut Frame, area: Rect, title: &str, entries: &[TaskEntry
         return;
     }
 
-    if entries.is_empty() {
+    if services.is_empty() && tasks.is_empty() {
         frame.render_widget(
-            Paragraph::new(Span::styled("(none)", Style::default().fg(Color::DarkGray))),
+            Paragraph::new(Span::styled("(idle)", Style::default().fg(Color::DarkGray))),
             inner,
         );
         return;
     }
 
     let width = inner.width as usize;
-    let items: Vec<ListItem> = entries
-        .iter()
-        .skip(offset)
-        .map(|e| ListItem::new(format_entry_line(e, width)))
-        .collect();
+    let mut items: Vec<ListItem> = Vec::new();
+
+    if !services.is_empty() {
+        items.push(ListItem::new(format_services_line(services, width)));
+    }
+
+    for entry in tasks {
+        items.push(ListItem::new(format_entry_line(entry, width)));
+    }
+
     frame.render_widget(List::new(items), inner);
 }
 
+fn format_services_line(services: &[ServiceEntry], width: usize) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let style = Style::default().fg(Color::DarkGray);
+    for (i, svc) in services.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("  ", style));
+        }
+        spans.push(Span::styled("⟳ ", Style::default().fg(Color::Cyan)));
+        let label = truncate(&svc.label, width / services.len().max(1));
+        spans.push(Span::styled(label, style));
+    }
+    Line::from(spans)
+}
+
+// ── Right panel: recent completed tasks ──────────────────────────────
+
 fn render_history_panel(frame: &mut Frame, area: Rect, entries: &[TaskEntry], offset: usize) {
     let block = Block::default()
-        .title("History")
+        .title("Recent")
         .border_style(Style::default().fg(Color::DarkGray));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -90,6 +123,8 @@ fn render_history_panel(frame: &mut Frame, area: Rect, entries: &[TaskEntry], of
         .collect();
     frame.render_widget(List::new(items), inner);
 }
+
+// ── Entry formatting ─────────────────────────────────────────────────
 
 fn format_entry_line(entry: &TaskEntry, width: usize) -> Line<'static> {
     let (icon, icon_color) = entry.status_icon();
@@ -114,11 +149,24 @@ fn format_entry_line(entry: &TaskEntry, width: usize) -> Line<'static> {
     ])
 }
 
-// ── TaskEntry ────────────────────────────────────────────────────────
+// ── Data types ───────────────────────────────────────────────────────
+
+struct ServiceEntry {
+    label: String,
+}
+
+impl ServiceEntry {
+    fn from(entry: &TaskEntry) -> Self {
+        Self {
+            label: entry.name.clone(),
+        }
+    }
+}
 
 struct TaskEntry {
     name: String,
     is_active: bool,
+    is_service: bool,
     created_at: DateTime<Utc>,
     duration: TaskDuration,
     kind: TaskKind,
@@ -155,12 +203,14 @@ impl TaskEntry {
                 Some(Self {
                     name: arguments.display_summary(),
                     is_active,
+                    is_service: false,
                     created_at: *created_at,
                     duration,
                     kind: TaskKind::ToolCall(status.clone()),
                 })
             }
             Node::BackgroundTask {
+                kind,
                 status,
                 description,
                 created_at,
@@ -178,9 +228,10 @@ impl TaskEntry {
                 Some(Self {
                     name: description.clone(),
                     is_active,
+                    is_service: kind.is_service(),
                     created_at: *created_at,
                     duration,
-                    kind: TaskKind::BackgroundTask(status.clone()),
+                    kind: TaskKind::BackgroundTask(*status),
                 })
             }
             _ => None,
@@ -201,6 +252,7 @@ impl TaskEntry {
                 TaskStatus::Running => ("◉", Color::Yellow),
                 TaskStatus::Completed => ("✓", Color::Green),
                 TaskStatus::Failed => ("✗", Color::Red),
+                TaskStatus::Stopped => ("■", Color::DarkGray),
             },
         }
     }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus};
-use crate::graph::{ConversationGraph, Node};
+use crate::graph::{BackgroundTaskKind, ConversationGraph, Node, TaskStatus};
 use chrono::{Duration as ChronoDuration, Utc};
 use uuid::Uuid;
 
@@ -119,4 +119,41 @@ fn tool_results_excluded() {
         1,
         "ToolResult should not appear as a task entry"
     );
+}
+
+#[test]
+fn services_excluded_from_history() {
+    // Services (GitIndex, ToolDiscovery) should only appear in the compact
+    // services row when running, not pollute the history panel.
+    let now = Utc::now();
+    let mut graph = ConversationGraph::new("");
+
+    graph.add_node(Node::BackgroundTask {
+        id: Uuid::new_v4(),
+        kind: BackgroundTaskKind::GitIndex,
+        status: TaskStatus::Stopped,
+        description: "Git file indexing".into(),
+        created_at: now - ChronoDuration::seconds(100),
+        updated_at: now,
+    });
+    graph.add_node(Node::BackgroundTask {
+        id: Uuid::new_v4(),
+        kind: BackgroundTaskKind::AgentPhase,
+        status: TaskStatus::Completed,
+        description: "Receiving...".into(),
+        created_at: now - ChronoDuration::seconds(5),
+        updated_at: now,
+    });
+
+    let mut history = Vec::new();
+    for node in graph.nodes_by(is_task_node) {
+        if let Some(entry) = TaskEntry::from_node(node, now) {
+            if !entry.is_active && !entry.is_service {
+                history.push(entry);
+            }
+        }
+    }
+
+    assert_eq!(history.len(), 1, "only non-service tasks in history");
+    assert!(history[0].name.contains("Receiving"));
 }

@@ -114,9 +114,10 @@ impl App {
         let mut event_stream = EventStream::new();
         let mut spinner_interval = tokio::time::interval(Duration::from_millis(80));
         spinner_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
-        // Clean up stale Running background tasks from previous sessions
-        self.graph.expire_running_background_tasks();
+        // Stale Running tasks from a previous crash → mark as Failed
+        self.graph.expire_stale_tasks();
 
         // Spawn background tasks
         tasks::spawn_git_watcher(self.task_tx.clone());
@@ -143,6 +144,7 @@ impl App {
                                     let _ = tx.send(true);
                                 }
                                 self.agent_tool_tx = None;
+                                self.graph.stop_running_tasks();
                                 self.save()?;
                                 break;
                             }
@@ -183,6 +185,15 @@ impl App {
                     if let Some(ref mut display) = self.tui_state.agent_display {
                         display.spinner_tick = display.spinner_tick.wrapping_add(1);
                     }
+                }
+                _ = sigterm.recv() => {
+                    if let Some(tx) = self.cancel_tx.take() {
+                        let _ = tx.send(true);
+                    }
+                    self.agent_tool_tx = None;
+                    self.graph.stop_running_tasks();
+                    let _ = self.save();
+                    break;
                 }
             }
 

@@ -130,7 +130,9 @@ impl App {
                                 let text = text.clone();
                                 d.append_text(&text);
                             }
-                            d.phase = AgentVisualPhase::ExecutingTools { tool_count: count };
+                            d.phase = AgentVisualPhase::ExecutingTools {
+                                tool_names: vec![String::new(); count],
+                            };
                         }
                     }
                     AgentPhase::CountingTokens
@@ -233,7 +235,9 @@ impl App {
             d.iteration_node_ids.push(assistant_id);
 
             if stop_reason.map(String::as_str) == Some("tool_use") {
-                d.phase = AgentVisualPhase::ExecutingTools { tool_count: 0 };
+                d.phase = AgentVisualPhase::ExecutingTools {
+                    tool_names: Vec::new(),
+                };
             }
         }
     }
