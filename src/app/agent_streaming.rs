@@ -43,25 +43,19 @@ pub(super) async fn stream_llm_response(
         return Ok(cancelled_result());
     };
 
-    let mut think_splitter = ThinkSplitter::new();
-    let mut output_tokens = None;
-    let mut tool_use_records = Vec::new();
-    let mut stop_reason = None;
-    let mut stream_retries = 0u32;
-    let mut last_send = Instant::now();
-    let send_budget = Duration::from_millis(16);
+    let mut state = StreamState::new();
 
     loop {
         match stream.next().await {
             Some(Ok(StreamChunk::TextDelta(text))) => {
-                think_splitter.push(&text);
-                if last_send.elapsed() >= send_budget {
-                    send_delta(&think_splitter, task_tx);
-                    last_send = Instant::now();
+                state.think_splitter.push(&text);
+                if state.last_send.elapsed() >= state.send_budget {
+                    send_delta(&state.think_splitter, task_tx);
+                    state.last_send = Instant::now();
                 }
             }
             Some(Ok(StreamChunk::ToolUse { id, name, input })) => {
-                tool_use_records.push(ToolUseRecord {
+                state.tool_use_records.push(ToolUseRecord {
                     tool_call_id: Uuid::new_v4(),
                     api_id: id,
                     name,
@@ -72,13 +66,13 @@ pub(super) async fn stream_llm_response(
                 output_tokens: ot,
                 stop_reason: sr,
             })) => {
-                output_tokens = ot;
-                stop_reason = sr;
+                state.output_tokens = ot;
+                state.stop_reason = sr;
                 break;
             }
             Some(Ok(StreamChunk::Error(e))) => {
                 if let Some(new) = try_reconnect(
-                    &mut stream_retries,
+                    &mut state.retries,
                     provider,
                     &messages,
                     config,
@@ -88,10 +82,10 @@ pub(super) async fn stream_llm_response(
                 .await?
                 {
                     stream = new;
-                    think_splitter = ThinkSplitter::new();
+                    state.think_splitter = ThinkSplitter::new();
                     continue;
                 }
-                if stream_retries > MAX_STREAM_RETRIES {
+                if state.retries > MAX_STREAM_RETRIES {
                     send(task_tx, AgentEvent::Error(format!("Stream error: {e}")));
                 }
                 break;
@@ -102,7 +96,7 @@ pub(super) async fn stream_llm_response(
                     .is_some_and(ApiError::is_retryable);
                 if retryable {
                     if let Some(new) = try_reconnect(
-                        &mut stream_retries,
+                        &mut state.retries,
                         provider,
                         &messages,
                         config,
@@ -112,7 +106,7 @@ pub(super) async fn stream_llm_response(
                     .await?
                     {
                         stream = new;
-                        think_splitter = ThinkSplitter::new();
+                        state.think_splitter = ThinkSplitter::new();
                         continue;
                     }
                 }
@@ -123,19 +117,44 @@ pub(super) async fn stream_llm_response(
         }
     }
 
-    // Send final delta to ensure UI has the complete text
-    send_delta(&think_splitter, task_tx);
+    send_delta(&state.think_splitter, task_tx);
 
-    let (clean_response, think_content) = think_splitter.finish();
+    let (clean_response, think_content) = state.think_splitter.finish();
     Ok(StreamResult {
         response: clean_response,
         think_text: think_content,
-        output_tokens,
-        tool_use_records,
-        stop_reason,
+        output_tokens: state.output_tokens,
+        tool_use_records: state.tool_use_records,
+        stop_reason: state.stop_reason,
         cancelled: false,
     })
 }
+
+struct StreamState {
+    think_splitter: ThinkSplitter,
+    output_tokens: Option<u32>,
+    tool_use_records: Vec<ToolUseRecord>,
+    stop_reason: Option<String>,
+    retries: u32,
+    last_send: Instant,
+    send_budget: Duration,
+}
+
+impl StreamState {
+    fn new() -> Self {
+        Self {
+            think_splitter: ThinkSplitter::new(),
+            output_tokens: None,
+            tool_use_records: Vec::new(),
+            stop_reason: None,
+            retries: 0,
+            last_send: Instant::now(),
+            send_budget: Duration::from_millis(16),
+        }
+    }
+}
+
+type ChatStream = Pin<Box<dyn futures::Stream<Item = anyhow::Result<StreamChunk>> + Send>>;
 
 /// Attempt a stream reconnection if retries remain. Returns `None` when exhausted or cancelled.
 async fn try_reconnect(
@@ -145,8 +164,7 @@ async fn try_reconnect(
     config: &ChatConfig,
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
     cancel_rx: &watch::Receiver<bool>,
-) -> anyhow::Result<Option<Pin<Box<dyn futures::Stream<Item = anyhow::Result<StreamChunk>> + Send>>>>
-{
+) -> anyhow::Result<Option<ChatStream>> {
     if *retries >= MAX_STREAM_RETRIES {
         return Ok(None);
     }
@@ -170,8 +188,7 @@ async fn try_connect_chat(
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
     cancel_rx: &watch::Receiver<bool>,
     context_label: &str,
-) -> anyhow::Result<Option<Pin<Box<dyn futures::Stream<Item = anyhow::Result<StreamChunk>> + Send>>>>
-{
+) -> anyhow::Result<Option<ChatStream>> {
     let retry_config = RetryConfig::default();
 
     for attempt in 1..=retry_config.max_attempts {

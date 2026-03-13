@@ -1,3 +1,4 @@
+use crate::graph::tool_types::ToolCallArguments;
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::tui::widgets::markdown::render_markdown;
 use crate::tui::widgets::message_style::{render_message, render_streaming};
@@ -6,6 +7,8 @@ use crate::tui::{CachedRender, TuiState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders};
 use std::borrow::Cow;
+use std::fmt::Write;
+use std::path::Path;
 
 pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let history = graph
@@ -217,7 +220,7 @@ fn push_node_entry<'a>(
     let cached = tui_state.render_cache.get(&id);
     let valid = cached.is_some_and(|c| c.cached_width == msg_content_width);
     if !valid {
-        let content = display_content(node);
+        let content = display_content(node, graph);
         let mut styled = render_markdown(&content);
         if matches!(
             node,
@@ -251,27 +254,66 @@ fn push_node_entry<'a>(
 
 const MAX_RESULT_LINES: usize = 20;
 
-fn display_content(node: &Node) -> Cow<'_, str> {
+fn display_content<'a>(node: &'a Node, graph: &'a ConversationGraph) -> Cow<'a, str> {
     match node {
         Node::ToolCall { arguments, .. } => Cow::Owned(arguments.display_summary()),
-        Node::ToolResult { content, .. } => {
-            let text = content.text_content();
-            let line_count = text.lines().count();
-            if line_count > MAX_RESULT_LINES {
-                let truncated: String = text
-                    .lines()
-                    .take(MAX_RESULT_LINES)
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                Cow::Owned(format!(
-                    "{truncated}\n[... {} more lines]",
-                    line_count - MAX_RESULT_LINES
-                ))
-            } else {
-                Cow::Borrowed(text)
-            }
-        }
+        Node::ToolResult {
+            content,
+            tool_call_id,
+            ..
+        } => format_tool_result(content.text_content(), *tool_call_id, graph),
         _ => Cow::Borrowed(node.content()),
+    }
+}
+
+fn format_tool_result<'a>(
+    text: &'a str,
+    tool_call_id: uuid::Uuid,
+    graph: &'a ConversationGraph,
+) -> Cow<'a, str> {
+    let ext = file_read_extension(graph, tool_call_id);
+    let line_count = text.lines().count();
+
+    let (body, overflow) = if line_count > MAX_RESULT_LINES {
+        let truncated: String = text
+            .lines()
+            .take(MAX_RESULT_LINES)
+            .collect::<Vec<_>>()
+            .join("\n");
+        (truncated, Some(line_count - MAX_RESULT_LINES))
+    } else {
+        (text.to_string(), None)
+    };
+
+    let is_markdown = ext
+        .as_deref()
+        .is_some_and(|e| matches!(e, "md" | "markdown" | "mdx"));
+
+    let mut result = match ext.as_deref() {
+        Some(e) if !is_markdown => format!("```{e}\n{body}\n```"),
+        _ => body,
+    };
+
+    if let Some(n) = overflow {
+        let _ = write!(result, "\n[... {n} more lines]");
+    }
+    Cow::Owned(result)
+}
+
+/// If `tool_call_id` points to a `ReadFile` tool call, return the file extension.
+fn file_read_extension(graph: &ConversationGraph, tool_call_id: uuid::Uuid) -> Option<String> {
+    let tc = graph.node(tool_call_id)?;
+    if let Node::ToolCall {
+        arguments: ToolCallArguments::ReadFile { path },
+        ..
+    } = tc
+    {
+        Path::new(path.as_str())
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_string)
+    } else {
+        None
     }
 }
 
