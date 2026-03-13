@@ -50,33 +50,51 @@ pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     }
 }
 
-fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
-    // Autocomplete interception: Enter/Up/Down/Esc when popup is active
-    if tui_state.autocomplete.active && !tui_state.autocomplete.candidates.is_empty() {
-        match key.code {
-            KeyCode::Enter => {
-                accept_completion(tui_state);
-                return Action::None;
-            }
-            KeyCode::Up => {
-                let len = tui_state.autocomplete.candidates.len();
-                tui_state.autocomplete.selected = (tui_state.autocomplete.selected + len - 1) % len;
-                return Action::None;
-            }
-            KeyCode::Down => {
-                let len = tui_state.autocomplete.candidates.len();
-                tui_state.autocomplete.selected = (tui_state.autocomplete.selected + 1) % len;
-                return Action::None;
-            }
-            KeyCode::Esc => {
-                tui_state.autocomplete.active = false;
-                return Action::None;
-            }
-            _ => {} // fall through to normal handling, then re-filter
+/// Handle key events when autocomplete popup is active.
+/// Returns `Some(Action)` if the key was consumed, `None` to fall through.
+fn handle_autocomplete_key(key: &KeyEvent, tui_state: &mut TuiState) -> Option<Action> {
+    if !tui_state.autocomplete.active || tui_state.autocomplete.candidates.is_empty() {
+        return None;
+    }
+    match key.code {
+        KeyCode::Enter => {
+            accept_completion(tui_state);
+            Some(Action::None)
         }
+        KeyCode::Up => {
+            let len = tui_state.autocomplete.candidates.len();
+            tui_state.autocomplete.selected = (tui_state.autocomplete.selected + len - 1) % len;
+            Some(Action::None)
+        }
+        KeyCode::Down => {
+            let len = tui_state.autocomplete.candidates.len();
+            tui_state.autocomplete.selected = (tui_state.autocomplete.selected + 1) % len;
+            Some(Action::None)
+        }
+        KeyCode::Esc => {
+            tui_state.autocomplete.active = false;
+            Some(Action::None)
+        }
+        _ => None,
+    }
+}
+
+fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
+    if let Some(action) = handle_autocomplete_key(&key, tui_state) {
+        return action;
     }
 
     let action = match key.code {
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+            let byte_offset = tui_state
+                .input_text
+                .char_indices()
+                .nth(tui_state.input_cursor)
+                .map_or(tui_state.input_text.len(), |(i, _)| i);
+            tui_state.input_text.insert(byte_offset, '\n');
+            tui_state.input_cursor += 1;
+            Action::None
+        }
         KeyCode::Enter => {
             let text = tui_state.input_text.trim().to_string();
             if text.is_empty() {
@@ -121,8 +139,22 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
             }
             Action::None
         }
-        KeyCode::Up => Action::ScrollUp,
-        KeyCode::Down => Action::ScrollDown,
+        KeyCode::Up => {
+            if has_line_above(tui_state) {
+                move_cursor_up(tui_state);
+                Action::None
+            } else {
+                Action::ScrollUp
+            }
+        }
+        KeyCode::Down => {
+            if has_line_below(tui_state) {
+                move_cursor_down(tui_state);
+                Action::None
+            } else {
+                Action::ScrollDown
+            }
+        }
         KeyCode::PageUp => Action::PageUp,
         KeyCode::PageDown => Action::PageDown,
         _ => Action::None,
@@ -130,7 +162,7 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
 
     // Re-filter autocomplete after text/cursor changes
     match key.code {
-        KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Left | KeyCode::Right => {
+        KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Left | KeyCode::Right | KeyCode::Enter => {
             update_autocomplete(tui_state);
         }
         _ => {}
@@ -226,6 +258,73 @@ fn accept_completion(tui_state: &mut TuiState) {
     tui_state.input_text = format!("{before}{replacement}{after}");
     tui_state.input_cursor = tpos + replacement.chars().count();
     tui_state.autocomplete.active = false;
+}
+
+// ── Multiline cursor helpers ─────────────────────────────────
+
+/// Returns `(line_index, column)` for a character-indexed cursor position.
+pub(super) fn cursor_line_col(text: &str, cursor: usize) -> (usize, usize) {
+    let mut line = 0;
+    let mut col = 0;
+    for (i, ch) in text.chars().enumerate() {
+        if i == cursor {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+fn line_count(text: &str) -> usize {
+    text.chars().filter(|&c| c == '\n').count() + 1
+}
+
+fn has_line_above(tui_state: &TuiState) -> bool {
+    cursor_line_col(&tui_state.input_text, tui_state.input_cursor).0 > 0
+}
+
+fn has_line_below(tui_state: &TuiState) -> bool {
+    let (line, _) = cursor_line_col(&tui_state.input_text, tui_state.input_cursor);
+    line + 1 < line_count(&tui_state.input_text)
+}
+
+/// Returns `(char_start, char_len)` for the given line index.
+fn line_start_and_len(text: &str, target: usize) -> (usize, usize) {
+    let mut line = 0;
+    let mut start = 0;
+    for (i, ch) in text.chars().enumerate() {
+        if ch == '\n' {
+            if line == target {
+                return (start, i - start);
+            }
+            line += 1;
+            start = i + 1;
+        }
+    }
+    (start, text.chars().count() - start)
+}
+
+fn move_cursor_up(tui_state: &mut TuiState) {
+    let (cur_line, cur_col) = cursor_line_col(&tui_state.input_text, tui_state.input_cursor);
+    if cur_line == 0 {
+        return;
+    }
+    let (start, len) = line_start_and_len(&tui_state.input_text, cur_line - 1);
+    tui_state.input_cursor = start + cur_col.min(len);
+}
+
+fn move_cursor_down(tui_state: &mut TuiState) {
+    let (cur_line, cur_col) = cursor_line_col(&tui_state.input_text, tui_state.input_cursor);
+    if cur_line + 1 >= line_count(&tui_state.input_text) {
+        return;
+    }
+    let (start, len) = line_start_and_len(&tui_state.input_text, cur_line + 1);
+    tui_state.input_cursor = start + cur_col.min(len);
 }
 
 fn handle_context_panel_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
