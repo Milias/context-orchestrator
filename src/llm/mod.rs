@@ -1,4 +1,6 @@
 pub mod anthropic;
+pub mod error;
+pub mod retry;
 pub mod tool_types;
 
 pub use tool_types::{ChatContent, ContentBlock, RawJson, ToolDefinition};
@@ -122,7 +124,12 @@ pub async fn background_llm_call(
 ) -> anyhow::Result<BackgroundLlmResponse> {
     let _permit = semaphore.acquire().await?;
 
-    let mut stream = provider.chat(messages, config).await?;
+    let mut stream = retry::with_retry(&retry::RetryConfig::default(), || {
+        let msgs = messages.clone();
+        async { provider.chat(msgs, config).await }
+    })
+    .await?;
+
     let mut full_text = String::new();
 
     while let Some(chunk) = stream.next().await {

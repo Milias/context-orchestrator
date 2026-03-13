@@ -1,4 +1,6 @@
 use crate::config::AppConfig;
+use crate::llm::error::ApiError;
+use crate::llm::retry::{self, RetryConfig};
 use crate::llm::tool_types::{ApiToolDefinition, ToolDefinition};
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use async_trait::async_trait;
@@ -6,6 +8,7 @@ use futures::stream::{Stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+use std::time::Duration;
 
 pub struct AnthropicProvider {
     api_key: String,
@@ -19,7 +22,8 @@ impl AnthropicProvider {
         let base_url = config.anthropic_base_url.trim_end_matches('/').to_string();
 
         let client = Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(60))
             .build()?;
         Ok(Self {
             api_key,
@@ -84,12 +88,14 @@ impl LlmProvider for AnthropicProvider {
             .header("content-type", "application/json")
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| ApiError::from_reqwest(&e))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Anthropic API error {status}: {body}");
+            let headers = response.headers().clone();
+            let body_text = response.text().await.unwrap_or_default();
+            return Err(ApiError::from_response(status, &body_text, &headers).into());
         }
 
         let byte_stream = response.bytes_stream();
@@ -113,25 +119,34 @@ impl LlmProvider for AnthropicProvider {
             tools: api_tools,
         };
 
-        let response = self
-            .client
-            .post(format!("{}/v1/messages/count_tokens", self.base_url))
-            .header("x-api-key", &self.api_key)
-            .header("authorization", format!("Bearer {}", self.api_key))
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        retry::with_retry(&RetryConfig::default(), || {
+            let req_body = &body;
+            async move {
+                let response = self
+                    .client
+                    .post(format!("{}/v1/messages/count_tokens", self.base_url))
+                    .header("x-api-key", &self.api_key)
+                    .header("authorization", format!("Bearer {}", self.api_key))
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json")
+                    .timeout(Duration::from_secs(30))
+                    .json(req_body)
+                    .send()
+                    .await
+                    .map_err(|e| ApiError::from_reqwest(&e))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token count API error {status}: {body}");
-        }
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let headers = response.headers().clone();
+                    let body_text = response.text().await.unwrap_or_default();
+                    return Err(ApiError::from_response(status, &body_text, &headers).into());
+                }
 
-        let result: CountTokensResponse = response.json().await?;
-        Ok(result.input_tokens)
+                let result: CountTokensResponse = response.json().await?;
+                Ok(result.input_tokens)
+            }
+        })
+        .await
     }
 }
 
@@ -187,7 +202,7 @@ fn sse_to_stream_chunks(
                         state.buffer.push_str(&String::from_utf8_lossy(&bytes));
                     }
                     Some(Err(e)) => {
-                        return Some((Err(anyhow::Error::from(e)), state));
+                        return Some((Err(ApiError::from_reqwest(&e).into()), state));
                     }
                     None => {
                         return None;

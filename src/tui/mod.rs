@@ -100,6 +100,8 @@ pub struct TuiState {
     pub scroll_offset: u16,
     pub streaming_response: Option<String>,
     pub status_message: Option<String>,
+    /// Error message displayed right-aligned in red on the status bar.
+    pub error_message: Option<String>,
     pub should_quit: bool,
     pub focus: FocusPanel,
     pub context_panel_visible: bool,
@@ -131,6 +133,7 @@ impl TuiState {
             scroll_offset: u16::MAX,
             streaming_response: None,
             status_message: None,
+            error_message: None,
             should_quit: false,
             focus: FocusPanel::Input,
             context_panel_visible: true,
