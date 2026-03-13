@@ -7,7 +7,7 @@ edition = "2021"
 ratatui = { version = "0.30", features = ["crossterm"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["stream", "json", "socks"] }
+reqwest = { version = "0.13", features = ["stream", "json", "socks"] }
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -19,12 +19,13 @@ async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 figment = { version = "0.10", features = ["env"] }
 git2 = "0.20"
-notify = "7"
-notify-debouncer-mini = "0.5"
+notify = "8"
+notify-debouncer-mini = "0.7"
 streamdown-parser = "0.1"
 regex = "1"
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+parking_lot = "0.12"
 
 [lints.clippy]
 pedantic = { level = "deny", priority = -1 }

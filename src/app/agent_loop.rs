@@ -1,10 +1,11 @@
 use crate::graph::tool_types::{ToolCallStatus, ToolResultContent};
-use crate::graph::{parse_tool_arguments, ConversationGraph, EdgeKind, Node, Role, StopReason};
+use crate::graph::{parse_tool_arguments, EdgeKind, Node, Role, StopReason};
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, ToolDefinition};
 use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
 
 use super::agent_streaming::{self, send, StreamResult};
 use super::context;
+use super::SharedGraph;
 
 use chrono::Utc;
 use std::collections::HashSet;
@@ -25,7 +26,7 @@ pub(super) struct AgentLoopConfig {
 
 /// Spawn the agent loop as a background task.
 pub(super) fn spawn_agent_loop(
-    graph: ConversationGraph,
+    graph: SharedGraph,
     provider: Arc<dyn LlmProvider>,
     config: AgentLoopConfig,
     user_msg_id: Uuid,
@@ -35,7 +36,7 @@ pub(super) fn spawn_agent_loop(
 ) {
     tokio::spawn(async move {
         let result = run_agent_loop(
-            graph,
+            &graph,
             provider,
             config,
             user_msg_id,
@@ -55,7 +56,7 @@ pub(super) fn spawn_agent_loop(
 const MAX_CONTINUATIONS: u32 = 3;
 
 async fn run_agent_loop(
-    mut graph: ConversationGraph,
+    graph: &SharedGraph,
     provider: Arc<dyn LlmProvider>,
     config: AgentLoopConfig,
     user_msg_id: Uuid,
@@ -65,7 +66,7 @@ async fn run_agent_loop(
 ) -> anyhow::Result<()> {
     // Fire-and-forget: token counting is independent of context building.
     spawn_count_user_tokens(
-        graph.clone(),
+        Arc::clone(graph),
         Arc::clone(&provider),
         config.model.clone(),
         user_msg_id,
@@ -90,14 +91,22 @@ async fn run_agent_loop(
                 phase: AgentPhase::BuildingContext,
             },
         );
-        let (system_prompt, messages) = context::build_context(
-            &graph,
+
+        // Read graph under lock, then release before async token counting.
+        let (system_prompt, messages) = {
+            let g = graph.read();
+            context::extract_messages(&g, &config.tools)
+        };
+        let (system_prompt, messages) = context::finalize_context(
+            system_prompt,
+            messages,
             provider.as_ref(),
             &config.model,
             config.max_context_tokens,
             &config.tools,
         )
         .await?;
+
         send(
             task_tx,
             AgentEvent::PhaseCompleted {
@@ -110,8 +119,6 @@ async fn run_agent_loop(
             ..chat_config.clone()
         };
 
-        // Connecting + Receiving phases are emitted by stream_llm_response internally.
-        // recv_phase_id is returned so we can complete it here when streaming ends.
         let result = agent_streaming::stream_llm_response(
             &provider,
             messages,
@@ -129,7 +136,7 @@ async fn run_agent_loop(
             break;
         }
 
-        let assistant_id = apply_iteration_to_graph(&mut graph, &result, &loop_config, task_tx)?;
+        let assistant_id = apply_iteration_to_graph(graph, &result, &loop_config, task_tx)?;
 
         let is_tool_use =
             result.stop_reason == Some(StopReason::ToolUse) && !result.tool_use_records.is_empty();
@@ -157,14 +164,9 @@ async fn run_agent_loop(
             break;
         }
 
-        let timed_out = dispatch_and_wait_for_tools(
-            &mut graph,
-            &result,
-            assistant_id,
-            &mut tool_result_rx,
-            task_tx,
-        )
-        .await;
+        let timed_out =
+            dispatch_and_wait_for_tools(graph, &result, assistant_id, &mut tool_result_rx, task_tx)
+                .await;
 
         if timed_out {
             break;
@@ -176,7 +178,7 @@ async fn run_agent_loop(
 
 /// Spawn token counting as a fire-and-forget task. Runs concurrently with context building.
 fn spawn_count_user_tokens(
-    graph: ConversationGraph,
+    graph: SharedGraph,
     provider: Arc<dyn LlmProvider>,
     model: String,
     user_msg_id: Uuid,
@@ -191,8 +193,17 @@ fn spawn_count_user_tokens(
                 phase: AgentPhase::CountingTokens,
             },
         );
-        if let Some(Node::Message { content, .. }) = graph.node(user_msg_id) {
-            let msg = vec![ChatMessage::text("user", content)];
+        // Read the user message content under lock, then release before async API call.
+        let content = {
+            let g = graph.read();
+            if let Some(Node::Message { content, .. }) = g.node(user_msg_id) {
+                Some(content.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(content) = content {
+            let msg = vec![ChatMessage::text("user", &content)];
             if let Ok(count) = provider.count_tokens(&msg, &model, None, &[]).await {
                 send(
                     &task_tx,
@@ -207,81 +218,85 @@ fn spawn_count_user_tokens(
     });
 }
 
-/// Add the assistant response and think block to the local graph, send `IterationDone`.
+/// Add the assistant response and think block to the shared graph,
+/// send `IterationCommitted` notification.
 fn apply_iteration_to_graph(
-    graph: &mut ConversationGraph,
+    graph: &SharedGraph,
     result: &StreamResult,
     config: &ChatConfig,
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
 ) -> anyhow::Result<Uuid> {
     let assistant_id = Uuid::new_v4();
+
+    {
+        let mut g = graph.write();
+        let leaf = g.active_leaf()?;
+        let assistant_node = Node::Message {
+            id: assistant_id,
+            role: Role::Assistant,
+            content: result.response.clone(),
+            created_at: Utc::now(),
+            model: Some(config.model.clone()),
+            input_tokens: None,
+            output_tokens: result.output_tokens,
+            stop_reason: result.stop_reason,
+        };
+        g.add_message(leaf, assistant_node)?;
+
+        if !result.think_text.is_empty() {
+            let think_node = Node::ThinkBlock {
+                id: Uuid::new_v4(),
+                content: result.think_text.clone(),
+                parent_message_id: assistant_id,
+                created_at: Utc::now(),
+            };
+            let think_id = g.add_node(think_node);
+            g.add_edge(think_id, assistant_id, EdgeKind::ThinkingOf)?;
+        }
+    }
+
     send(
         task_tx,
-        AgentEvent::IterationDone {
+        AgentEvent::IterationCommitted {
             assistant_id,
-            response: result.response.clone(),
-            think_text: result.think_text.clone(),
-            output_tokens: result.output_tokens,
             stop_reason: result.stop_reason,
         },
     );
 
-    let leaf = graph.active_leaf()?;
-    let assistant_node = Node::Message {
-        id: assistant_id,
-        role: Role::Assistant,
-        content: result.response.clone(),
-        created_at: Utc::now(),
-        model: Some(config.model.clone()),
-        input_tokens: None,
-        output_tokens: result.output_tokens,
-        stop_reason: result.stop_reason,
-    };
-    graph.add_message(leaf, assistant_node)?;
-
-    if !result.think_text.is_empty() {
-        let think_node = Node::ThinkBlock {
-            id: Uuid::new_v4(),
-            content: result.think_text.clone(),
-            parent_message_id: assistant_id,
-            created_at: Utc::now(),
-        };
-        let think_id = graph.add_node(think_node);
-        graph.add_edge(think_id, assistant_id, EdgeKind::ThinkingOf)?;
-    }
-
     Ok(assistant_id)
 }
 
-/// Send tool call requests to main loop, add them to local graph, wait for results.
+/// Add tool call nodes to the shared graph, send dispatch notifications,
+/// wait for results from the main loop.
 async fn dispatch_and_wait_for_tools(
-    graph: &mut ConversationGraph,
+    graph: &SharedGraph,
     result: &StreamResult,
     assistant_id: Uuid,
     tool_result_rx: &mut mpsc::UnboundedReceiver<AgentToolResult>,
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
 ) -> bool {
     let mut pending_ids = HashSet::new();
-    for record in &result.tool_use_records {
-        send(
-            task_tx,
-            AgentEvent::ToolCallRequest {
-                tool_call_id: record.tool_call_id,
+    {
+        let mut g = graph.write();
+        for record in &result.tool_use_records {
+            let args = parse_tool_arguments(&record.name, &record.input);
+            g.add_tool_call(
+                record.tool_call_id,
                 assistant_id,
-                api_id: record.api_id.clone(),
-                name: record.name.clone(),
-                input: record.input.clone(),
-            },
-        );
-        pending_ids.insert(record.tool_call_id);
+                args.clone(),
+                Some(record.api_id.clone()),
+            );
+            pending_ids.insert(record.tool_call_id);
 
-        let args = parse_tool_arguments(&record.name, &record.input);
-        graph.add_tool_call(
-            record.tool_call_id,
-            assistant_id,
-            args,
-            Some(record.api_id.clone()),
-        );
+            // Notify main loop to spawn executor (graph mutation already done).
+            send(
+                task_tx,
+                AgentEvent::ToolCallDispatched {
+                    tool_call_id: record.tool_call_id,
+                    arguments: args,
+                },
+            );
+        }
     }
 
     let tools_phase = Uuid::new_v4();
@@ -295,7 +310,7 @@ async fn dispatch_and_wait_for_tools(
         },
     );
 
-    let timed_out = wait_for_tool_results(graph, &mut pending_ids, tool_result_rx, task_tx).await;
+    let timed_out = wait_for_tool_results(&mut pending_ids, tool_result_rx, task_tx, graph).await;
     send(
         task_tx,
         AgentEvent::PhaseCompleted {
@@ -306,18 +321,20 @@ async fn dispatch_and_wait_for_tools(
 }
 
 /// Wait for all pending tool calls to complete. Returns `true` if timed out.
+/// The main loop updates the shared graph for each completion. The agent just
+/// tracks which calls are still pending.
 async fn wait_for_tool_results(
-    graph: &mut ConversationGraph,
     pending_ids: &mut HashSet<Uuid>,
     tool_result_rx: &mut mpsc::UnboundedReceiver<AgentToolResult>,
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    graph: &SharedGraph,
 ) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
 
     while !pending_ids.is_empty() {
         tokio::select! {
             Some(result) = tool_result_rx.recv() => {
-                apply_tool_result(graph, &result);
+                // Main loop already updated the shared graph.
                 pending_ids.remove(&result.tool_call_id);
             }
             () = tokio::time::sleep_until(deadline) => {
@@ -331,20 +348,19 @@ async fn wait_for_tool_results(
     false
 }
 
-fn apply_tool_result(graph: &mut ConversationGraph, result: &AgentToolResult) {
-    let status = if result.is_error {
-        ToolCallStatus::Failed
-    } else {
-        ToolCallStatus::Completed
-    };
-    let _ = graph.update_tool_call_status(result.tool_call_id, status, Some(Utc::now()));
-    graph.add_tool_result(result.tool_call_id, result.content.clone(), result.is_error);
-}
-
-fn timeout_pending_tools(graph: &mut ConversationGraph, pending_ids: &mut HashSet<Uuid>) {
+/// Write timeout results to the shared graph for tools that didn't complete in time.
+/// Checks current status to avoid overwriting tools the main loop already completed.
+fn timeout_pending_tools(graph: &SharedGraph, pending_ids: &mut HashSet<Uuid>) {
+    let mut g = graph.write();
     for tc_id in pending_ids.drain() {
-        let _ = graph.update_tool_call_status(tc_id, ToolCallStatus::Failed, Some(Utc::now()));
-        graph.add_tool_result(
+        // Don't overwrite if the main loop already completed this tool.
+        if let Some(Node::ToolCall { status, .. }) = g.node(tc_id) {
+            if *status == ToolCallStatus::Completed || *status == ToolCallStatus::Failed {
+                continue;
+            }
+        }
+        let _ = g.update_tool_call_status(tc_id, ToolCallStatus::Failed, Some(Utc::now()));
+        g.add_tool_result(
             tc_id,
             ToolResultContent::text("Tool execution timed out"),
             true,

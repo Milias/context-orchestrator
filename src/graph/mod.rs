@@ -1,33 +1,39 @@
+pub mod history;
+mod mutation;
 pub mod node;
 pub mod tool_types;
 
+pub use history::NodeSnapshot;
 pub use node::{
     BackgroundTaskKind, Edge, EdgeKind, GitFileStatus, Node, Role, StopReason, TaskStatus,
     WorkItemStatus,
 };
-pub use tool_types::{parse_tool_arguments, ToolCallArguments, ToolCallStatus, ToolResultContent};
+pub use tool_types::{parse_tool_arguments, ToolCallArguments, ToolResultContent};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 // ── ConversationGraph ────────────────────────────────────────────────
 
-/// Serialization-friendly representation (matches V2 format).
+/// The conversation graph — single source of truth for all conversation state.
+/// Mutation methods capture version history automatically via `mutate_node`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "ConversationGraphRaw", into = "ConversationGraphRaw")]
 pub struct ConversationGraph {
-    nodes: HashMap<Uuid, Node>,
-    edges: Vec<Edge>,
+    pub(super) nodes: HashMap<Uuid, Node>,
+    pub(super) edges: Vec<Edge>,
     branches: HashMap<String, Uuid>,
     active_branch: String,
+    /// Version history: previous states of mutated nodes (oldest first per node).
+    pub(super) history: HashMap<Uuid, Vec<NodeSnapshot>>,
     /// Runtime index for fast ancestor walking. Not serialized.
     #[serde(skip)]
-    responds_to: HashMap<Uuid, Uuid>,
+    pub(super) responds_to: HashMap<Uuid, Uuid>,
     /// Runtime index: `ToolCall` id -> parent message id (from `Invoked` edges). Not serialized.
     #[serde(skip)]
-    invoked_by: HashMap<Uuid, Uuid>,
+    pub(super) invoked_by: HashMap<Uuid, Uuid>,
 }
 
 /// Raw form for serde (no runtime indexes).
@@ -37,6 +43,8 @@ struct ConversationGraphRaw {
     edges: Vec<Edge>,
     branches: HashMap<String, Uuid>,
     active_branch: String,
+    #[serde(default)]
+    history: HashMap<Uuid, Vec<NodeSnapshot>>,
 }
 
 impl From<ConversationGraphRaw> for ConversationGraph {
@@ -58,6 +66,7 @@ impl From<ConversationGraphRaw> for ConversationGraph {
             edges: raw.edges,
             branches: raw.branches,
             active_branch: raw.active_branch,
+            history: raw.history,
             responds_to,
             invoked_by,
         }
@@ -71,6 +80,7 @@ impl From<ConversationGraph> for ConversationGraphRaw {
             edges: g.edges,
             branches: g.branches,
             active_branch: g.active_branch,
+            history: g.history,
         }
     }
 }
@@ -94,6 +104,7 @@ impl ConversationGraph {
             edges: Vec::new(),
             branches,
             active_branch: "main".to_string(),
+            history: HashMap::new(),
             responds_to: HashMap::new(),
             invoked_by: HashMap::new(),
         }
@@ -145,86 +156,6 @@ impl ConversationGraph {
         Ok(())
     }
 
-    /// Update the status (and optionally `completed_at`) of a `ToolCall` node in place.
-    pub fn update_tool_call_status(
-        &mut self,
-        id: Uuid,
-        new_status: ToolCallStatus,
-        completed_at: Option<DateTime<Utc>>,
-    ) -> anyhow::Result<()> {
-        let node = self
-            .nodes
-            .get_mut(&id)
-            .ok_or_else(|| anyhow::anyhow!("Node {id} not found"))?;
-        match node {
-            Node::ToolCall {
-                status,
-                completed_at: ca,
-                ..
-            } => {
-                *status = new_status;
-                *ca = completed_at;
-                Ok(())
-            }
-            _ => anyhow::bail!("Node {id} is not a ToolCall"),
-        }
-    }
-
-    /// Update the status, description, and `updated_at` of a `BackgroundTask` in place.
-    /// Preserves `created_at` (unlike `upsert_node` which replaces the whole node).
-    pub fn update_background_task_status(
-        &mut self,
-        id: Uuid,
-        new_status: TaskStatus,
-        new_description: String,
-    ) -> anyhow::Result<()> {
-        let node = self
-            .nodes
-            .get_mut(&id)
-            .ok_or_else(|| anyhow::anyhow!("Node {id} not found"))?;
-        match node {
-            Node::BackgroundTask {
-                status,
-                description,
-                updated_at,
-                ..
-            } => {
-                *status = new_status;
-                *description = new_description;
-                *updated_at = Utc::now();
-                Ok(())
-            }
-            _ => anyhow::bail!("Node {id} is not a BackgroundTask"),
-        }
-    }
-
-    /// Mark all `Running`/`Pending` background tasks as `Failed`.
-    /// Called on startup — any still-running tasks survived a crash.
-    pub fn expire_stale_tasks(&mut self) {
-        self.transition_running_tasks(TaskStatus::Failed);
-    }
-
-    /// Mark all `Running`/`Pending` background tasks as `Stopped`.
-    /// Called on graceful shutdown.
-    pub fn stop_running_tasks(&mut self) {
-        self.transition_running_tasks(TaskStatus::Stopped);
-    }
-
-    fn transition_running_tasks(&mut self, new_status: TaskStatus) {
-        let now = Utc::now();
-        for node in self.nodes.values_mut() {
-            if let Node::BackgroundTask {
-                status, updated_at, ..
-            } = node
-            {
-                if matches!(status, TaskStatus::Running | TaskStatus::Pending) {
-                    *status = new_status;
-                    *updated_at = now;
-                }
-            }
-        }
-    }
-
     /// Walk from the branch leaf to the root via `RespondsTo` edges, return chronological order.
     pub fn get_branch_history(&self, branch_name: &str) -> anyhow::Result<Vec<&Node>> {
         let leaf_id = self
@@ -270,49 +201,6 @@ impl ConversationGraph {
             .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))
     }
 
-    /// Add a `ToolCall` node linked to its parent message via `Invoked` edge.
-    pub fn add_tool_call(
-        &mut self,
-        id: Uuid,
-        parent_message_id: Uuid,
-        arguments: ToolCallArguments,
-        api_tool_use_id: Option<String>,
-    ) -> Uuid {
-        let node = Node::ToolCall {
-            id,
-            api_tool_use_id,
-            arguments,
-            status: ToolCallStatus::Pending,
-            parent_message_id,
-            created_at: Utc::now(),
-            completed_at: None,
-        };
-        self.add_node(node);
-        let _ = self.add_edge(id, parent_message_id, EdgeKind::Invoked);
-        let _ = self.update_tool_call_status(id, ToolCallStatus::Running, None);
-        id
-    }
-
-    /// Add a `ToolResult` node linked to its tool call via `Produced` edge.
-    pub fn add_tool_result(
-        &mut self,
-        tool_call_id: Uuid,
-        content: ToolResultContent,
-        is_error: bool,
-    ) -> Uuid {
-        let result_id = Uuid::new_v4();
-        let node = Node::ToolResult {
-            id: result_id,
-            tool_call_id,
-            content,
-            is_error,
-            created_at: Utc::now(),
-        };
-        self.add_node(node);
-        let _ = self.add_edge(result_id, tool_call_id, EdgeKind::Produced);
-        result_id
-    }
-
     pub fn branch_names(&self) -> Vec<&str> {
         self.branches.keys().map(String::as_str).collect()
     }
@@ -343,36 +231,18 @@ impl ConversationGraph {
             .iter()
             .any(|e| e.to == node_id && e.kind == EdgeKind::ThinkingOf)
     }
-
-    /// Set the `input_tokens` field on a `Message` node.
-    pub fn set_input_tokens(&mut self, node_id: Uuid, tokens: u32) {
-        if let Some(Node::Message { input_tokens, .. }) = self.nodes.get_mut(&node_id) {
-            *input_tokens = Some(tokens);
-        }
-    }
-
-    /// Remove all nodes (and their edges) matching a predicate.
-    pub fn remove_nodes_by<F: Fn(&Node) -> bool>(&mut self, filter: F) {
-        let to_remove: Vec<Uuid> = self
-            .nodes
-            .iter()
-            .filter(|(_, n)| filter(n))
-            .map(|(&id, _)| id)
-            .collect();
-
-        for id in &to_remove {
-            self.nodes.remove(id);
-            self.responds_to.remove(id);
-            self.invoked_by.remove(id);
-        }
-
-        self.edges
-            .retain(|e| !to_remove.contains(&e.from) && !to_remove.contains(&e.to));
-    }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "mutation_tests.rs"]
+mod mutation_tests;
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod history_tests;
 
 #[cfg(test)]
 #[path = "tool_types_tests.rs"]

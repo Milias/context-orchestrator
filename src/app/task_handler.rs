@@ -1,5 +1,5 @@
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
-use crate::graph::{BackgroundTaskKind, EdgeKind, Node, Role, StopReason, TaskStatus};
+use crate::graph::{BackgroundTaskKind, EdgeKind, Node, StopReason, TaskStatus};
 use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage, ToolExtractionOutcome};
 use crate::tool_executor;
 use crate::tui::{AgentDisplayState, AgentVisualPhase};
@@ -14,9 +14,9 @@ impl App {
     pub(super) fn handle_task_message(&mut self, msg: TaskMessage) {
         match msg {
             TaskMessage::GitFilesUpdated(files) => {
-                self.graph
-                    .remove_nodes_by(|n| matches!(n, Node::GitFile { .. }));
-                let root_id = self.graph.branch_leaf(self.graph.active_branch());
+                let mut g = self.graph.write();
+                g.remove_nodes_by(|n| matches!(n, Node::GitFile { .. }));
+                let root_id = g.branch_leaf(g.active_branch());
                 for file in files {
                     let node = Node::GitFile {
                         id: Uuid::new_v4(),
@@ -24,16 +24,16 @@ impl App {
                         status: file.status,
                         updated_at: Utc::now(),
                     };
-                    let node_id = self.graph.add_node(node);
+                    let node_id = g.add_node(node);
                     if let Some(root) = root_id {
-                        let _ = self.graph.add_edge(node_id, root, EdgeKind::Indexes);
+                        let _ = g.add_edge(node_id, root, EdgeKind::Indexes);
                     }
                 }
             }
             TaskMessage::ToolsDiscovered(tools) => {
-                self.graph
-                    .remove_nodes_by(|n| matches!(n, Node::Tool { .. }));
-                let root_id = self.graph.branch_leaf(self.graph.active_branch());
+                let mut g = self.graph.write();
+                g.remove_nodes_by(|n| matches!(n, Node::Tool { .. }));
+                let root_id = g.branch_leaf(g.active_branch());
                 for tool in tools {
                     let node = Node::Tool {
                         id: Uuid::new_v4(),
@@ -41,9 +41,9 @@ impl App {
                         description: tool.description,
                         updated_at: Utc::now(),
                     };
-                    let node_id = self.graph.add_node(node);
+                    let node_id = g.add_node(node);
                     if let Some(root) = root_id {
-                        let _ = self.graph.add_edge(node_id, root, EdgeKind::Provides);
+                        let _ = g.add_edge(node_id, root, EdgeKind::Provides);
                     }
                 }
             }
@@ -53,12 +53,11 @@ impl App {
                 status,
                 description,
             } => {
-                if self.graph.node(task_id).is_some() {
-                    let _ = self
-                        .graph
-                        .update_background_task_status(task_id, status, description);
+                let mut g = self.graph.write();
+                if g.node(task_id).is_some() {
+                    let _ = g.update_background_task_status(task_id, status, description);
                 } else {
-                    self.graph.add_node(Node::BackgroundTask {
+                    g.add_node(Node::BackgroundTask {
                         id: task_id,
                         kind,
                         status,
@@ -73,9 +72,10 @@ impl App {
                 result,
             } => match result {
                 ToolExtractionOutcome::Plan(plan) => {
+                    let mut g = self.graph.write();
                     let node = crate::tools::plan_result_to_node(&plan);
-                    let node_id = self.graph.add_node(node);
-                    let _ = self.graph.add_edge(
+                    let node_id = g.add_node(node);
+                    let _ = g.add_edge(
                         node_id,
                         trigger_message_id,
                         crate::tools::tool_result_edge_kind(),
@@ -89,14 +89,12 @@ impl App {
                 content,
                 is_error,
             } => {
-                if let Some(tx) = &self.agent_tool_tx {
-                    let _ = tx.send(AgentToolResult {
-                        tool_call_id,
-                        content: content.clone(),
-                        is_error,
-                    });
-                }
+                // Graph mutation first (shared graph), then notify agent.
+                // This ensures the graph is updated before the agent reads it.
                 self.handle_tool_call_completed(tool_call_id, content, is_error);
+                if let Some(tx) = &self.agent_tool_tx {
+                    let _ = tx.send(AgentToolResult { tool_call_id });
+                }
             }
             TaskMessage::Agent(event) => self.handle_agent_event(event),
         }
@@ -137,7 +135,7 @@ impl App {
                 self.complete_phase(phase_id);
             }
             AgentEvent::UserTokensCounted { node_id, count } => {
-                self.graph.set_input_tokens(node_id, count);
+                self.graph.write().set_input_tokens(node_id, count);
             }
             AgentEvent::StreamDelta { text, is_thinking } => {
                 if let Some(ref mut d) = self.tui_state.agent_display {
@@ -147,30 +145,38 @@ impl App {
                     self.tui_state.scroll_offset = u16::MAX;
                 }
             }
-            AgentEvent::IterationDone {
+            AgentEvent::IterationCommitted {
                 assistant_id,
-                response,
-                think_text,
-                output_tokens,
                 stop_reason,
             } => {
-                self.apply_iteration(
-                    assistant_id,
-                    &response,
-                    think_text,
-                    output_tokens,
-                    stop_reason,
-                );
+                if stop_reason == Some(StopReason::MaxTokens) {
+                    self.tui_state.error_message =
+                        Some("Response truncated — continuing automatically".to_string());
+                }
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    d.iteration_node_ids.push(assistant_id);
+                    if stop_reason == Some(StopReason::ToolUse) {
+                        d.phase = AgentVisualPhase::ExecutingTools;
+                    }
+                }
             }
-            AgentEvent::ToolCallRequest {
+            AgentEvent::ToolCallDispatched {
                 tool_call_id,
-                assistant_id,
-                api_id,
-                name,
-                input,
+                arguments,
             } => {
-                let args = crate::graph::parse_tool_arguments(&name, &input);
-                self.handle_tool_call_dispatched(tool_call_id, assistant_id, args, Some(api_id));
+                // Agent already added the ToolCall node to the shared graph.
+                // We only spawn execution and track the cancel token.
+                let token = self
+                    .cancel_token
+                    .as_ref()
+                    .map_or_else(CancellationToken::new, CancellationToken::child_token);
+                self.task_tokens.insert(tool_call_id, token.clone());
+                tool_executor::spawn_tool_execution(
+                    tool_call_id,
+                    arguments,
+                    self.task_tx.clone(),
+                    token,
+                );
             }
             AgentEvent::Finished => {
                 self.complete_all_phases();
@@ -187,57 +193,9 @@ impl App {
         }
     }
 
-    fn apply_iteration(
-        &mut self,
-        assistant_id: Uuid,
-        response: &str,
-        think_text: String,
-        output_tokens: Option<u32>,
-        stop_reason: Option<StopReason>,
-    ) {
-        let leaf = self.graph.active_leaf().expect("No active leaf");
-        let assistant_node = Node::Message {
-            id: assistant_id,
-            role: Role::Assistant,
-            content: response.to_string(),
-            created_at: Utc::now(),
-            model: Some(self.config.anthropic_model.clone()),
-            input_tokens: None,
-            output_tokens,
-            stop_reason,
-        };
-        let _ = self.graph.add_message(leaf, assistant_node);
-
-        if !think_text.is_empty() {
-            let think_node = Node::ThinkBlock {
-                id: Uuid::new_v4(),
-                content: think_text,
-                parent_message_id: assistant_id,
-                created_at: Utc::now(),
-            };
-            let think_id = self.graph.add_node(think_node);
-            let _ = self
-                .graph
-                .add_edge(think_id, assistant_id, EdgeKind::ThinkingOf);
-        }
-
-        if stop_reason == Some(StopReason::MaxTokens) {
-            self.tui_state.error_message =
-                Some("Response truncated — continuing automatically".to_string());
-        }
-
-        if let Some(ref mut d) = self.tui_state.agent_display {
-            d.iteration_node_ids.push(assistant_id);
-
-            if stop_reason == Some(StopReason::ToolUse) {
-                d.phase = AgentVisualPhase::ExecutingTools;
-            }
-        }
-    }
-
     /// Mark the previous agent phase as Completed and create a new Running phase node.
     fn track_phase_node(&mut self, phase_id: Uuid, phase: &AgentPhase) {
-        self.graph.add_node(Node::BackgroundTask {
+        self.graph.write().add_node(Node::BackgroundTask {
             id: phase_id,
             kind: BackgroundTaskKind::AgentPhase,
             status: TaskStatus::Running,
@@ -253,29 +211,27 @@ impl App {
     /// token counting sending `PhaseCompleted` after the agent loop ends).
     fn complete_phase(&mut self, phase_id: Uuid) {
         self.active_phase_ids.remove(&phase_id);
+        let mut g = self.graph.write();
         if let Some(Node::BackgroundTask {
             status,
             description,
             ..
-        }) = self.graph.node(phase_id)
+        }) = g.node(phase_id)
         {
             if *status == TaskStatus::Running {
                 let desc = description.clone();
-                let _ =
-                    self.graph
-                        .update_background_task_status(phase_id, TaskStatus::Completed, desc);
+                let _ = g.update_background_task_status(phase_id, TaskStatus::Completed, desc);
             }
         }
     }
 
     fn complete_all_phases(&mut self) {
         let ids: Vec<Uuid> = self.active_phase_ids.drain().collect();
+        let mut g = self.graph.write();
         for id in ids {
-            if let Some(Node::BackgroundTask { description, .. }) = self.graph.node(id) {
+            if let Some(Node::BackgroundTask { description, .. }) = g.node(id) {
                 let desc = description.clone();
-                let _ = self
-                    .graph
-                    .update_background_task_status(id, TaskStatus::Completed, desc);
+                let _ = g.update_background_task_status(id, TaskStatus::Completed, desc);
             }
         }
     }
@@ -287,6 +243,9 @@ impl App {
         }
     }
 
+    /// Dispatch a user-triggered tool call: add to graph, spawn execution, track cancel.
+    /// Only used for user triggers (via `/tool_name args`). Agent tool calls
+    /// are added to the shared graph by the agent loop directly.
     pub(super) fn handle_tool_call_dispatched(
         &mut self,
         tool_call_id: Uuid,
@@ -294,7 +253,7 @@ impl App {
         arguments: ToolCallArguments,
         api_tool_use_id: Option<String>,
     ) {
-        self.graph.add_tool_call(
+        self.graph.write().add_tool_call(
             tool_call_id,
             parent_message_id,
             arguments.clone(),
@@ -308,14 +267,18 @@ impl App {
         tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone(), token);
     }
 
+    /// Handle tool completion: update graph status, add result, apply side-effects.
+    /// Handles both user-triggered and agent-triggered tool calls.
     pub(super) fn handle_tool_call_completed(
         &mut self,
         tool_call_id: Uuid,
         content: ToolResultContent,
         is_error: bool,
     ) {
+        let mut g = self.graph.write();
+
         // Skip stale completions for tool calls already resolved (e.g. timed out).
-        if let Some(Node::ToolCall { status, .. }) = self.graph.node(tool_call_id) {
+        if let Some(Node::ToolCall { status, .. }) = g.node(tool_call_id) {
             if *status == ToolCallStatus::Completed || *status == ToolCallStatus::Failed {
                 return;
             }
@@ -326,10 +289,12 @@ impl App {
             if let Some(Node::ToolCall {
                 arguments: ToolCallArguments::Set { key, value },
                 ..
-            }) = self.graph.node(tool_call_id)
+            }) = g.node(tool_call_id)
             {
                 let (k, v) = (key.clone(), value.clone());
+                drop(g);
                 crate::tool_executor::apply_config_set(&mut self.config, &k, &v);
+                g = self.graph.write();
             }
         }
 
@@ -338,10 +303,10 @@ impl App {
         } else {
             ToolCallStatus::Completed
         };
-        let _ = self
-            .graph
-            .update_tool_call_status(tool_call_id, new_status, Some(Utc::now()));
-        self.graph.add_tool_result(tool_call_id, content, is_error);
+        let _ = g.update_tool_call_status(tool_call_id, new_status, Some(Utc::now()));
+        g.add_tool_result(tool_call_id, content, is_error);
+        drop(g);
+
         self.task_tokens.remove(&tool_call_id);
     }
 

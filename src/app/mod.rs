@@ -16,6 +16,7 @@ use crate::tui::{self, AgentDisplayState, TuiState};
 use chrono::Utc;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,9 +24,13 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+/// Shared graph type — single source of truth for the conversation graph.
+/// Main loop and agent loop both read/write through this. Brief lock holds only.
+pub(super) type SharedGraph = Arc<RwLock<ConversationGraph>>;
+
 pub struct App {
     config: AppConfig,
-    graph: ConversationGraph,
+    graph: SharedGraph,
     metadata: ConversationMetadata,
     provider: Arc<dyn LlmProvider>,
     background_semaphore: Arc<Semaphore>,
@@ -56,7 +61,7 @@ impl App {
         let background_semaphore = Arc::new(Semaphore::new(config.background_max_concurrent));
         Self {
             config,
-            graph,
+            graph: Arc::new(RwLock::new(graph)),
             metadata,
             provider,
             background_semaphore,
@@ -70,10 +75,9 @@ impl App {
         }
     }
 
-    fn snapshot_context(&self, trigger_message_id: Uuid) -> ContextSnapshot {
-        let history = self
-            .graph
-            .get_branch_history(self.graph.active_branch())
+    fn snapshot_context(graph: &ConversationGraph, trigger_message_id: Uuid) -> ContextSnapshot {
+        let history = graph
+            .get_branch_history(graph.active_branch())
             .unwrap_or_default();
 
         let messages: Vec<ChatMessage> = history
@@ -91,8 +95,7 @@ impl App {
             })
             .collect();
 
-        let tools = self
-            .graph
+        let tools = graph
             .nodes_by(|n| matches!(n, Node::Tool { .. }))
             .into_iter()
             .filter_map(|n| {
@@ -126,14 +129,17 @@ impl App {
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
         // Stale Running tasks from a previous crash → mark as Failed
-        self.graph.expire_stale_tasks();
+        self.graph.write().expire_stale_tasks();
 
         // Spawn background tasks
         tasks::spawn_git_watcher(self.task_tx.clone());
         tasks::spawn_tool_discovery(self.task_tx.clone());
         tasks::spawn_context_summarization(self.task_tx.clone());
 
-        terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
+        {
+            let g = self.graph.read();
+            terminal.draw(|frame| ui::draw(frame, &g, &mut self.tui_state))?;
+        }
 
         loop {
             if self.tui_state.should_quit {
@@ -146,14 +152,17 @@ impl App {
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
                         if key.kind != KeyEventKind::Press { continue; }
-                        let action = input::handle_key_event(key, &mut self.tui_state, &self.graph);
+                        let action = {
+                            let g = self.graph.read();
+                            input::handle_key_event(key, &mut self.tui_state, &g)
+                        };
                         match action {
                             Action::Quit => {
                                 if let Some(ref token) = self.cancel_token {
                                     token.cancel();
                                 }
                                 self.agent_tool_tx = None;
-                                self.graph.stop_running_tasks();
+                                self.graph.write().stop_running_tasks();
                                 self.save()?;
                                 break;
                             }
@@ -203,13 +212,16 @@ impl App {
                         token.cancel();
                     }
                     self.agent_tool_tx = None;
-                    self.graph.stop_running_tasks();
+                    self.graph.write().stop_running_tasks();
                     let _ = self.save();
                     break;
                 }
             }
 
-            terminal.draw(|frame| ui::draw(frame, &self.graph, &mut self.tui_state))?;
+            {
+                let g = self.graph.read();
+                terminal.draw(|frame| ui::draw(frame, &g, &mut self.tui_state))?;
+            }
         }
 
         tui::restore_terminal(terminal)?;
@@ -220,20 +232,22 @@ impl App {
     fn handle_send_message(&mut self, text: String) -> anyhow::Result<()> {
         self.tui_state.error_message = None;
 
-        let parent_id = self.graph.active_leaf()?;
-
         let trigger_text = text.clone();
-        let user_node = Node::Message {
-            id: Uuid::new_v4(),
-            role: Role::User,
-            content: text,
-            created_at: Utc::now(),
-            model: None,
-            input_tokens: None,
-            output_tokens: None,
-            stop_reason: None,
+        let user_msg_id = {
+            let mut g = self.graph.write();
+            let parent_id = g.active_leaf()?;
+            let user_node = Node::Message {
+                id: Uuid::new_v4(),
+                role: Role::User,
+                content: text,
+                created_at: Utc::now(),
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+                stop_reason: None,
+            };
+            g.add_message(parent_id, user_node)?
         };
-        let user_msg_id = self.graph.add_message(parent_id, user_node)?;
 
         self.dispatch_user_triggers(&trigger_text, user_msg_id);
 
@@ -259,7 +273,7 @@ impl App {
         };
 
         agent_loop::spawn_agent_loop(
-            self.graph.clone(),
+            Arc::clone(&self.graph),
             Arc::clone(&self.provider),
             loop_config,
             user_msg_id,
@@ -277,7 +291,7 @@ impl App {
     fn dispatch_user_triggers(&mut self, text: &str, user_msg_id: Uuid) {
         for trigger in crate::tools::parse_triggers(text) {
             if trigger.tool_name == "plan" {
-                let snapshot = self.snapshot_context(user_msg_id);
+                let snapshot = Self::snapshot_context(&self.graph.read(), user_msg_id);
                 crate::tools::spawn_plan_extraction(
                     trigger.args,
                     snapshot,
@@ -297,6 +311,7 @@ impl App {
     pub(super) fn save(&self) -> anyhow::Result<()> {
         let mut metadata = self.metadata.clone();
         metadata.last_modified = Utc::now();
-        persistence::save_conversation(&metadata.id, &metadata, &self.graph)
+        let g = self.graph.read();
+        persistence::save_conversation(&metadata.id, &metadata, &g)
     }
 }

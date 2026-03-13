@@ -1,4 +1,4 @@
-use crate::graph::{ConversationGraph, Edge, EdgeKind, Node, Role};
+use crate::graph::{ConversationGraph, Edge, EdgeKind, Node, NodeSnapshot, Role};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -6,7 +6,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 /// Current graph format version.
-pub const CURRENT_VERSION: u32 = 2;
+pub const CURRENT_VERSION: u32 = 3;
 
 /// Intermediate struct matching `ConversationGraphRaw` fields without the version envelope.
 #[derive(Serialize, Deserialize)]
@@ -15,6 +15,8 @@ struct GraphRaw {
     edges: Vec<Edge>,
     branches: HashMap<String, Uuid>,
     active_branch: String,
+    #[serde(default)]
+    history: HashMap<Uuid, Vec<NodeSnapshot>>,
 }
 
 // ── V1 types (original format, no version field) ─────────────────────
@@ -56,6 +58,17 @@ pub struct V2Graph {
     pub active_branch: String,
 }
 
+// ── V3 types (node versioning history, stop_reason on Message) ───────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct V3Graph {
+    pub nodes: HashMap<Uuid, Node>,
+    pub edges: Vec<Edge>,
+    pub branches: HashMap<String, Uuid>,
+    pub active_branch: String,
+    pub history: HashMap<Uuid, Vec<NodeSnapshot>>,
+}
+
 // ── Tagged union for versioned graphs ────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,16 +76,21 @@ pub struct V2Graph {
 pub enum VersionedGraph {
     #[serde(rename = "2")]
     V2(V2Graph),
+    #[serde(rename = "3")]
+    V3(V3Graph),
 }
 
-/// Detect the version of a serialized graph.
-/// Tries to deserialize as `VersionedGraph` (tagged union). If that fails
-/// (V1 files have no `version` field), returns 1.
+/// Detect the version of a serialized graph by parsing only the `"version"` tag.
+/// V1 files have no `version` field, so absence defaults to 1.
 fn detect_version(data: &str) -> u32 {
-    if serde_json::from_str::<VersionedGraph>(data).is_ok() {
-        return 2;
+    #[derive(Deserialize)]
+    struct VersionTag {
+        version: String,
     }
-    1
+    serde_json::from_str::<VersionTag>(data)
+        .ok()
+        .and_then(|t| t.version.parse().ok())
+        .unwrap_or(1)
 }
 
 // ── Migration functions ──────────────────────────────────────────────
@@ -132,6 +150,18 @@ fn migrate_v1_to_v2(v1: V1Graph) -> V2Graph {
     }
 }
 
+/// Migrate V2 → V3: add empty history. Nodes already handle `stop_reason`
+/// via `#[serde(default)]` so no per-node transformation needed.
+fn migrate_v2_to_v3(v2: V2Graph) -> V3Graph {
+    V3Graph {
+        nodes: v2.nodes,
+        edges: v2.edges,
+        branches: v2.branches,
+        active_branch: v2.active_branch,
+        history: HashMap::new(),
+    }
+}
+
 // ── Public API ───────────────────────────────────────────────────────
 
 /// Back up a graph file before migration.
@@ -150,37 +180,47 @@ pub fn load_and_migrate(graph_path: &Path) -> anyhow::Result<ConversationGraph> 
 
     if version >= CURRENT_VERSION {
         let versioned: VersionedGraph = serde_json::from_str(&data)?;
-        let VersionedGraph::V2(v2) = versioned;
-        return v2_to_conversation_graph(v2);
+        return match versioned {
+            VersionedGraph::V3(v3) => v3_to_conversation_graph(v3),
+            VersionedGraph::V2(_) => unreachable!("version >= 3 but deserialized as V2"),
+        };
     }
 
     // Migration needed
     backup_graph(graph_path, version)?;
 
-    let v2 = match version {
+    let v3 = match version {
         1 => {
             let v1: V1Graph = serde_json::from_str(&data)?;
-            migrate_v1_to_v2(v1)
+            migrate_v2_to_v3(migrate_v1_to_v2(v1))
+        }
+        2 => {
+            let versioned: VersionedGraph = serde_json::from_str(&data)?;
+            let VersionedGraph::V2(v2) = versioned else {
+                anyhow::bail!("Expected V2 graph for version 2")
+            };
+            migrate_v2_to_v3(v2)
         }
         other => anyhow::bail!("Unknown graph version: {other}"),
     };
 
     // Write the migrated graph wrapped in the versioned envelope
-    let migrated_json = serde_json::to_string_pretty(&VersionedGraph::V2(v2.clone()))?;
+    let migrated_json = serde_json::to_string_pretty(&VersionedGraph::V3(v3.clone()))?;
     let tmp_path = graph_path.with_extension("json.tmp");
     std::fs::write(&tmp_path, &migrated_json)?;
     std::fs::rename(&tmp_path, graph_path)?;
 
-    v2_to_conversation_graph(v2)
+    v3_to_conversation_graph(v3)
 }
 
-/// Convert a `V2Graph` to the live `ConversationGraph`.
-fn v2_to_conversation_graph(v2: V2Graph) -> anyhow::Result<ConversationGraph> {
+/// Convert a `V3Graph` to the live `ConversationGraph`.
+fn v3_to_conversation_graph(v3: V3Graph) -> anyhow::Result<ConversationGraph> {
     let raw = GraphRaw {
-        nodes: v2.nodes,
-        edges: v2.edges,
-        branches: v2.branches,
-        active_branch: v2.active_branch,
+        nodes: v3.nodes,
+        edges: v3.edges,
+        branches: v3.branches,
+        active_branch: v3.active_branch,
+        history: v3.history,
     };
 
     let json = serde_json::to_string(&raw)?;
@@ -188,17 +228,18 @@ fn v2_to_conversation_graph(v2: V2Graph) -> anyhow::Result<ConversationGraph> {
     Ok(graph)
 }
 
-/// Wrap a `ConversationGraph` in the V2 envelope for saving.
+/// Wrap a `ConversationGraph` in the V3 envelope for saving.
 pub fn to_versioned_json(graph: &ConversationGraph) -> anyhow::Result<String> {
     let raw_json = serde_json::to_string(graph)?;
     let raw: GraphRaw = serde_json::from_str(&raw_json)?;
-    let v2 = V2Graph {
+    let v3 = V3Graph {
         nodes: raw.nodes,
         edges: raw.edges,
         branches: raw.branches,
         active_branch: raw.active_branch,
+        history: raw.history,
     };
-    let versioned = VersionedGraph::V2(v2);
+    let versioned = VersionedGraph::V3(v3);
 
     Ok(serde_json::to_string_pretty(&versioned)?)
 }

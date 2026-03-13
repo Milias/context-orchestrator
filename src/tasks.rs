@@ -1,4 +1,6 @@
-use crate::graph::{BackgroundTaskKind, GitFileStatus, StopReason, TaskStatus, ToolResultContent};
+use crate::graph::{
+    BackgroundTaskKind, GitFileStatus, StopReason, TaskStatus, ToolCallArguments, ToolResultContent,
+};
 use crate::llm::ChatMessage;
 use crate::tools::PlanExtractionResult;
 use serde::{Deserialize, Serialize};
@@ -88,30 +90,27 @@ pub enum AgentEvent {
         text: String,
         is_thinking: bool,
     },
-    IterationDone {
+    /// The agent committed an assistant message to the shared graph.
+    /// Main loop uses this for TUI display tracking only — no graph mutation needed.
+    IterationCommitted {
         assistant_id: Uuid,
-        response: String,
-        think_text: String,
-        output_tokens: Option<u32>,
         stop_reason: Option<StopReason>,
     },
-    ToolCallRequest {
+    /// The agent added tool call nodes to the shared graph and needs executors spawned.
+    /// Main loop spawns tool execution + tracks cancel tokens. No graph mutation needed.
+    ToolCallDispatched {
         tool_call_id: Uuid,
-        assistant_id: Uuid,
-        api_id: String,
-        name: String,
-        input: String,
+        arguments: ToolCallArguments,
     },
     Finished,
     Error(String),
 }
 
-/// Tool result forwarded from the main loop to the agent task.
+/// Notification from the main loop to the agent that a tool call completed.
+/// The main loop already applied the result to the shared graph.
 #[derive(Debug)]
 pub struct AgentToolResult {
     pub tool_call_id: Uuid,
-    pub content: ToolResultContent,
-    pub is_error: bool,
 }
 
 #[derive(Debug)]

@@ -2,16 +2,15 @@ use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::llm::{ChatContent, ChatMessage, ContentBlock, LlmProvider, RawJson, ToolDefinition};
 
-/// Build the LLM context (system prompt + messages) from the conversation graph.
-/// Counts tokens and truncates if needed.
-pub(super) async fn build_context(
+/// Extract messages from the conversation graph. Synchronous — no API calls.
+/// Caller should hold a read lock on the shared graph while calling this.
+pub(super) fn extract_messages(
     graph: &ConversationGraph,
-    provider: &dyn LlmProvider,
-    model: &str,
-    max_context_tokens: u32,
     tools: &[ToolDefinition],
-) -> anyhow::Result<(Option<String>, Vec<ChatMessage>)> {
-    let history = graph.get_branch_history(graph.active_branch())?;
+) -> (Option<String>, Vec<ChatMessage>) {
+    let history = graph
+        .get_branch_history(graph.active_branch())
+        .unwrap_or_default();
 
     let mut system_prompt = None;
     let mut messages = Vec::new();
@@ -45,6 +44,24 @@ pub(super) async fn build_context(
         }
     }
 
+    // Append tool names to system prompt so the LLM knows what's available.
+    if !tools.is_empty() {
+        // No mutation needed — tool definitions are passed separately to the API.
+    }
+
+    (system_prompt, messages)
+}
+
+/// Count tokens and truncate messages if needed. Async — calls the LLM provider API.
+/// Must NOT hold any graph lock while calling this.
+pub(super) async fn finalize_context(
+    system_prompt: Option<String>,
+    mut messages: Vec<ChatMessage>,
+    provider: &dyn LlmProvider,
+    model: &str,
+    max_context_tokens: u32,
+    tools: &[ToolDefinition],
+) -> anyhow::Result<(Option<String>, Vec<ChatMessage>)> {
     let token_count = provider
         .count_tokens(&messages, model, system_prompt.as_deref(), tools)
         .await
