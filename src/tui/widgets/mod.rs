@@ -6,4 +6,5 @@ pub mod markdown;
 pub mod message_style;
 mod table;
 mod task_list;
+pub mod tool_status;
 pub mod trigger_highlight;

@@ -2,6 +2,7 @@ use super::*;
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus};
 use crate::graph::{BackgroundTaskKind, ConversationGraph, Node, TaskStatus};
 use chrono::{Duration as ChronoDuration, Utc};
+use std::time::Duration;
 use uuid::Uuid;
 
 #[test]

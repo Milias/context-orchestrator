@@ -1,11 +1,14 @@
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{ConversationGraph, Node, TaskStatus};
+use crate::tui::widgets::tool_status::{
+    bg_task_status_icon, elapsed, finished, format_duration, tool_call_status_icon, truncate,
+    visible_width, TaskDuration,
+};
 use crate::tui::TuiState;
 
 use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
-use std::time::Duration;
 
 pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
     let now = Utc::now();
@@ -177,12 +180,6 @@ enum TaskKind {
     BackgroundTask(TaskStatus),
 }
 
-enum TaskDuration {
-    Pending,
-    Elapsed(Duration),
-    Finished(Duration),
-}
-
 impl TaskEntry {
     fn from_node(node: &Node, now: DateTime<Utc>) -> Option<Self> {
         match node {
@@ -240,72 +237,10 @@ impl TaskEntry {
 
     fn status_icon(&self) -> (&'static str, Color) {
         match &self.kind {
-            TaskKind::ToolCall(s) => match s {
-                ToolCallStatus::Pending => ("○", Color::DarkGray),
-                ToolCallStatus::Running => ("◉", Color::Yellow),
-                ToolCallStatus::Completed => ("✓", Color::Green),
-                ToolCallStatus::Failed => ("✗", Color::Red),
-                ToolCallStatus::Cancelled => ("⊘", Color::DarkGray),
-            },
-            TaskKind::BackgroundTask(s) => match s {
-                TaskStatus::Pending => ("○", Color::DarkGray),
-                TaskStatus::Running => ("◉", Color::Yellow),
-                TaskStatus::Completed => ("✓", Color::Green),
-                TaskStatus::Failed => ("✗", Color::Red),
-                TaskStatus::Stopped => ("■", Color::DarkGray),
-            },
+            TaskKind::ToolCall(s) => tool_call_status_icon(s),
+            TaskKind::BackgroundTask(s) => bg_task_status_icon(*s),
         }
     }
-}
-
-fn elapsed(now: DateTime<Utc>, start: DateTime<Utc>) -> TaskDuration {
-    let d = (now - start).to_std().unwrap_or_default();
-    TaskDuration::Elapsed(d)
-}
-
-fn finished(end: DateTime<Utc>, start: DateTime<Utc>) -> TaskDuration {
-    let d = (end - start).to_std().unwrap_or_default();
-    TaskDuration::Finished(d)
-}
-
-// ── Formatting helpers ───────────────────────────────────────────────
-
-fn format_duration(d: &TaskDuration) -> String {
-    match d {
-        TaskDuration::Pending => "···".to_string(),
-        TaskDuration::Elapsed(d) | TaskDuration::Finished(d) => {
-            let total_ms = d.as_millis();
-            if total_ms < 1000 {
-                format!("{total_ms}ms")
-            } else {
-                let total_secs = d.as_secs();
-                if total_secs < 10 {
-                    let secs = d.as_secs_f64();
-                    format!("{secs:.1}s")
-                } else if total_secs < 60 {
-                    format!("{total_secs}s")
-                } else {
-                    let m = total_secs / 60;
-                    let s = total_secs % 60;
-                    format!("{m}m {s:02}s")
-                }
-            }
-        }
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
-        t.push('…');
-        t
-    }
-}
-
-fn visible_width(s: &str) -> usize {
-    s.chars().count()
 }
 
 fn is_task_node(node: &Node) -> bool {

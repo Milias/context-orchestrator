@@ -315,9 +315,18 @@ fn append_agent_display(
             });
         }
         AgentVisualPhase::ExecutingTools => {
-            let tool_lines = build_tool_status_lines(display, graph);
-            let full_text = combine_text(&accumulated, &tool_lines);
-            let mut styled = render_markdown(&full_text);
+            let mut styled = if accumulated.is_empty() {
+                Text::default()
+            } else {
+                render_markdown(&accumulated)
+            };
+            let tool_lines = super::tool_status::build_tool_lines(
+                graph,
+                &display.iteration_node_ids,
+                display.spinner_tick,
+                msg_content_width,
+            );
+            styled.lines.extend(tool_lines);
             append_cursor(&mut styled, display.spinner_tick);
             let height = compute_styled_height(&styled, msg_content_width, false);
             entries.push(MessageEntry::Streaming {
@@ -326,33 +335,6 @@ fn append_agent_display(
             });
         }
     }
-}
-
-/// Build status lines for running/completed tool calls from the graph.
-fn build_tool_status_lines(
-    display: &crate::tui::AgentDisplayState,
-    graph: &ConversationGraph,
-) -> String {
-    use crate::graph::tool_types::ToolCallStatus;
-
-    let mut lines = Vec::new();
-    for assistant_id in &display.iteration_node_ids {
-        for tc_id in graph.sources_by_edge(*assistant_id, EdgeKind::Invoked) {
-            if let Some(Node::ToolCall {
-                status, arguments, ..
-            }) = graph.node(tc_id)
-            {
-                let icon = match status {
-                    ToolCallStatus::Running | ToolCallStatus::Pending => display.spinner_char(),
-                    ToolCallStatus::Completed => "✓",
-                    ToolCallStatus::Failed => "✗",
-                    ToolCallStatus::Cancelled => "⊘",
-                };
-                lines.push(format!("{icon} {}", arguments.display_summary()));
-            }
-        }
-    }
-    lines.join("\n")
 }
 
 fn combine_text(accumulated: &str, current: &str) -> String {
