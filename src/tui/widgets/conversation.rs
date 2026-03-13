@@ -1,5 +1,6 @@
 use crate::graph::{ConversationGraph, Node, Role};
 use crate::tui::widgets::markdown::render_markdown;
+use crate::tui::widgets::trigger_highlight::highlight_triggers;
 use crate::tui::{CachedRender, TuiState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -152,7 +153,10 @@ fn build_entries<'a>(
             let cached = tui_state.render_cache.get(&id);
             let valid = cached.is_some_and(|c| c.cached_width == msg_content_width);
             if !valid {
-                let styled = render_markdown(node.content());
+                let mut styled = render_markdown(node.content());
+                if matches!(node, Node::Message { role: Role::User, .. }) {
+                    highlight_triggers(&mut styled);
+                }
                 let has_thinking = graph.has_think_block(id);
                 let height = compute_styled_height(&styled, msg_content_width, has_thinking);
                 tui_state.render_cache.insert(
