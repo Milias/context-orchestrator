@@ -47,7 +47,16 @@ pub(super) async fn stream_llm_response(
         return Ok(cancelled_result());
     };
 
-    consume_stream(stream, recv_phase_id, provider, &messages, config, task_tx, cancel_token).await
+    consume_stream(
+        stream,
+        recv_phase_id,
+        provider,
+        &messages,
+        config,
+        task_tx,
+        cancel_token,
+    )
+    .await
 }
 
 async fn consume_stream(
