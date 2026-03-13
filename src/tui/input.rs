@@ -362,19 +362,14 @@ fn handle_context_panel_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
             tui_state.context_list_offset = 0;
             tui_state.task_selection = None;
         }
-        KeyCode::Up if on_tasks_tab => {
-            let max = tui_state.active_task_ids.len();
-            if max > 0 {
-                let cur = tui_state.task_selection.unwrap_or(0);
-                tui_state.task_selection = Some(cur.saturating_sub(1));
-            }
+        KeyCode::Up if on_tasks_tab && !tui_state.active_task_ids.is_empty() => {
+            let cur = tui_state.task_selection.unwrap_or(0);
+            tui_state.task_selection = Some(cur.saturating_sub(1));
         }
-        KeyCode::Down if on_tasks_tab => {
+        KeyCode::Down if on_tasks_tab && !tui_state.active_task_ids.is_empty() => {
             let max = tui_state.active_task_ids.len();
-            if max > 0 {
-                let cur = tui_state.task_selection.unwrap_or(0);
-                tui_state.task_selection = Some((cur + 1).min(max.saturating_sub(1)));
-            }
+            let cur = tui_state.task_selection.unwrap_or(0);
+            tui_state.task_selection = Some((cur + 1).min(max.saturating_sub(1)));
         }
         KeyCode::Char('x') if on_tasks_tab => {
             if let Some(idx) = tui_state.task_selection {
