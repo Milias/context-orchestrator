@@ -3,7 +3,7 @@ use crate::tui::{ContextTab, FocusPanel, TuiState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs};
 
-pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let focused = tui_state.focus == FocusPanel::ContextPanel;
     let border_color = if focused {
         Color::Yellow
@@ -60,7 +60,7 @@ fn render_tab_content(
     frame: &mut Frame,
     area: Rect,
     graph: &ConversationGraph,
-    tui_state: &TuiState,
+    tui_state: &mut TuiState,
 ) {
     match tui_state.context_tab {
         ContextTab::Outline => render_outline(frame, area, graph),

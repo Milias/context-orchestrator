@@ -21,6 +21,7 @@ const SKIP_DIRS: &[&str] = &[
 use crate::llm::tool_types::{SchemaProperty, SchemaType, ToolDefinition, ToolInputSchema};
 use crate::tasks::TaskMessage;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 pub struct ToolExecutionResult {
@@ -139,17 +140,24 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
 }
 
 /// Spawn a tokio task that executes a tool call and sends the result back via the channel.
+/// The task is cancelled when `cancel_token` fires, sending a cancellation error.
 pub fn spawn_tool_execution(
     tool_call_id: Uuid,
     arguments: ToolCallArguments,
     tx: mpsc::UnboundedSender<TaskMessage>,
+    cancel_token: CancellationToken,
 ) {
     tokio::spawn(async move {
-        let result = execute_tool(&arguments).await;
+        let (content, is_error) = tokio::select! {
+            result = execute_tool(&arguments) => (result.content, result.is_error),
+            () = cancel_token.cancelled() => {
+                (ToolResultContent::text("Tool execution cancelled"), true)
+            }
+        };
         let _ = tx.send(TaskMessage::ToolCallCompleted {
             tool_call_id,
-            content: result.content,
-            is_error: result.is_error,
+            content,
+            is_error,
         });
     });
 }

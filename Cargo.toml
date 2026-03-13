@@ -24,6 +24,7 @@ notify-debouncer-mini = "0.5"
 streamdown-parser = "0.1"
 regex = "1"
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [lints.clippy]
 pedantic = { level = "deny", priority = -1 }

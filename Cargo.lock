@@ -335,6 +335,7 @@ dependencies = [
  "syntect",
  "tempfile",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -2860,6 +2861,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

@@ -11,6 +11,7 @@ pub enum Action {
     ScrollDown,
     PageUp,
     PageDown,
+    CancelTask(uuid::Uuid),
 }
 
 pub fn handle_key_event(
@@ -348,14 +349,39 @@ fn move_cursor_down(tui_state: &mut TuiState) {
 }
 
 fn handle_context_panel_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
+    let on_tasks_tab = tui_state.context_tab == crate::tui::ContextTab::Tasks;
+
     match key.code {
         KeyCode::Left => {
             tui_state.context_tab = tui_state.context_tab.prev();
             tui_state.context_list_offset = 0;
+            tui_state.task_selection = None;
         }
         KeyCode::Right => {
             tui_state.context_tab = tui_state.context_tab.next();
             tui_state.context_list_offset = 0;
+            tui_state.task_selection = None;
+        }
+        KeyCode::Up if on_tasks_tab => {
+            let max = tui_state.active_task_ids.len();
+            if max > 0 {
+                let cur = tui_state.task_selection.unwrap_or(0);
+                tui_state.task_selection = Some(cur.saturating_sub(1));
+            }
+        }
+        KeyCode::Down if on_tasks_tab => {
+            let max = tui_state.active_task_ids.len();
+            if max > 0 {
+                let cur = tui_state.task_selection.unwrap_or(0);
+                tui_state.task_selection = Some((cur + 1).min(max.saturating_sub(1)));
+            }
+        }
+        KeyCode::Char('x') if on_tasks_tab => {
+            if let Some(idx) = tui_state.task_selection {
+                if let Some(&task_id) = tui_state.active_task_ids.get(idx) {
+                    return Action::CancelTask(task_id);
+                }
+            }
         }
         KeyCode::Up => {
             tui_state.context_list_offset = tui_state.context_list_offset.saturating_sub(1);

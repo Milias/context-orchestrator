@@ -9,8 +9,9 @@ use crate::tui::TuiState;
 use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use uuid::Uuid;
 
-pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let now = Utc::now();
     let mut services: Vec<ServiceEntry> = Vec::new();
     let mut active: Vec<TaskEntry> = Vec::new();
@@ -22,7 +23,6 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
                 if entry.is_active {
                     services.push(ServiceEntry::from(&entry));
                 }
-                // Services are never shown in history — they're noise
             }
             Some(entry) if entry.is_active => active.push(entry),
             Some(entry) => history.push(entry),
@@ -33,12 +33,31 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
     active.sort_by_key(|e| e.created_at);
     history.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
+    // Update active task IDs for input handler (maps selection index → UUID)
+    tui_state.active_task_ids = active.iter().map(|e| e.node_id).collect();
+    // Clamp selection to valid range
+    if let Some(sel) = tui_state.task_selection {
+        if sel >= tui_state.active_task_ids.len() {
+            tui_state.task_selection = if tui_state.active_task_ids.is_empty() {
+                None
+            } else {
+                Some(tui_state.active_task_ids.len() - 1)
+            };
+        }
+    }
+
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    render_active_panel(frame, columns[0], &services, &active);
+    render_active_panel(
+        frame,
+        columns[0],
+        &services,
+        &active,
+        tui_state.task_selection,
+    );
     render_history_panel(frame, columns[1], &history, tui_state.context_list_offset);
 }
 
@@ -49,6 +68,7 @@ fn render_active_panel(
     area: Rect,
     services: &[ServiceEntry],
     tasks: &[TaskEntry],
+    selection: Option<usize>,
 ) {
     let block = Block::default()
         .title("Running")
@@ -76,8 +96,12 @@ fn render_active_panel(
         items.push(ListItem::new(format_services_line(services, width)));
     }
 
-    for entry in tasks {
-        items.push(ListItem::new(format_entry_line(entry, width)));
+    for (i, entry) in tasks.iter().enumerate() {
+        let mut item = ListItem::new(format_entry_line(entry, width));
+        if selection == Some(i) {
+            item = item.style(Style::default().bg(Color::Rgb(40, 40, 60)));
+        }
+        items.push(item);
     }
 
     frame.render_widget(List::new(items), inner);
@@ -167,6 +191,7 @@ impl ServiceEntry {
 }
 
 struct TaskEntry {
+    node_id: Uuid,
     name: String,
     is_active: bool,
     is_service: bool,
@@ -184,6 +209,7 @@ impl TaskEntry {
     fn from_node(node: &Node, now: DateTime<Utc>) -> Option<Self> {
         match node {
             Node::ToolCall {
+                id,
                 arguments,
                 status,
                 created_at,
@@ -198,6 +224,7 @@ impl TaskEntry {
                     (false, None) => finished(now, *created_at),
                 };
                 Some(Self {
+                    node_id: *id,
                     name: arguments.display_summary(),
                     is_active,
                     is_service: false,
@@ -207,6 +234,7 @@ impl TaskEntry {
                 })
             }
             Node::BackgroundTask {
+                id,
                 kind,
                 status,
                 description,
@@ -223,6 +251,7 @@ impl TaskEntry {
                     finished(*updated_at, *created_at)
                 };
                 Some(Self {
+                    node_id: *id,
                     name: description.clone(),
                     is_active,
                     is_service: kind.is_service(),

@@ -10,7 +10,8 @@ use chrono::Utc;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// Configuration extracted from `AppConfig` for the agent loop.
@@ -30,7 +31,7 @@ pub(super) fn spawn_agent_loop(
     user_msg_id: Uuid,
     task_tx: mpsc::UnboundedSender<TaskMessage>,
     tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
-    cancel_rx: watch::Receiver<bool>,
+    cancel_token: CancellationToken,
 ) {
     tokio::spawn(async move {
         let result = run_agent_loop(
@@ -40,7 +41,7 @@ pub(super) fn spawn_agent_loop(
             user_msg_id,
             &task_tx,
             tool_result_rx,
-            cancel_rx,
+            cancel_token,
         )
         .await;
         if let Err(e) = result {
@@ -57,9 +58,16 @@ async fn run_agent_loop(
     user_msg_id: Uuid,
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
     mut tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
-    cancel_rx: watch::Receiver<bool>,
+    cancel_token: CancellationToken,
 ) -> anyhow::Result<()> {
-    count_user_tokens(&graph, &provider, &config, user_msg_id, task_tx).await;
+    // Fire-and-forget: token counting is independent of context building.
+    spawn_count_user_tokens(
+        graph.clone(),
+        Arc::clone(&provider),
+        config.model.clone(),
+        user_msg_id,
+        task_tx.clone(),
+    );
 
     let chat_config = ChatConfig {
         model: config.model.clone(),
@@ -69,7 +77,14 @@ async fn run_agent_loop(
     };
 
     for _ in 0..config.max_tool_loop_iterations {
-        send(task_tx, AgentEvent::Progress(AgentPhase::BuildingContext));
+        let ctx_phase = Uuid::new_v4();
+        send(
+            task_tx,
+            AgentEvent::Progress {
+                phase_id: ctx_phase,
+                phase: AgentPhase::BuildingContext,
+            },
+        );
         let (system_prompt, messages) = context::build_context(
             &graph,
             provider.as_ref(),
@@ -78,18 +93,25 @@ async fn run_agent_loop(
             &config.tools,
         )
         .await?;
+        send(
+            task_tx,
+            AgentEvent::PhaseCompleted {
+                phase_id: ctx_phase,
+            },
+        );
 
         let loop_config = ChatConfig {
             system_prompt,
             ..chat_config.clone()
         };
 
+        // Connecting + Receiving phases are emitted by stream_llm_response internally
         let result = agent_streaming::stream_llm_response(
             &provider,
             messages,
             &loop_config,
             task_tx,
-            &cancel_rx,
+            &cancel_token,
         )
         .await?;
 
@@ -123,27 +145,37 @@ async fn run_agent_loop(
     Ok(())
 }
 
-/// Count user message tokens and notify the main loop.
-async fn count_user_tokens(
-    graph: &ConversationGraph,
-    provider: &Arc<dyn LlmProvider>,
-    config: &AgentLoopConfig,
+/// Spawn token counting as a fire-and-forget task. Runs concurrently with context building.
+fn spawn_count_user_tokens(
+    graph: ConversationGraph,
+    provider: Arc<dyn LlmProvider>,
+    model: String,
     user_msg_id: Uuid,
-    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    task_tx: mpsc::UnboundedSender<TaskMessage>,
 ) {
-    send(task_tx, AgentEvent::Progress(AgentPhase::CountingTokens));
-    if let Some(Node::Message { content, .. }) = graph.node(user_msg_id) {
-        let msg = vec![ChatMessage::text("user", content)];
-        if let Ok(count) = provider.count_tokens(&msg, &config.model, None, &[]).await {
-            send(
-                task_tx,
-                AgentEvent::UserTokensCounted {
-                    node_id: user_msg_id,
-                    count,
-                },
-            );
+    tokio::spawn(async move {
+        let phase_id = Uuid::new_v4();
+        send(
+            &task_tx,
+            AgentEvent::Progress {
+                phase_id,
+                phase: AgentPhase::CountingTokens,
+            },
+        );
+        if let Some(Node::Message { content, .. }) = graph.node(user_msg_id) {
+            let msg = vec![ChatMessage::text("user", content)];
+            if let Ok(count) = provider.count_tokens(&msg, &model, None, &[]).await {
+                send(
+                    &task_tx,
+                    AgentEvent::UserTokensCounted {
+                        node_id: user_msg_id,
+                        count,
+                    },
+                );
+            }
         }
-    }
+        send(&task_tx, AgentEvent::PhaseCompleted { phase_id });
+    });
 }
 
 /// Add the assistant response and think block to the local graph, send `IterationDone`.
@@ -222,14 +254,25 @@ async fn dispatch_and_wait_for_tools(
         );
     }
 
+    let tools_phase = Uuid::new_v4();
     send(
         task_tx,
-        AgentEvent::Progress(AgentPhase::ExecutingTools {
-            count: pending_ids.len(),
-        }),
+        AgentEvent::Progress {
+            phase_id: tools_phase,
+            phase: AgentPhase::ExecutingTools {
+                count: pending_ids.len(),
+            },
+        },
     );
 
-    wait_for_tool_results(graph, &mut pending_ids, tool_result_rx, task_tx).await
+    let timed_out = wait_for_tool_results(graph, &mut pending_ids, tool_result_rx, task_tx).await;
+    send(
+        task_tx,
+        AgentEvent::PhaseCompleted {
+            phase_id: tools_phase,
+        },
+    );
+    timed_out
 }
 
 /// Wait for all pending tool calls to complete. Returns `true` if timed out.
@@ -246,11 +289,6 @@ async fn wait_for_tool_results(
             Some(result) = tool_result_rx.recv() => {
                 apply_tool_result(graph, &result);
                 pending_ids.remove(&result.tool_call_id);
-                if !pending_ids.is_empty() {
-                    send(task_tx, AgentEvent::Progress(AgentPhase::ExecutingTools {
-                        count: pending_ids.len(),
-                    }));
-                }
             }
             () = tokio::time::sleep_until(deadline) => {
                 timeout_pending_tools(graph, pending_ids);

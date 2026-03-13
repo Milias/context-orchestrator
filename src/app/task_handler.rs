@@ -5,6 +5,7 @@ use crate::tool_executor;
 use crate::tui::{AgentDisplayState, AgentVisualPhase};
 
 use chrono::Utc;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::App;
@@ -103,9 +104,9 @@ impl App {
 
     fn handle_agent_event(&mut self, event: AgentEvent) {
         match event {
-            AgentEvent::Progress(phase) => {
+            AgentEvent::Progress { phase_id, phase } => {
                 self.tui_state.status_message = Some(phase.to_string());
-                self.track_phase_node(&phase);
+                self.track_phase_node(phase_id, &phase);
                 self.ensure_agent_display();
                 match phase {
                     AgentPhase::Receiving => {
@@ -124,7 +125,6 @@ impl App {
                     AgentPhase::CountingTokens
                     | AgentPhase::BuildingContext
                     | AgentPhase::Connecting { .. } => {
-                        // Preparing phases — keep phase as Preparing unless already streaming
                         if let Some(ref mut d) = self.tui_state.agent_display {
                             if matches!(d.phase, AgentVisualPhase::Preparing) {
                                 // Stay in Preparing
@@ -132,6 +132,9 @@ impl App {
                         }
                     }
                 }
+            }
+            AgentEvent::PhaseCompleted { phase_id } => {
+                self.complete_phase(phase_id);
             }
             AgentEvent::UserTokensCounted { node_id, count } => {
                 self.graph.set_input_tokens(node_id, count);
@@ -170,11 +173,12 @@ impl App {
                 self.handle_tool_call_dispatched(tool_call_id, assistant_id, args, Some(api_id));
             }
             AgentEvent::Finished => {
-                self.complete_current_phase();
+                self.complete_all_phases();
                 self.tui_state.agent_display = None;
                 self.tui_state.status_message = None;
                 self.agent_tool_tx = None;
-                self.cancel_tx = None;
+                self.cancel_token = None;
+                self.task_tokens.clear();
                 let _ = self.save();
             }
             AgentEvent::Error(msg) => {
@@ -226,23 +230,32 @@ impl App {
     }
 
     /// Mark the previous agent phase as Completed and create a new Running phase node.
-    fn track_phase_node(&mut self, phase: &AgentPhase) {
-        self.complete_current_phase();
-        let id = Uuid::new_v4();
+    fn track_phase_node(&mut self, phase_id: Uuid, phase: &AgentPhase) {
         self.graph.add_node(Node::BackgroundTask {
-            id,
+            id: phase_id,
             kind: BackgroundTaskKind::AgentPhase,
             status: TaskStatus::Running,
             description: phase.to_string(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         });
-        self.current_phase_id = Some(id);
+        self.active_phase_ids.insert(phase_id);
     }
 
-    /// Mark the current agent phase node as Completed if one exists.
-    fn complete_current_phase(&mut self) {
-        if let Some(id) = self.current_phase_id.take() {
+    fn complete_phase(&mut self, phase_id: Uuid) {
+        if self.active_phase_ids.remove(&phase_id) {
+            if let Some(Node::BackgroundTask { description, .. }) = self.graph.node(phase_id) {
+                let desc = description.clone();
+                let _ =
+                    self.graph
+                        .update_background_task_status(phase_id, TaskStatus::Completed, desc);
+            }
+        }
+    }
+
+    fn complete_all_phases(&mut self) {
+        let ids: Vec<Uuid> = self.active_phase_ids.drain().collect();
+        for id in ids {
             if let Some(Node::BackgroundTask { description, .. }) = self.graph.node(id) {
                 let desc = description.clone();
                 let _ = self
@@ -272,7 +285,12 @@ impl App {
             arguments.clone(),
             api_tool_use_id,
         );
-        tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone());
+        let token = self
+            .cancel_token
+            .as_ref()
+            .map_or_else(CancellationToken::new, CancellationToken::child_token);
+        self.task_tokens.insert(tool_call_id, token.clone());
+        tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone(), token);
     }
 
     pub(super) fn handle_tool_call_completed(
@@ -297,5 +315,13 @@ impl App {
             .graph
             .update_tool_call_status(tool_call_id, new_status, Some(Utc::now()));
         self.graph.add_tool_result(tool_call_id, content, is_error);
+        self.task_tokens.remove(&tool_call_id);
+    }
+
+    /// Cancel a running task by its graph node ID.
+    pub(super) fn cancel_task(&mut self, id: Uuid) {
+        if let Some(token) = self.task_tokens.remove(&id) {
+            token.cancel();
+        }
     }
 }

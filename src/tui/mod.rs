@@ -176,6 +176,11 @@ pub struct TuiState {
     pub autocomplete: AutocompleteState,
     /// Display state for the running agent loop. `None` when idle.
     pub agent_display: Option<AgentDisplayState>,
+    /// Selected index in the Running panel of the Tasks tab. `None` when no selection.
+    pub task_selection: Option<usize>,
+    /// Node IDs of active tasks in the Running panel, updated each frame by the task list widget.
+    /// Used by the input handler to map selection index → task UUID.
+    pub active_task_ids: Vec<Uuid>,
 }
 
 #[derive(Debug)]
@@ -203,6 +208,8 @@ impl TuiState {
             render_cache: HashMap::new(),
             autocomplete: AutocompleteState::default(),
             agent_display: None,
+            task_selection: None,
+            active_task_ids: Vec::new(),
         }
     }
 }

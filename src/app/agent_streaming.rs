@@ -9,7 +9,8 @@ use futures::StreamExt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 const MAX_STREAM_RETRIES: u32 = 2;
@@ -28,14 +29,14 @@ pub(super) async fn stream_llm_response(
     messages: Vec<ChatMessage>,
     config: &ChatConfig,
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
-    cancel_rx: &watch::Receiver<bool>,
+    cancel_token: &CancellationToken,
 ) -> anyhow::Result<StreamResult> {
     let Some(mut stream) = try_connect_chat(
         provider,
         &messages,
         config,
         task_tx,
-        cancel_rx,
+        cancel_token,
         "Connecting",
     )
     .await?
@@ -77,7 +78,7 @@ pub(super) async fn stream_llm_response(
                     &messages,
                     config,
                     task_tx,
-                    cancel_rx,
+                    cancel_token,
                 )
                 .await?
                 {
@@ -101,7 +102,7 @@ pub(super) async fn stream_llm_response(
                         &messages,
                         config,
                         task_tx,
-                        cancel_rx,
+                        cancel_token,
                     )
                     .await?
                     {
@@ -163,7 +164,7 @@ async fn try_reconnect(
     messages: &[ChatMessage],
     config: &ChatConfig,
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
-    cancel_rx: &watch::Receiver<bool>,
+    cancel_token: &CancellationToken,
 ) -> anyhow::Result<Option<ChatStream>> {
     if *retries >= MAX_STREAM_RETRIES {
         return Ok(None);
@@ -174,7 +175,7 @@ async fn try_reconnect(
         messages,
         config,
         task_tx,
-        cancel_rx,
+        cancel_token,
         "Reconnecting",
     )
     .await
@@ -186,23 +187,41 @@ async fn try_connect_chat(
     messages: &[ChatMessage],
     config: &ChatConfig,
     task_tx: &mpsc::UnboundedSender<TaskMessage>,
-    cancel_rx: &watch::Receiver<bool>,
+    cancel_token: &CancellationToken,
     context_label: &str,
 ) -> anyhow::Result<Option<ChatStream>> {
     let retry_config = RetryConfig::default();
 
     for attempt in 1..=retry_config.max_attempts {
+        let connect_phase = Uuid::new_v4();
         send(
             task_tx,
-            AgentEvent::Progress(AgentPhase::Connecting {
-                attempt,
-                max: retry_config.max_attempts,
-            }),
+            AgentEvent::Progress {
+                phase_id: connect_phase,
+                phase: AgentPhase::Connecting {
+                    attempt,
+                    max: retry_config.max_attempts,
+                },
+            },
         );
 
         match provider.chat(messages.to_vec(), config).await {
             Ok(s) => {
-                send(task_tx, AgentEvent::Progress(AgentPhase::Receiving));
+                send(
+                    task_tx,
+                    AgentEvent::PhaseCompleted {
+                        phase_id: connect_phase,
+                    },
+                );
+                let recv_phase = Uuid::new_v4();
+                send(
+                    task_tx,
+                    AgentEvent::Progress {
+                        phase_id: recv_phase,
+                        phase: AgentPhase::Receiving,
+                    },
+                );
+                // Receiving phase stays Running until stream completes (caller handles)
                 return Ok(Some(s));
             }
             Err(e) => {
@@ -211,9 +230,21 @@ async fn try_connect_chat(
                     .is_some_and(ApiError::is_retryable);
 
                 if !retryable || attempt == retry_config.max_attempts {
+                    send(
+                        task_tx,
+                        AgentEvent::PhaseCompleted {
+                            phase_id: connect_phase,
+                        },
+                    );
                     send(task_tx, AgentEvent::Error(format_error(&e)));
                     return Ok(None);
                 }
+                send(
+                    task_tx,
+                    AgentEvent::PhaseCompleted {
+                        phase_id: connect_phase,
+                    },
+                );
 
                 let delay = retry_config.delay_for(attempt - 1, e.downcast_ref::<ApiError>());
                 send(
@@ -225,13 +256,12 @@ async fn try_connect_chat(
                     )),
                 );
 
-                // Cancellable sleep: check cancel_rx during wait
-                let mut cancel = cancel_rx.clone();
                 let cancelled = tokio::select! {
                     () = tokio::time::sleep(delay) => false,
-                    _ = cancel.changed() => *cancel.borrow(),
+                    () = cancel_token.cancelled() => true,
                 };
                 if cancelled {
+                    // connect_phase for this attempt already completed above
                     return Ok(None);
                 }
             }

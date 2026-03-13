@@ -16,9 +16,11 @@ use crate::tui::{self, AgentDisplayState, TuiState};
 use chrono::Utc;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch, Semaphore};
+use tokio::sync::{mpsc, Semaphore};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 pub struct App {
@@ -32,10 +34,15 @@ pub struct App {
     task_tx: mpsc::UnboundedSender<TaskMessage>,
     /// Sender for forwarding tool completions to the running agent.
     agent_tool_tx: Option<mpsc::UnboundedSender<AgentToolResult>>,
-    /// Sender to signal cancellation to the running agent.
-    cancel_tx: Option<watch::Sender<bool>>,
-    /// Node ID of the currently running agent phase (`BackgroundTask` node).
-    current_phase_id: Option<Uuid>,
+    /// Root cancellation token for the running agent. Cancelling this propagates
+    /// to all child tokens (tool executions, streaming retries).
+    cancel_token: Option<CancellationToken>,
+    /// Per-task cancellation tokens, keyed by `tool_call_id`. Child tokens of
+    /// `cancel_token` — cancelling the parent propagates to all children.
+    task_tokens: HashMap<Uuid, CancellationToken>,
+    /// Node IDs of currently running agent phases (`BackgroundTask` nodes).
+    /// Multiple phases can be active simultaneously (e.g. token counting + context building).
+    active_phase_ids: HashSet<Uuid>,
 }
 
 impl App {
@@ -57,8 +64,9 @@ impl App {
             task_rx,
             task_tx,
             agent_tool_tx: None,
-            cancel_tx: None,
-            current_phase_id: None,
+            cancel_token: None,
+            task_tokens: HashMap::new(),
+            active_phase_ids: HashSet::new(),
         }
     }
 
@@ -141,8 +149,8 @@ impl App {
                         let action = input::handle_key_event(key, &mut self.tui_state, &self.graph);
                         match action {
                             Action::Quit => {
-                                if let Some(tx) = self.cancel_tx.take() {
-                                    let _ = tx.send(true);
+                                if let Some(ref token) = self.cancel_token {
+                                    token.cancel();
                                 }
                                 self.agent_tool_tx = None;
                                 self.graph.stop_running_tasks();
@@ -175,6 +183,9 @@ impl App {
                                     self.tui_state.scroll_offset.saturating_add(page)
                                 };
                             }
+                            Action::CancelTask(id) => {
+                                self.cancel_task(id);
+                            }
                             Action::None => {}
                         }
                     }
@@ -188,8 +199,8 @@ impl App {
                     }
                 }
                 _ = sigterm.recv() => {
-                    if let Some(tx) = self.cancel_tx.take() {
-                        let _ = tx.send(true);
+                    if let Some(ref token) = self.cancel_token {
+                        token.cancel();
                     }
                     self.agent_tool_tx = None;
                     self.graph.stop_running_tasks();
@@ -231,11 +242,12 @@ impl App {
         self.tui_state.auto_scroll = true;
         self.tui_state.scroll_offset = u16::MAX;
 
-        // Create channels for agent ↔ main loop communication
+        // Create channels and cancellation for agent ↔ main loop communication
         let (agent_tool_tx, agent_tool_rx) = mpsc::unbounded_channel();
-        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let cancel_token = CancellationToken::new();
         self.agent_tool_tx = Some(agent_tool_tx);
-        self.cancel_tx = Some(cancel_tx);
+        self.cancel_token = Some(cancel_token.clone());
+        self.task_tokens.clear();
 
         let loop_config = agent_loop::AgentLoopConfig {
             model: self.config.anthropic_model.clone(),
@@ -252,7 +264,7 @@ impl App {
             user_msg_id,
             self.task_tx.clone(),
             agent_tool_rx,
-            cancel_rx,
+            cancel_token,
         );
 
         Ok(())

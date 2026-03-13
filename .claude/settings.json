@@ -7,7 +7,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "cargo fmt --all && cargo clippy --all-targets"
+                        "command": "cargo fmt --all && cargo clippy --all-targets && cargo test"
                     }
                 ]
             }

@@ -73,7 +73,13 @@ impl fmt::Display for AgentPhase {
 /// Events sent from the background agent loop to the main event loop.
 #[derive(Debug)]
 pub enum AgentEvent {
-    Progress(AgentPhase),
+    Progress {
+        phase_id: Uuid,
+        phase: AgentPhase,
+    },
+    PhaseCompleted {
+        phase_id: Uuid,
+    },
     UserTokensCounted {
         node_id: Uuid,
         count: u32,
