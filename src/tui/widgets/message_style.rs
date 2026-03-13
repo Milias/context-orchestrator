@@ -225,9 +225,3 @@ pub fn render_streaming(
         full_height,
     );
 }
-
-/// Render a borderless spinner line for agent preparation phases.
-pub fn render_agent_activity(frame: &mut Frame, area: Rect, styled_text: &Text<'static>) {
-    let paragraph = Paragraph::new(styled_text.clone()).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, area);
-}

@@ -126,8 +126,8 @@ impl App {
                     | AgentPhase::BuildingContext
                     | AgentPhase::Connecting { .. } => {
                         if let Some(ref mut d) = self.tui_state.agent_display {
-                            if matches!(d.phase, AgentVisualPhase::Preparing) {
-                                // Stay in Preparing
+                            if !matches!(d.phase, AgentVisualPhase::Streaming { .. }) {
+                                d.phase = AgentVisualPhase::Preparing;
                             }
                         }
                     }

@@ -3,9 +3,7 @@ use crate::tui::widgets::display_helpers::{
     compute_styled_height, display_content, format_scroll_indicator,
 };
 use crate::tui::widgets::markdown::render_markdown;
-use crate::tui::widgets::message_style::{
-    render_agent_activity, render_message, render_streaming, MessageRenderParams,
-};
+use crate::tui::widgets::message_style::{render_message, render_streaming, MessageRenderParams};
 use crate::tui::widgets::trigger_highlight::highlight_triggers;
 use crate::tui::{AgentVisualPhase, CachedRender, TuiState, CURSOR_FRAMES};
 use chrono::{DateTime, Utc};
@@ -124,9 +122,6 @@ fn render_entries(
             } => {
                 render_streaming(frame, msg_area, styled_text, clip_top, *height as u16);
             }
-            MessageEntry::AgentActivity { styled_text, .. } => {
-                render_agent_activity(frame, msg_area, styled_text);
-            }
         }
 
         y_offset += h;
@@ -145,18 +140,12 @@ enum MessageEntry<'a> {
         styled_text: Text<'static>,
         height: usize,
     },
-    AgentActivity {
-        styled_text: Text<'static>,
-        height: usize,
-    },
 }
 
 impl MessageEntry<'_> {
     fn height(&self) -> usize {
         match self {
-            Self::Node { height, .. }
-            | Self::Streaming { height, .. }
-            | Self::AgentActivity { height, .. } => *height,
+            Self::Node { height, .. } | Self::Streaming { height, .. } => *height,
         }
     }
 }
@@ -242,14 +231,26 @@ fn build_entries<'a>(
         }
     }
 
-    if let Some(ref display) = tui_state.agent_display {
-        append_agent_display(
-            display,
-            graph,
-            tui_state.status_message.as_ref(),
-            msg_content_width,
-            &mut entries,
-        );
+    // Clone info before mutable borrow for push_tool_indicators
+    let agent_info = tui_state.agent_display.as_ref().map(|d| {
+        (
+            d.iteration_node_ids.clone(),
+            tui_state.status_message.clone(),
+        )
+    });
+    if let Some((ids, status)) = &agent_info {
+        if let Some(ref display) = tui_state.agent_display {
+            append_agent_display(
+                display,
+                graph,
+                status.as_ref(),
+                msg_content_width,
+                &mut entries,
+            );
+        }
+        for id in ids {
+            push_tool_indicators(*id, graph, tui_state, msg_content_width, &mut entries);
+        }
     }
 
     entries
@@ -288,13 +289,19 @@ fn append_agent_display(
         AgentVisualPhase::Preparing => {
             let status = status_message.map_or("Preparing...", String::as_str);
             let spinner = display.spinner_char();
-            let styled = Text::from(Line::from(vec![
+            let mut styled = if accumulated.is_empty() {
+                Text::default()
+            } else {
+                render_markdown(&accumulated)
+            };
+            styled.lines.push(Line::from(vec![
                 Span::styled(format!("{spinner} "), Style::default().fg(Color::Green)),
                 Span::styled(status.to_string(), Style::default().fg(Color::DarkGray)),
             ]));
-            entries.push(MessageEntry::AgentActivity {
-                height: 1,
+            let height = compute_styled_height(&styled, msg_content_width, false);
+            entries.push(MessageEntry::Streaming {
                 styled_text: styled,
+                height,
             });
         }
         AgentVisualPhase::Streaming { text, is_thinking } => {
@@ -315,24 +322,16 @@ fn append_agent_display(
             });
         }
         AgentVisualPhase::ExecutingTools => {
-            let mut styled = if accumulated.is_empty() {
-                Text::default()
-            } else {
-                render_markdown(&accumulated)
-            };
-            let tool_lines = super::tool_status::build_tool_lines(
-                graph,
-                &display.iteration_node_ids,
-                display.spinner_tick,
-                msg_content_width,
-            );
-            styled.lines.extend(tool_lines);
-            append_cursor(&mut styled, display.spinner_tick);
-            let height = compute_styled_height(&styled, msg_content_width, false);
-            entries.push(MessageEntry::Streaming {
-                styled_text: styled,
-                height,
-            });
+            // Tool calls/results are rendered as full message blocks via push_tool_indicators
+            if !accumulated.is_empty() {
+                let mut styled = render_markdown(&accumulated);
+                append_cursor(&mut styled, display.spinner_tick);
+                let height = compute_styled_height(&styled, msg_content_width, false);
+                entries.push(MessageEntry::Streaming {
+                    styled_text: styled,
+                    height,
+                });
+            }
         }
     }
 }
