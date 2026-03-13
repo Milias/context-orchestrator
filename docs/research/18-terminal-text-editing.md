@@ -1,13 +1,21 @@
 # 18 — Terminal Text Editing for the Input Box
 
 > **Date:** 2026-03-14
-> **Summary:** The current input box has minimal editing support (character movement, backspace, newlines). Replacing the custom implementation with `tui-textarea` provides full emacs-style keybindings — word movement, word deletion, kill/yank, undo/redo — with a single dependency swap and moderate integration effort.
+> **Summary:** The current input box has minimal editing support (character movement, backspace, newlines). Two viable paths exist: (1) adopt `ratatui-textarea` v0.8.0 (the official ratatui org fork, ratatui 0.30 compatible) for full emacs-style keybindings, or (2) add ~115 lines of custom readline keybindings to the existing handler. Both paths are analyzed with trade-offs. The original `tui-textarea` v0.7.0 is **abandoned and incompatible** with our ratatui 0.30.
 
 ---
 
 ## 1. Executive Summary
 
-The input box in `src/tui/input.rs` is a hand-rolled editor with only character-level movement and single-character deletion. Users expect readline-style editing: Ctrl-W to delete words, Alt-B/F to jump by word, Ctrl-K/U to kill lines, Ctrl-Y to yank, and undo/redo. Six Rust crates were evaluated. **tui-textarea** is the recommended solution — it is a native ratatui widget with a complete emacs keybinding set, undo/redo, yank buffer, multi-line support, and regex search. The integration replaces the custom `input_text: String` + `input_cursor: usize` with a `TextArea` widget, touching ~3 files with moderate effort.
+The input box in `src/tui/input.rs` is a hand-rolled editor with only character-level movement and single-character deletion. Users expect readline-style editing: Ctrl-W to delete words, Alt-B/F to jump by word, Ctrl-K/U to kill lines, Ctrl-Y to yank, and undo/redo. Nine Rust crates were evaluated.
+
+**Two recommended paths:**
+
+1. **`ratatui-textarea` v0.8.0** (the official ratatui org fork by Orhun Parmaksiz, released Feb 2026) — ratatui 0.30 compatible, complete emacs keybindings, undo/redo, yank buffer. The original `tui-textarea` v0.7.0 by rhysd is abandoned (17 months without release, maintainer unresponsive, incompatible with ratatui 0.30).
+
+2. **Custom implementation (~115 lines)** — add word boundary helpers, Ctrl+W/K/U/Y, Alt+B/F to the existing handler. Less feature-rich but avoids all dependency/compatibility risks. The existing multiline helpers provide a solid foundation.
+
+The choice depends on whether the ratatui-textarea fork inherits the original's open issues (panic on undo after clear, no word wrap, no system clipboard) or has addressed them.
 
 ---
 
@@ -53,7 +61,7 @@ The input system spans three files:
 
 ### 2.2 Implementation details
 
-Text is stored as a plain `String` with a `usize` cursor tracking the character index (`src/tui/mod.rs:159-160`). Every character insertion and deletion does byte-offset lookup via `char_indices().nth()` (`src/tui/input.rs:98-102`, `118-123`, `130-134`). This is O(n) per keystroke and becomes a bottleneck on very long inputs.
+Text is stored as a plain `String` with a `usize` cursor tracking the character index (`src/tui/mod.rs:159-160`). Every character insertion and deletion does byte-offset lookup via `char_indices().nth()` (`src/tui/input.rs:98-102`, `118-123`, `130-134`). This is O(n) per keystroke. Note: for chat messages (typically <1KB), this is not a real-world bottleneck. Both tui-textarea and the custom approach use `Vec<String>`/`String` internally — neither uses a rope. Performance is not a factor in this decision.
 
 Multiline cursor movement exists (`src/tui/input.rs:284-349`) using custom `cursor_line_col`, `line_start_and_len`, `move_cursor_up`, and `move_cursor_down` helpers.
 
@@ -91,8 +99,8 @@ Derived from user request, VISION.md §4.5 (cell model / developer interface), a
 - **Crate:** [tui-textarea](https://crates.io/crates/tui-textarea) / [GitHub](https://github.com/rhysd/tui-textarea)
 - **Version:** 0.7.0 (released 2024-10-22)
 - **Stars:** ~489 | **License:** MIT | **Downloads:** 1.2M+ all-time, 356K recent
-- **Maintenance:** Last release Oct 2024. Open PRs #118/#119 to update to ratatui 0.30.
-- **Compatibility:** v0.7.0 depends on ratatui ^0.29.0 — **not compatible with ratatui 0.30** without the pending PR. See §9 Red Team for mitigation.
+- **Maintenance:** ABANDONED. Last release Oct 2024 (17 months ago). 36 open issues, 16 open PRs. Maintainer unresponsive to "is this repo active?" query (issue #124, Feb 2026).
+- **Compatibility:** v0.7.0 depends on ratatui ^0.29.0 — **will not compile with our ratatui 0.30**. Use the official fork `ratatui-textarea` instead (see §4.1b).
 
 **Built-in keybindings:**
 
@@ -146,6 +154,21 @@ Derived from user request, VISION.md §4.5 (cell model / developer interface), a
 - Ctrl+V mapped to "scroll down" conflicts with user expectation of "paste"
 
 **Integration effort:** Moderate. Replace `input_text: String` + `input_cursor: usize` with `TextArea<'static>`. Adapt autocomplete to read from `TextArea::lines()` and `TextArea::cursor()`. Use `input_without_shortcuts()` to intercept application keys before passing to the textarea.
+
+---
+
+### 4.1b ratatui-textarea (the official fork — RECOMMENDED over 4.1)
+
+> The ratatui organization's maintained fork of tui-textarea.
+
+- **Crate:** [ratatui-textarea](https://crates.io/crates/ratatui-textarea) / [GitHub](https://github.com/ratatui/ratatui-textarea)
+- **Version:** 0.8.0 (released 2026-02-21)
+- **Maintainer:** Orhun Parmaksiz (core ratatui contributor)
+- **Compatibility:** Uses `ratatui-core ^0.1.0` + `ratatui-widgets ^0.3.0` — designed for ratatui 0.30+
+
+Same API and keybindings as tui-textarea (§4.1) since it's a direct fork. The key difference: **this one actually compiles with our dependencies.** Import path changes from `tui_textarea` to `ratatui_textarea`.
+
+**Open questions:** Does it inherit the same open bugs (panic #121, no word wrap #5, no clear() #96)? The fork is relatively new — needs verification before adoption.
 
 ---
 
@@ -275,21 +298,40 @@ Derived from user request, VISION.md §4.5 (cell model / developer interface), a
 
 > Add readline keybindings directly to `handle_input_key` in `src/tui/input.rs`.
 
-**Approach:** Implement word boundary detection, word movement, word deletion, kill buffer, and undo/redo stack manually.
+**Approach:** Implement word boundary detection, word movement, word deletion, and a kill buffer on top of the existing multiline helpers.
+
+**Detailed line estimate (red team validated):**
+
+| Feature | Lines | Complexity |
+|---------|-------|-----------|
+| `find_word_boundary_left/right()` | ~30 | Low — iterate chars, check `is_alphanumeric()` |
+| Ctrl+A / Ctrl+E (line home/end) | ~10 | Trivial — use existing `line_start_and_len()` |
+| Alt+B / Alt+F (word movement) | ~10 | Trivial — call boundary helpers |
+| Ctrl+W (delete word back) | ~15 | Low — boundary + `String::drain` |
+| Alt+D (delete word forward) | ~15 | Low — same pattern |
+| Ctrl+K (kill to end of line) | ~10 | Low — use `line_start_and_len()` |
+| Ctrl+U (kill to start of line) | ~10 | Low |
+| Kill buffer (single `String` field) | ~5 | One field on `TuiState` |
+| Ctrl+Y (yank from kill buffer) | ~10 | Insert from kill buffer |
+| **Total (core readline)** | **~115** | |
+| Undo/redo stack (optional) | ~100-150 | Medium — needs edit coalescing |
 
 **Strengths:**
-- Full control over every keybinding
-- No new dependencies
-- Perfectly tailored to the autocomplete integration
-- Can match GNU readline conventions exactly
+- Full control over every keybinding — no conflicts
+- No new dependencies, no compatibility risks
+- Perfectly tailored to autocomplete integration
+- Can match GNU readline conventions exactly (Ctrl+U = kill-to-start, not undo)
+- No word wrap regression (current `Paragraph` wraps; tui-textarea doesn't)
+- No system clipboard regression
+- The existing codebase already has multiline helpers, byte-offset logic, and `char_indices()` patterns
 
 **Weaknesses:**
-- Significant implementation effort (~300-500 lines for word movement + deletion + kill ring + undo/redo)
-- Bug-prone: word boundary detection, Unicode handling, undo coalescing are hard to get right
-- Must be tested thoroughly — edge cases around Unicode, empty lines, cursor at boundaries
-- Maintaining two implementations (ours vs. an established library) is long-term technical debt
+- ~115 lines for core readline, ~250 with undo/redo
+- Word boundary detection via `is_alphanumeric()` is simpler than UAX#29 but sufficient for chat input (consistent with existing char-level handling)
+- No selection/highlighting without additional work
+- No regex search
 
-**Integration effort:** High (implementation from scratch), but zero integration friction.
+**Integration effort:** Low-moderate — extends existing code, zero integration friction.
 
 ---
 
@@ -331,16 +373,23 @@ VISION.md §4.5 describes a "Non-Linear Developer Interface (Cell Model)" with "
 
 ## 7. Recommended Architecture
 
-### Phase 1: Adopt tui-textarea (immediate)
+### Phase 1: Two viable paths
 
-Replace the custom input handler with `tui-textarea`:
+**Path A: Adopt `ratatui-textarea` v0.8.0**
 
-1. **Add dependency:** `tui-textarea = { version = "0.8", features = ["crossterm"] }` (requires PR #118/#119 to merge first — v0.7.0 is incompatible with ratatui 0.30)
+1. **Add dependency:** `ratatui-textarea = { version = "0.8", features = ["crossterm"] }`
 2. **Replace state:** In `TuiState`, replace `input_text: String` + `input_cursor: usize` with `textarea: TextArea<'static>`
 3. **Adapt input handler:** In `handle_input_key`, use `textarea.input_without_shortcuts(event)` for character-by-character control. Intercept Enter (send), Ctrl+Q (quit), Ctrl+B (toggle panel), Tab (autocomplete/focus) before passing to the textarea.
 4. **Adapt autocomplete:** Read from `textarea.lines()` and `textarea.cursor()` instead of `input_text` and `input_cursor`. The `/` trigger scan logic stays the same.
-5. **Adapt rendering:** Replace `Paragraph::new(input_text)` with `frame.render_widget(&textarea, area)`. Remove manual cursor positioning — tui-textarea handles it internally.
-6. **Adapt message sending:** On Enter, call `textarea.lines().join("\n").trim().to_string()` to extract text, then `textarea.select_all()` + `textarea.delete_str()` to clear.
+5. **Adapt rendering:** Replace `Paragraph::new(input_text)` with `frame.render_widget(&textarea, area)`. Remove manual cursor positioning — textarea handles it internally.
+6. **Adapt message sending:** On Enter, call `textarea.lines().join("\n").trim().to_string()` to extract text. **WARNING:** Do NOT use `select_all()` + `delete_str()` to clear — this triggers a panic if the user then undoes (issue #121). Instead, replace with `TextArea::default()` and re-apply styling.
+
+**Path B: Custom readline implementation (~115 lines)**
+
+1. Add `find_word_boundary_left()` / `find_word_boundary_right()` helpers to `input.rs`
+2. Add a `kill_buffer: String` field to `TuiState`
+3. Extend the `match key.code` in `handle_input_key` with modifier-aware branches
+4. No dependency changes, no rendering changes, no autocomplete adapter needed
 
 **Key type changes:**
 
@@ -446,13 +495,18 @@ fn update_autocomplete(state: &mut TuiState, graph: &ConversationGraph) {
 
 ### 8.4 Keybinding conflicts
 
-| Our binding | tui-textarea default | Resolution |
-|-------------|---------------------|------------|
-| Ctrl+Q → Quit | Not used | Intercept before textarea |
-| Ctrl+B → Toggle panel | Cursor backward | Intercept before textarea |
-| Enter → Send message | Insert newline | Intercept unmodified Enter; let Shift/Alt+Enter through |
-| Tab → Autocomplete/focus | Not used | Intercept before textarea |
-| Up/Down → Scroll (when no lines above/below) | Cursor up/down | Use `textarea.input()` unconditionally; check textarea state to decide scrolling |
+| Our binding / convention | tui-textarea default | Severity | Resolution |
+|--------------------------|---------------------|----------|------------|
+| Ctrl+Q → Quit | Not used | Low | Intercept before textarea |
+| Ctrl+B → Toggle panel | Cursor backward | HIGH | Remap panel toggle (e.g., F2) |
+| Enter → Send message | Insert newline | HIGH | Intercept unmodified Enter |
+| Tab → Autocomplete/focus | Not used | Low | Intercept before textarea |
+| Up/Down → Scroll | Cursor up/down | Medium | Check textarea state for scroll fallback |
+| Ctrl+C → (SIGINT convention) | Copy selection | HIGH | Intercept; users expect cancel/interrupt |
+| Ctrl+V → (system paste) | Page down scroll | HIGH | Intercept; users expect paste from clipboard |
+| Ctrl+D → (EOF convention) | Delete char forward | Medium | May surprise users who expect exit-on-empty |
+| Ctrl+J → (newline/LF) | Delete to line start | Medium | Some terminals send Ctrl+J for Enter |
+| PageDown → scroll conversation | Scroll textarea | Medium | App already handles PageDown at `input.rs:168` |
 
 The Ctrl+B conflict is notable — in GNU readline, Ctrl+B moves the cursor backward. We currently use it for panel toggle. Options:
 1. Keep Ctrl+B as panel toggle (breaking readline convention)
@@ -478,13 +532,14 @@ The Ctrl+B conflict is notable — in GNU readline, Ctrl+B moves the cursor back
 
 ### Red Team (challenges from audit)
 
-- **CRITICAL: tui-textarea 0.7.0 is NOT compatible with ratatui 0.30.** The crate depends on `ratatui = "^0.29.0"`, which in Cargo semver for 0.x means `>=0.29.0, <0.30.0`. Our `Cargo.toml` uses ratatui 0.30. Open PRs #118 and #119 exist to update this, but they are not merged. **Mitigation options:** (a) Wait for the PR to merge and a new release, (b) use a git dependency pointing to the PR branch, (c) temporarily downgrade to ratatui 0.29, or (d) fork the crate. Option (a) is preferred if timing allows. **edtui 0.11.2 was updated 2026-03-08 and likely already supports ratatui 0.30** — this makes edtui a stronger fallback option than initially assessed.
-- **Ctrl+C conflict is serious.** tui-textarea maps Ctrl+C to "copy selection." In most terminals, Ctrl+C sends SIGINT. If crossterm is in raw mode (which it is), SIGINT is suppressed and the keystroke reaches the app — so tui-textarea's mapping works. But users may expect Ctrl+C to cancel/quit, not copy. Must intercept before textarea.
-- **Ctrl+V conflict is confusing.** tui-textarea maps Ctrl+V to "page down." Users commonly expect Ctrl+V to paste from system clipboard. This is a significant UX surprise. Mitigation: intercept Ctrl+V and handle system paste via crossterm's bracketed paste support.
+- **CRITICAL: tui-textarea 0.7.0 is ABANDONED and incompatible with ratatui 0.30.** Last release Oct 2024 (17 months ago). 36 open issues, 16 open PRs. Maintainer unresponsive to "is this repo active?" (issue #124, Feb 2026, no response). The crate depends on ratatui ^0.29.0 — will not compile with our ratatui 0.30. **Mitigation:** Use `ratatui-textarea` v0.8.0, the official ratatui org fork by Orhun Parmaksiz (released Feb 2026, ratatui 0.30 compatible). edtui 0.11.2 (updated 2026-03-08) is another viable fallback.
+- **PANIC BUG in the clearing pattern.** Issue #121 (open, Jan 2026): calling `select_all()` + `delete_str()` then `undo()` causes a panic. This is the exact pattern §7 Phase 1 originally recommended for clearing the textarea on message send. If a user sends a message, then presses Ctrl+U (undo), the app crashes. **Mitigation:** Replace with `TextArea::default()` instead of select+delete. Must verify if the fork has fixed this.
+- **Ctrl+C conflict is serious.** tui-textarea maps Ctrl+C to "copy selection." In raw mode, SIGINT is suppressed and the keystroke reaches the app. But users may expect Ctrl+C to cancel/quit, not copy. Must intercept before textarea. Issue #106 reports further clipboard confusion with Shift+arrow selections.
+- **Ctrl+V conflict is a showstopper.** tui-textarea maps Ctrl+V to "page down." Users universally expect Ctrl+V to paste from system clipboard. This is the single most surprising keybinding conflict. Must intercept Ctrl+V and handle system paste via crossterm's `EnableBracketedPaste`.
 - **No `clear()` method** (issue #96). Clearing the textarea on message send requires: `select_all()` then `cut()` or creating a new `TextArea::default()`. Minor ergonomic issue but adds friction.
 - **No word wrap** (issue #5, open since Dec 2022). Long lines extend beyond the widget boundary. The current `Paragraph` widget wraps. This is a UX regression for users typing long messages.
 - **tui-textarea uses `Vec<String>` internally** — not a rope. The claim in §2.2 that the current O(n) `char_indices().nth()` is a bottleneck is equally true for tui-textarea. However, for chat messages (typically <1KB), this is not a real-world performance concern.
-- **The custom implementation is more viable than initially presented.** The existing codebase already has multiline cursor movement, line/col tracking, and byte-offset helpers. Adding word movement requires only ~30 lines (find next/prev word boundary), word deletion ~20 lines, and a basic kill buffer ~15 lines. Undo/redo is the hardest part (~100-150 lines for a proper undo stack). Total: ~200-250 lines, not 300-500. The `unicode-segmentation` crate provides UAX#29 word boundaries in ~2 LOC. This option avoids all compatibility, keybinding conflict, and word-wrap regression issues.
+- **The custom implementation is more viable than initially presented.** Detailed red team analysis: the existing codebase has multiline cursor movement, line/col tracking, and byte-offset helpers. Core readline keybindings (word movement + deletion + kill buffer + yank) require ~115 lines, not the initially claimed 300-500. Undo/redo adds ~100-150 lines but wasn't in the user's original request. This option avoids ALL compatibility issues, ALL keybinding conflicts, the word-wrap regression, the system clipboard gap, and the panic bug. The `unicode-segmentation` crate provides UAX#29 word boundaries if needed, but `is_alphanumeric()` is sufficient for chat input and consistent with existing char-level handling.
 - **`src/app/mod.rs` also references `input_text`/`input_cursor`** — not mentioned in §8.2 files changed. This file must also be updated.
 
 ### Code Accuracy Audit
@@ -503,7 +558,8 @@ The Ctrl+B conflict is notable — in GNU readline, Ctrl+B moves the cursor back
 ## 10. Sources
 
 ### Crates evaluated
-- [tui-textarea](https://github.com/rhysd/tui-textarea) — ~489 stars, v0.7.0, MIT, multi-line ratatui textarea widget (1.2M downloads)
+- [ratatui-textarea](https://github.com/ratatui/ratatui-textarea) — v0.8.0 (Feb 2026), MIT, **official ratatui org fork**, ratatui 0.30 compatible
+- [tui-textarea](https://github.com/rhysd/tui-textarea) — ~489 stars, v0.7.0 (Oct 2024), MIT, ABANDONED, ratatui 0.29 only (1.2M downloads)
 - [edtui](https://github.com/preiter93/edtui) — ~127 stars, v0.11.2, MIT, vim/emacs editor widget for ratatui (83K downloads)
 - [reedline](https://github.com/nushell/reedline) — ~738 stars, v0.46.0, MIT, Nushell's readline replacement (2M downloads)
 - [tui-input](https://github.com/sayanarijit/tui-input) — 182 stars, v0.15.0, MIT, headless TUI input library (1.1M downloads)
