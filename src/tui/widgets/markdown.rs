@@ -467,4 +467,21 @@ mod tests {
         let text = render_markdown("");
         assert!(text.lines.is_empty());
     }
+
+    #[test]
+    fn single_tilde_stripped_by_parser() {
+        // streamdown_parser treats single `~` as strikethrough toggle,
+        // stripping it from output. User messages bypass markdown rendering
+        // to preserve trigger syntax like `~plan`.
+        let text = render_markdown("~read_file run.sh");
+        let all_content: String = text
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        // Parser strips the tilde — this documents the known behavior
+        assert!(!all_content.contains('~'));
+        assert!(all_content.contains("read_file"));
+    }
 }
