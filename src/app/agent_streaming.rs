@@ -75,19 +75,11 @@ pub(super) async fn stream_llm_response(
                 break;
             }
             Some(Ok(StreamChunk::Error(e))) => {
-                if let Some((new_stream, new_recv)) = try_reconnect(
-                    &mut state.retries,
-                    provider,
-                    &messages,
-                    config,
-                    task_tx,
-                    cancel_token,
-                )
-                .await?
-                {
-                    send(task_tx, AgentEvent::PhaseCompleted { phase_id: recv_phase_id });
-                    stream = new_stream;
-                    recv_phase_id = new_recv;
+                if let Some(r) = try_reconnect(
+                    &mut state.retries, provider, &messages, config, task_tx, cancel_token,
+                ).await? {
+                    complete_phase(task_tx, recv_phase_id);
+                    (stream, recv_phase_id) = r;
                     state.think_splitter = ThinkSplitter::new();
                     continue;
                 }
@@ -101,19 +93,11 @@ pub(super) async fn stream_llm_response(
                     .downcast_ref::<ApiError>()
                     .is_some_and(ApiError::is_retryable);
                 if retryable {
-                    if let Some((new_stream, new_recv)) = try_reconnect(
-                        &mut state.retries,
-                        provider,
-                        &messages,
-                        config,
-                        task_tx,
-                        cancel_token,
-                    )
-                    .await?
-                    {
-                        send(task_tx, AgentEvent::PhaseCompleted { phase_id: recv_phase_id });
-                        stream = new_stream;
-                        recv_phase_id = new_recv;
+                    if let Some(r) = try_reconnect(
+                        &mut state.retries, provider, &messages, config, task_tx, cancel_token,
+                    ).await? {
+                        complete_phase(task_tx, recv_phase_id);
+                        (stream, recv_phase_id) = r;
                         state.think_splitter = ThinkSplitter::new();
                         continue;
                     }
@@ -302,6 +286,10 @@ fn send_delta(splitter: &ThinkSplitter, tx: &mpsc::UnboundedSender<TaskMessage>)
             is_thinking: splitter.is_thinking(),
         },
     );
+}
+
+fn complete_phase(tx: &mpsc::UnboundedSender<TaskMessage>, phase_id: Uuid) {
+    send(tx, AgentEvent::PhaseCompleted { phase_id });
 }
 
 pub(super) fn send(tx: &mpsc::UnboundedSender<TaskMessage>, event: AgentEvent) {
