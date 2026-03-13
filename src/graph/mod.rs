@@ -378,6 +378,25 @@ impl ConversationGraph {
         }
     }
 
+    /// Mark all `Running`/`Pending` background tasks as `Failed`.
+    /// Called on startup to clean up stale tasks from previous sessions.
+    pub fn expire_running_background_tasks(&mut self) {
+        let now = Utc::now();
+        for node in self.nodes.values_mut() {
+            if let Node::BackgroundTask {
+                status,
+                updated_at,
+                ..
+            } = node
+            {
+                if matches!(status, TaskStatus::Running | TaskStatus::Pending) {
+                    *status = TaskStatus::Failed;
+                    *updated_at = now;
+                }
+            }
+        }
+    }
+
     /// Walk from the branch leaf to the root via `RespondsTo` edges, return chronological order.
     pub fn get_branch_history(&self, branch_name: &str) -> anyhow::Result<Vec<&Node>> {
         let leaf_id = self

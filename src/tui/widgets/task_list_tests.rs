@@ -57,11 +57,15 @@ fn active_before_completed() {
 #[test]
 fn duration_formatting_edge_cases() {
     // Sub-second, boundary at 60s, and pending must all render correctly.
-    // Wrong format strings would show "0s" instead of "0.3s" or crash on large values.
+    // Wrong format strings would show "0s" instead of "5ms" or crash on large values.
     assert_eq!(format_duration(&TaskDuration::Pending), "···");
     assert_eq!(
+        format_duration(&TaskDuration::Elapsed(Duration::from_millis(5))),
+        "5ms"
+    );
+    assert_eq!(
         format_duration(&TaskDuration::Elapsed(Duration::from_millis(300))),
-        "0.3s"
+        "300ms"
     );
     assert_eq!(
         format_duration(&TaskDuration::Finished(Duration::from_millis(9999))),

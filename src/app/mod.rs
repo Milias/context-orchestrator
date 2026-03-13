@@ -115,6 +115,9 @@ impl App {
         let mut spinner_interval = tokio::time::interval(Duration::from_millis(80));
         spinner_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        // Clean up stale Running background tasks from previous sessions
+        self.graph.expire_running_background_tasks();
+
         // Spawn background tasks
         tasks::spawn_git_watcher(self.task_tx.clone());
         tasks::spawn_tool_discovery(self.task_tx.clone());

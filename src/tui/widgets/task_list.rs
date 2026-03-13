@@ -222,16 +222,21 @@ fn format_duration(d: &TaskDuration) -> String {
     match d {
         TaskDuration::Pending => "···".to_string(),
         TaskDuration::Elapsed(d) | TaskDuration::Finished(d) => {
-            let total_secs = d.as_secs();
-            if total_secs < 10 {
-                let secs = d.as_secs_f64();
-                format!("{secs:.1}s")
-            } else if total_secs < 60 {
-                format!("{total_secs}s")
+            let total_ms = d.as_millis();
+            if total_ms < 1000 {
+                format!("{total_ms}ms")
             } else {
-                let m = total_secs / 60;
-                let s = total_secs % 60;
-                format!("{m}m {s:02}s")
+                let total_secs = d.as_secs();
+                if total_secs < 10 {
+                    let secs = d.as_secs_f64();
+                    format!("{secs:.1}s")
+                } else if total_secs < 60 {
+                    format!("{total_secs}s")
+                } else {
+                    let m = total_secs / 60;
+                    let s = total_secs % 60;
+                    format!("{m}m {s:02}s")
+                }
             }
         }
     }
