@@ -44,7 +44,11 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
     {
         let total_height: u16 = entries.iter().map(|e| e.height() as u16).sum();
         let max_scroll = total_height.saturating_sub(inner.height);
-        tui_state.scroll_offset = tui_state.scroll_offset.min(max_scroll);
+        if tui_state.auto_scroll {
+            tui_state.scroll_offset = max_scroll;
+        } else {
+            tui_state.scroll_offset = tui_state.scroll_offset.min(max_scroll);
+        }
 
         let scroll_indicator = if max_scroll == 0 {
             String::new()

@@ -1,5 +1,5 @@
 use crate::graph::tool_types::ToolCallStatus;
-use crate::graph::{ConversationGraph, Node, Role};
+use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::tui::{ContextTab, FocusPanel, TuiState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs};
@@ -263,34 +263,62 @@ fn render_minimap(frame: &mut Frame, area: Rect, graph: &ConversationGraph) {
     }
 
     let width = inner.width as usize;
-    let items: Vec<ListItem> = history
-        .iter()
-        .filter_map(|node| {
-            let (prefix, color) = match node {
-                Node::Message { role, .. } => match role {
-                    Role::User => ("U", Color::Cyan),
-                    Role::Assistant => ("A", Color::Green),
-                    Role::System => ("S", Color::DarkGray),
-                },
-                Node::SystemDirective { .. } => ("S", Color::DarkGray),
-                _ => return None,
-            };
-            let content = node.content();
-            let max_len = width.saturating_sub(3);
-            let truncated: String = content.chars().take(max_len).collect();
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("{prefix} "),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(truncated, Style::default().fg(Color::White)),
-            ]);
-            Some(ListItem::new(line))
-        })
-        .collect();
+    let max_len = width.saturating_sub(3);
+    let mut items: Vec<ListItem> = Vec::new();
+
+    for node in &history {
+        let (prefix, color) = match node {
+            Node::Message { role, .. } => match role {
+                Role::User => ("U", Color::Cyan),
+                Role::Assistant => ("A", Color::Green),
+                Role::System => ("S", Color::DarkGray),
+            },
+            Node::SystemDirective { .. } => ("S", Color::DarkGray),
+            _ => continue,
+        };
+        let content = node.content();
+        let truncated: String = content.chars().take(max_len).collect();
+        items.push(minimap_item(prefix, color, &truncated));
+
+        // Inject tool calls/results after assistant messages
+        if matches!(
+            node,
+            Node::Message {
+                role: Role::Assistant,
+                ..
+            }
+        ) {
+            for tc_id in &graph.sources_by_edge(node.id(), EdgeKind::Invoked) {
+                if let Some(tc_node) = graph.node(*tc_id) {
+                    let name = tc_node.content();
+                    let tc_text: String = name.chars().take(max_len).collect();
+                    items.push(minimap_item("T", Color::Magenta, &tc_text));
+
+                    for r_id in &graph.sources_by_edge(*tc_id, EdgeKind::Produced) {
+                        if let Some(r_node) = graph.node(*r_id) {
+                            let is_err = matches!(r_node, Node::ToolResult { is_error: true, .. });
+                            let r_color = if is_err { Color::Red } else { Color::DarkGray };
+                            let r_text: String = r_node.content().chars().take(max_len).collect();
+                            items.push(minimap_item("R", r_color, &r_text));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let list = List::new(items);
     frame.render_widget(list, inner);
+}
+
+fn minimap_item<'a>(prefix: &str, color: Color, text: &str) -> ListItem<'a> {
+    ListItem::new(Line::from(vec![
+        Span::styled(
+            format!("{prefix} "),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(text.to_string(), Style::default().fg(Color::White)),
+    ]))
 }
 
 fn is_git_file(node: &Node) -> bool {
