@@ -147,9 +147,7 @@ impl App {
                                 }
                             }
                             Action::ScrollUp | Action::ScrollDown => {
-                                if self.tui_state.agent_running {
-                                    self.tui_state.auto_scroll = false;
-                                }
+                                self.tui_state.auto_scroll = false;
                                 self.tui_state.scroll_offset = if matches!(action, Action::ScrollUp) {
                                     self.tui_state.scroll_offset.saturating_sub(3)
                                 } else {
@@ -157,9 +155,7 @@ impl App {
                                 };
                             }
                             Action::PageUp | Action::PageDown => {
-                                if self.tui_state.agent_running {
-                                    self.tui_state.auto_scroll = false;
-                                }
+                                self.tui_state.auto_scroll = false;
                                 let page = terminal.size()?.height / 2;
                                 self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
                                     self.tui_state.scroll_offset.saturating_sub(page)

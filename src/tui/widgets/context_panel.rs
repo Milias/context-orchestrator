@@ -307,7 +307,10 @@ fn render_minimap(frame: &mut Frame, area: Rect, graph: &ConversationGraph) {
         }
     }
 
-    let list = List::new(items);
+    // Show only the last items that fit in the viewport
+    let visible = inner.height as usize;
+    let skip = items.len().saturating_sub(visible);
+    let list = List::new(items.into_iter().skip(skip).collect::<Vec<_>>());
     frame.render_widget(list, inner);
 }
 
