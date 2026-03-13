@@ -109,15 +109,13 @@ pub enum AgentVisualPhase {
     /// LLM is generating text.
     Streaming { text: String, is_thinking: bool },
     /// Tools are executing between iterations.
-    ExecutingTools { tool_count: usize },
+    ExecutingTools,
 }
 
 /// Display state for the entire agent run. Present when an agent loop is active.
 #[derive(Debug)]
 pub struct AgentDisplayState {
     pub phase: AgentVisualPhase,
-    /// Text accumulated across all completed iterations.
-    pub accumulated_text: String,
     /// Assistant node IDs from this run (suppressed from history rendering).
     pub iteration_node_ids: Vec<Uuid>,
     pub spinner_tick: usize,
@@ -127,7 +125,6 @@ impl Default for AgentDisplayState {
     fn default() -> Self {
         Self {
             phase: AgentVisualPhase::Preparing,
-            accumulated_text: String::new(),
             iteration_node_ids: Vec::new(),
             spinner_tick: 0,
         }
@@ -139,14 +136,19 @@ impl AgentDisplayState {
         SPINNER_FRAMES[self.spinner_tick % SPINNER_FRAMES.len()]
     }
 
-    /// Append text to the accumulated response, separated by blank lines.
-    pub fn append_text(&mut self, text: &str) {
-        if !text.is_empty() {
-            if !self.accumulated_text.is_empty() {
-                self.accumulated_text.push_str("\n\n");
-            }
-            self.accumulated_text.push_str(text);
-        }
+    /// Build accumulated text from completed iteration nodes in the graph.
+    pub fn accumulated_text(&self, graph: &crate::graph::ConversationGraph) -> String {
+        self.iteration_node_ids
+            .iter()
+            .filter_map(|id| graph.node(*id))
+            .filter_map(|n| match n {
+                crate::graph::Node::Message { content, .. } if !content.is_empty() => {
+                    Some(content.as_str())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
     }
 }
 
@@ -172,7 +174,6 @@ pub struct TuiState {
     /// Avoids re-parsing markdown for historical messages on every frame.
     pub render_cache: HashMap<Uuid, CachedRender>,
     pub autocomplete: AutocompleteState,
-    pub available_tools: Vec<CompletionCandidate>,
     /// Display state for the running agent loop. `None` when idle.
     pub agent_display: Option<AgentDisplayState>,
 }
@@ -201,7 +202,6 @@ impl TuiState {
             auto_scroll: true,
             render_cache: HashMap::new(),
             autocomplete: AutocompleteState::default(),
-            available_tools: Vec::new(),
             agent_display: None,
         }
     }

@@ -114,7 +114,8 @@ impl App {
         let mut event_stream = EventStream::new();
         let mut spinner_interval = tokio::time::interval(Duration::from_millis(80));
         spinner_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
         // Stale Running tasks from a previous crash → mark as Failed
         self.graph.expire_stale_tasks();
@@ -137,7 +138,7 @@ impl App {
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
                         if key.kind != KeyEventKind::Press { continue; }
-                        let action = input::handle_key_event(key, &mut self.tui_state);
+                        let action = input::handle_key_event(key, &mut self.tui_state, &self.graph);
                         match action {
                             Action::Quit => {
                                 if let Some(tx) = self.cancel_tx.take() {

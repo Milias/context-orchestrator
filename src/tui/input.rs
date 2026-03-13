@@ -1,4 +1,5 @@
-use crate::tui::{FocusPanel, TuiState};
+use crate::graph::{ConversationGraph, Node};
+use crate::tui::{CompletionCandidate, FocusPanel, TuiState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug)]
@@ -12,7 +13,11 @@ pub enum Action {
     PageDown,
 }
 
-pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
+pub fn handle_key_event(
+    key: KeyEvent,
+    tui_state: &mut TuiState,
+    graph: &ConversationGraph,
+) -> Action {
     // Global keybindings
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
@@ -45,7 +50,7 @@ pub fn handle_key_event(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     }
 
     match tui_state.focus {
-        FocusPanel::Input => handle_input_key(key, tui_state),
+        FocusPanel::Input => handle_input_key(key, tui_state, graph),
         FocusPanel::ContextPanel => handle_context_panel_key(key, tui_state),
     }
 }
@@ -79,7 +84,7 @@ fn handle_autocomplete_key(key: &KeyEvent, tui_state: &mut TuiState) -> Option<A
     }
 }
 
-fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
+fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState, graph: &ConversationGraph) -> Action {
     if let Some(action) = handle_autocomplete_key(&key, tui_state) {
         return action;
     }
@@ -166,7 +171,7 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     // Re-filter autocomplete after text/cursor changes
     match key.code {
         KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Left | KeyCode::Right | KeyCode::Enter => {
-            update_autocomplete(tui_state);
+            update_autocomplete(tui_state, graph);
         }
         _ => {}
     }
@@ -175,7 +180,7 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
 }
 
 /// Detect `/` trigger and filter autocomplete candidates.
-fn update_autocomplete(tui_state: &mut TuiState) {
+fn update_autocomplete(tui_state: &mut TuiState, graph: &ConversationGraph) {
     let chars: Vec<char> = tui_state.input_text.chars().collect();
     let cursor = tui_state.input_cursor;
 
@@ -184,13 +189,11 @@ fn update_autocomplete(tui_state: &mut TuiState) {
     let mut slash_pos = None;
     for i in (0..before_cursor.len()).rev() {
         if before_cursor[i] == '/' {
-            // `/` must be at position 0 or preceded by whitespace
             if i == 0 || before_cursor[i - 1].is_whitespace() {
                 slash_pos = Some(i);
             }
             break;
         }
-        // If we hit whitespace before finding `/`, no active trigger
         if before_cursor[i].is_whitespace() {
             break;
         }
@@ -203,18 +206,32 @@ fn update_autocomplete(tui_state: &mut TuiState) {
 
     let prefix: String = before_cursor[tpos + 1..cursor].iter().collect();
 
-    // If prefix contains whitespace, user is past the tool name (typing args)
     if prefix.contains(char::is_whitespace) {
         tui_state.autocomplete.active = false;
         return;
     }
 
     let prefix_lower = prefix.to_lowercase();
-    let candidates: Vec<_> = tui_state
-        .available_tools
-        .iter()
-        .filter(|t| t.name.to_lowercase().starts_with(&prefix_lower))
-        .cloned()
+    let candidates: Vec<_> = graph
+        .nodes_by(|n| matches!(n, Node::Tool { .. }))
+        .into_iter()
+        .filter_map(|n| {
+            if let Node::Tool {
+                name, description, ..
+            } = n
+            {
+                if name.to_lowercase().starts_with(&prefix_lower) {
+                    Some(CompletionCandidate {
+                        name: name.clone(),
+                        description: description.clone(),
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
         .collect();
 
     tui_state.autocomplete.active = true;

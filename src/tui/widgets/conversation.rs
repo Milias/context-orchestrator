@@ -210,6 +210,7 @@ fn build_entries<'a>(
     if let Some(ref display) = tui_state.agent_display {
         append_agent_display(
             display,
+            graph,
             tui_state.status_message.as_ref(),
             msg_content_width,
             &mut entries,
@@ -242,10 +243,12 @@ fn push_tool_indicators<'a>(
 
 fn append_agent_display(
     display: &crate::tui::AgentDisplayState,
+    graph: &ConversationGraph,
     status_message: Option<&String>,
     msg_content_width: usize,
     entries: &mut Vec<MessageEntry<'_>>,
 ) {
+    let accumulated = display.accumulated_text(graph);
     match &display.phase {
         AgentVisualPhase::Preparing => {
             let status = status_message.map_or("Preparing...", String::as_str);
@@ -260,7 +263,7 @@ fn append_agent_display(
             });
         }
         AgentVisualPhase::Streaming { text, is_thinking } => {
-            let full_text = combine_text(&display.accumulated_text, text);
+            let full_text = combine_text(&accumulated, text);
             let mut styled = render_markdown(&full_text);
             if *is_thinking && text.is_empty() {
                 let spinner = display.spinner_char();
@@ -276,10 +279,9 @@ fn append_agent_display(
                 height,
             });
         }
-        AgentVisualPhase::ExecutingTools { tool_names } => {
-            let spinner = display.spinner_char();
-            let tool_line = format!("{spinner} Executing {} tool call(s)...", tool_names.len());
-            let full_text = combine_text(&display.accumulated_text, &tool_line);
+        AgentVisualPhase::ExecutingTools => {
+            let tool_lines = build_tool_status_lines(display, graph);
+            let full_text = combine_text(&accumulated, &tool_lines);
             let mut styled = render_markdown(&full_text);
             append_cursor(&mut styled, display.spinner_tick);
             let height = compute_styled_height(&styled, msg_content_width, false);
@@ -289,6 +291,33 @@ fn append_agent_display(
             });
         }
     }
+}
+
+/// Build status lines for running/completed tool calls from the graph.
+fn build_tool_status_lines(
+    display: &crate::tui::AgentDisplayState,
+    graph: &ConversationGraph,
+) -> String {
+    use crate::graph::tool_types::ToolCallStatus;
+
+    let mut lines = Vec::new();
+    for assistant_id in &display.iteration_node_ids {
+        for tc_id in graph.sources_by_edge(*assistant_id, EdgeKind::Invoked) {
+            if let Some(Node::ToolCall {
+                status, arguments, ..
+            }) = graph.node(tc_id)
+            {
+                let icon = match status {
+                    ToolCallStatus::Running | ToolCallStatus::Pending => display.spinner_char(),
+                    ToolCallStatus::Completed => "✓",
+                    ToolCallStatus::Failed => "✗",
+                    ToolCallStatus::Cancelled => "⊘",
+                };
+                lines.push(format!("{icon} {}", arguments.display_summary()));
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn combine_text(accumulated: &str, current: &str) -> String {

@@ -33,13 +33,6 @@ impl App {
                 self.graph
                     .remove_nodes_by(|n| matches!(n, Node::Tool { .. }));
                 let root_id = self.graph.branch_leaf(self.graph.active_branch());
-                self.tui_state.available_tools = tools
-                    .iter()
-                    .map(|t| crate::tui::CompletionCandidate {
-                        name: t.name.clone(),
-                        description: t.description.clone(),
-                    })
-                    .collect();
                 for tool in tools {
                     let node = Node::Tool {
                         id: Uuid::new_v4(),
@@ -123,16 +116,9 @@ impl App {
                             };
                         }
                     }
-                    AgentPhase::ExecutingTools { count } => {
+                    AgentPhase::ExecutingTools { .. } => {
                         if let Some(ref mut d) = self.tui_state.agent_display {
-                            // Preserve streaming text before transitioning phase
-                            if let AgentVisualPhase::Streaming { ref text, .. } = d.phase {
-                                let text = text.clone();
-                                d.append_text(&text);
-                            }
-                            d.phase = AgentVisualPhase::ExecutingTools {
-                                tool_names: vec![String::new(); count],
-                            };
+                            d.phase = AgentVisualPhase::ExecutingTools;
                         }
                     }
                     AgentPhase::CountingTokens
@@ -231,13 +217,10 @@ impl App {
         }
 
         if let Some(ref mut d) = self.tui_state.agent_display {
-            d.append_text(response);
             d.iteration_node_ids.push(assistant_id);
 
             if stop_reason.map(String::as_str) == Some("tool_use") {
-                d.phase = AgentVisualPhase::ExecutingTools {
-                    tool_names: Vec::new(),
-                };
+                d.phase = AgentVisualPhase::ExecutingTools;
             }
         }
     }
