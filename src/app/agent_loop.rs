@@ -6,7 +6,7 @@ use crate::tui::input::{self, Action};
 use crate::tui::ui;
 
 use chrono::Utc;
-use crossterm::event::{Event, EventStream};
+use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use ratatui::prelude::*;
 use std::collections::HashSet;
@@ -132,6 +132,7 @@ impl App {
 
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
+                        if key.kind != KeyEventKind::Press { continue; }
                         let action = input::handle_key_event(key, &mut self.tui_state);
                         match action {
                             Action::Quit => {

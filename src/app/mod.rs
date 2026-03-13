@@ -14,7 +14,7 @@ use crate::tui::ui;
 use crate::tui::{self, TuiState};
 
 use chrono::Utc;
-use crossterm::event::{Event, EventStream};
+use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use ratatui::prelude::*;
 use std::io;
@@ -120,6 +120,7 @@ impl App {
             tokio::select! {
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
+                        if key.kind != KeyEventKind::Press { continue; }
                         let action = input::handle_key_event(key, &mut self.tui_state);
                         match action {
                             Action::Quit => {

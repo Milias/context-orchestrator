@@ -7,7 +7,7 @@ use crate::tui::ui;
 use super::think_splitter::ThinkSplitter;
 use super::App;
 
-use crossterm::event::{Event, EventStream, KeyCode};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
 use futures::stream::Stream;
 use futures::StreamExt;
 use ratatui::prelude::*;
@@ -90,6 +90,7 @@ impl App {
 
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
+                        if key.kind != KeyEventKind::Press { continue; }
                         if self.handle_streaming_key(key, terminal) {
                             break;
                         }

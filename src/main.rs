@@ -99,7 +99,11 @@ async fn main() -> anyhow::Result<()> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+        let _ = crossterm::execute!(
+            io::stdout(),
+            crossterm::event::PopKeyboardEnhancementFlags,
+            crossterm::terminal::LeaveAlternateScreen
+        );
         original_hook(panic_info);
     }));
 

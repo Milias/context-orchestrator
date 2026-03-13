@@ -85,7 +85,10 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     }
 
     let action = match key.code {
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+        KeyCode::Enter
+            if key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::ALT) =>
+        {
             let byte_offset = tui_state
                 .input_text
                 .char_indices()

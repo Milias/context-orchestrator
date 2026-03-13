@@ -12,7 +12,7 @@ pub fn render(frame: &mut Frame, area: Rect, frame_area: Rect, tui_state: &TuiSt
 
     let input = Paragraph::new(tui_state.input_text.as_str()).block(
         Block::default()
-            .title("Message (Enter: send | Alt+Enter: newline | Ctrl+Q: quit)")
+            .title("Message (Enter: send | Shift+Enter: newline | Ctrl+Q: quit)")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color)),
     );
