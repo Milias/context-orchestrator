@@ -1,7 +1,8 @@
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
 use crate::graph::{EdgeKind, Node, Role};
-use crate::tasks::{AgentEvent, AgentToolResult, TaskMessage, ToolExtractionOutcome};
+use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage, ToolExtractionOutcome};
 use crate::tool_executor;
+use crate::tui::{AgentDisplayState, AgentVisualPhase};
 
 use chrono::Utc;
 use uuid::Uuid;
@@ -88,7 +89,6 @@ impl App {
                 content,
                 is_error,
             } => {
-                // Forward to running agent before applying to graph
                 if let Some(tx) = &self.agent_tool_tx {
                     let _ = tx.send(AgentToolResult {
                         tool_call_id,
@@ -106,62 +106,67 @@ impl App {
         match event {
             AgentEvent::Progress(phase) => {
                 self.tui_state.status_message = Some(phase.to_string());
+                self.ensure_agent_display();
+                match phase {
+                    AgentPhase::Receiving => {
+                        if let Some(ref mut d) = self.tui_state.agent_display {
+                            d.phase = AgentVisualPhase::Streaming {
+                                text: String::new(),
+                                is_thinking: false,
+                            };
+                        }
+                    }
+                    AgentPhase::ExecutingTools { count } => {
+                        if let Some(ref mut d) = self.tui_state.agent_display {
+                            // Preserve accumulated text from the streaming phase
+                            if let AgentVisualPhase::Streaming { ref text, .. } = d.phase {
+                                if !text.is_empty() && !d.accumulated_text.is_empty() {
+                                    d.accumulated_text.push_str("\n\n");
+                                }
+                                if !text.is_empty() {
+                                    d.accumulated_text.push_str(text);
+                                }
+                            }
+                            d.phase = AgentVisualPhase::ExecutingTools { tool_count: count };
+                        }
+                    }
+                    AgentPhase::CountingTokens
+                    | AgentPhase::BuildingContext
+                    | AgentPhase::Connecting { .. } => {
+                        // Preparing phases — keep phase as Preparing unless already streaming
+                        if let Some(ref mut d) = self.tui_state.agent_display {
+                            if matches!(d.phase, AgentVisualPhase::Preparing) {
+                                // Stay in Preparing
+                            }
+                        }
+                    }
+                }
             }
             AgentEvent::UserTokensCounted { node_id, count } => {
                 self.graph.set_input_tokens(node_id, count);
             }
             AgentEvent::StreamDelta { text, is_thinking } => {
-                self.tui_state.streaming_response = Some(text);
-                if is_thinking {
-                    self.tui_state.status_message = Some("Thinking...".to_string());
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    d.phase = AgentVisualPhase::Streaming { text, is_thinking };
                 }
                 if self.tui_state.auto_scroll {
                     self.tui_state.scroll_offset = u16::MAX;
                 }
             }
             AgentEvent::IterationDone {
+                assistant_id,
                 response,
                 think_text,
                 output_tokens,
                 stop_reason,
             } => {
-                self.tui_state.streaming_response = None;
-
-                let leaf = self
-                    .graph
-                    .branch_leaf(self.graph.active_branch())
-                    .expect("No leaf node for active branch");
-                let assistant_id = Uuid::new_v4();
-                let assistant_node = Node::Message {
-                    id: assistant_id,
-                    role: Role::Assistant,
-                    content: response,
-                    created_at: Utc::now(),
-                    model: Some(self.config.anthropic_model.clone()),
-                    input_tokens: None,
+                self.apply_iteration(
+                    assistant_id,
+                    &response,
+                    think_text,
                     output_tokens,
-                };
-                let _ = self.graph.add_message(leaf, assistant_node);
-
-                if !think_text.is_empty() {
-                    let think_node = Node::ThinkBlock {
-                        id: Uuid::new_v4(),
-                        content: think_text,
-                        parent_message_id: assistant_id,
-                        created_at: Utc::now(),
-                    };
-                    let think_id = self.graph.add_node(think_node);
-                    let _ = self
-                        .graph
-                        .add_edge(think_id, assistant_id, EdgeKind::ThinkingOf);
-                }
-
-                // Invalidate render cache for the new message
-                self.tui_state.render_cache.remove(&assistant_id);
-
-                if stop_reason.as_deref() == Some("tool_use") {
-                    self.tui_state.streaming_response = Some(String::new());
-                }
+                    stop_reason.as_ref(),
+                );
             }
             AgentEvent::ToolCallRequest {
                 tool_call_id,
@@ -174,8 +179,7 @@ impl App {
                 self.handle_tool_call_dispatched(tool_call_id, assistant_id, args, Some(api_id));
             }
             AgentEvent::Finished => {
-                self.tui_state.agent_running = false;
-                self.tui_state.streaming_response = None;
+                self.tui_state.agent_display = None;
                 self.tui_state.status_message = None;
                 self.agent_tool_tx = None;
                 self.cancel_tx = None;
@@ -184,6 +188,69 @@ impl App {
             AgentEvent::Error(msg) => {
                 self.tui_state.error_message = Some(msg);
             }
+        }
+    }
+
+    fn apply_iteration(
+        &mut self,
+        assistant_id: Uuid,
+        response: &str,
+        think_text: String,
+        output_tokens: Option<u32>,
+        stop_reason: Option<&String>,
+    ) {
+        let leaf = self
+            .graph
+            .branch_leaf(self.graph.active_branch())
+            .expect("No leaf node for active branch");
+        let assistant_node = Node::Message {
+            id: assistant_id,
+            role: Role::Assistant,
+            content: response.to_string(),
+            created_at: Utc::now(),
+            model: Some(self.config.anthropic_model.clone()),
+            input_tokens: None,
+            output_tokens,
+        };
+        let _ = self.graph.add_message(leaf, assistant_node);
+
+        if !think_text.is_empty() {
+            let think_node = Node::ThinkBlock {
+                id: Uuid::new_v4(),
+                content: think_text,
+                parent_message_id: assistant_id,
+                created_at: Utc::now(),
+            };
+            let think_id = self.graph.add_node(think_node);
+            let _ = self
+                .graph
+                .add_edge(think_id, assistant_id, EdgeKind::ThinkingOf);
+        }
+
+        if let Some(ref mut d) = self.tui_state.agent_display {
+            if !response.is_empty() {
+                if !d.accumulated_text.is_empty() {
+                    d.accumulated_text.push_str("\n\n");
+                }
+                d.accumulated_text.push_str(response);
+            }
+            d.iteration_node_ids.push(assistant_id);
+
+            if stop_reason.map(String::as_str) == Some("tool_use") {
+                d.phase = AgentVisualPhase::ExecutingTools { tool_count: 0 };
+            }
+        }
+    }
+
+    /// Ensure `agent_display` exists (create with Preparing phase if missing).
+    fn ensure_agent_display(&mut self) {
+        if self.tui_state.agent_display.is_none() {
+            self.tui_state.agent_display = Some(AgentDisplayState {
+                phase: AgentVisualPhase::Preparing,
+                accumulated_text: String::new(),
+                iteration_node_ids: Vec::new(),
+                spinner_tick: 0,
+            });
         }
     }
 
@@ -220,7 +287,6 @@ impl App {
         content: ToolResultContent,
         is_error: bool,
     ) {
-        // Skip stale completions for tool calls already resolved (e.g. timed out).
         if let Some(Node::ToolCall { status, .. }) = self.graph.node(tool_call_id) {
             if *status == ToolCallStatus::Completed || *status == ToolCallStatus::Failed {
                 return;

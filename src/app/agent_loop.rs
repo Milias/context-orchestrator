@@ -157,6 +157,7 @@ fn apply_iteration_to_graph(
     send(
         task_tx,
         AgentEvent::IterationDone {
+            assistant_id,
             response: result.response.clone(),
             think_text: result.think_text.clone(),
             output_tokens: result.output_tokens,

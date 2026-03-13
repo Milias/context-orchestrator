@@ -97,16 +97,44 @@ pub struct AutocompleteState {
     pub selected: usize,
 }
 
-// TUI state naturally uses independent boolean flags for orthogonal display concerns
-// (quit, panel visibility, auto-scroll, agent status). A state machine would add
-// complexity without benefit since these flags are read/written independently.
-#[allow(clippy::struct_excessive_bools)]
+// ── Agent display state ──────────────────────────────────────────────
+
+pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+#[derive(Debug)]
+pub enum AgentVisualPhase {
+    /// Pre-streaming: counting tokens, building context, connecting.
+    Preparing,
+    /// LLM is generating text.
+    Streaming { text: String, is_thinking: bool },
+    /// Tools are executing between iterations.
+    ExecutingTools { tool_count: usize },
+}
+
+/// Display state for the entire agent run. Present when an agent loop is active.
+#[derive(Debug)]
+pub struct AgentDisplayState {
+    pub phase: AgentVisualPhase,
+    /// Text accumulated across all completed iterations.
+    pub accumulated_text: String,
+    /// Assistant node IDs from this run (suppressed from history rendering).
+    pub iteration_node_ids: Vec<Uuid>,
+    pub spinner_tick: usize,
+}
+
+impl AgentDisplayState {
+    pub fn spinner_char(&self) -> &'static str {
+        SPINNER_FRAMES[self.spinner_tick % SPINNER_FRAMES.len()]
+    }
+}
+
+// ── TUI state ────────────────────────────────────────────────────────
+
 #[derive(Debug)]
 pub struct TuiState {
     pub input_text: String,
     pub input_cursor: usize,
     pub scroll_offset: u16,
-    pub streaming_response: Option<String>,
     pub status_message: Option<String>,
     /// Error message displayed right-aligned in red on the status bar.
     pub error_message: Option<String>,
@@ -123,8 +151,8 @@ pub struct TuiState {
     pub render_cache: HashMap<Uuid, CachedRender>,
     pub autocomplete: AutocompleteState,
     pub available_tools: Vec<CompletionCandidate>,
-    /// When true, an agent loop is running in the background.
-    pub agent_running: bool,
+    /// Display state for the running agent loop. `None` when idle.
+    pub agent_display: Option<AgentDisplayState>,
 }
 
 #[derive(Debug)]
@@ -141,7 +169,6 @@ impl TuiState {
             input_text: String::new(),
             input_cursor: 0,
             scroll_offset: u16::MAX,
-            streaming_response: None,
             status_message: None,
             error_message: None,
             should_quit: false,
@@ -153,7 +180,7 @@ impl TuiState {
             render_cache: HashMap::new(),
             autocomplete: AutocompleteState::default(),
             available_tools: Vec::new(),
-            agent_running: false,
+            agent_display: None,
         }
     }
 }

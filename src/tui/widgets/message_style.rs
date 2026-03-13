@@ -120,3 +120,9 @@ pub fn render_streaming(
     let render_area = Rect::new(area.x, area.y, area.width, area.height.min(full_height));
     frame.render_widget(paragraph, render_area);
 }
+
+/// Render a borderless spinner line for agent preparation phases.
+pub fn render_agent_activity(frame: &mut Frame, area: Rect, styled_text: &Text<'static>) {
+    let paragraph = Paragraph::new(styled_text.clone()).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}

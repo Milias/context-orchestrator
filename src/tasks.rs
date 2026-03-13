@@ -83,6 +83,7 @@ pub enum AgentEvent {
         is_thinking: bool,
     },
     IterationDone {
+        assistant_id: Uuid,
         response: String,
         think_text: String,
         output_tokens: Option<u32>,

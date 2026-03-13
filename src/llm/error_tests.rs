@@ -57,8 +57,7 @@ fn from_response_falls_back_to_raw_body() {
     assert!(err.is_retryable());
     assert!(
         err.to_string().contains("not json at all"),
-        "expected raw body fallback in: {}",
-        err
+        "expected raw body fallback in: {err}",
     );
 }
 
