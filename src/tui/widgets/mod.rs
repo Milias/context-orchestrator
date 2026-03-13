@@ -5,4 +5,5 @@ pub mod input_box;
 pub mod markdown;
 pub mod message_style;
 mod table;
+mod task_list;
 pub mod trigger_highlight;

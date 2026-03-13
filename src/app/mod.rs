@@ -34,6 +34,8 @@ pub struct App {
     agent_tool_tx: Option<mpsc::UnboundedSender<AgentToolResult>>,
     /// Sender to signal cancellation to the running agent.
     cancel_tx: Option<watch::Sender<bool>>,
+    /// Node ID of the currently running agent phase (`BackgroundTask` node).
+    current_phase_id: Option<Uuid>,
 }
 
 impl App {
@@ -56,6 +58,7 @@ impl App {
             task_tx,
             agent_tool_tx: None,
             cancel_tx: None,
+            current_phase_id: None,
         }
     }
 

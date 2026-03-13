@@ -1,5 +1,5 @@
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
-use crate::graph::{EdgeKind, Node, Role};
+use crate::graph::{BackgroundTaskKind, EdgeKind, Node, Role, TaskStatus};
 use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage, ToolExtractionOutcome};
 use crate::tool_executor;
 use crate::tui::{AgentDisplayState, AgentVisualPhase};
@@ -59,14 +59,20 @@ impl App {
                 status,
                 description,
             } => {
-                self.graph.upsert_node(Node::BackgroundTask {
-                    id: task_id,
-                    kind,
-                    status,
-                    description,
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                });
+                if self.graph.node(task_id).is_some() {
+                    let _ = self
+                        .graph
+                        .update_background_task_status(task_id, status, description);
+                } else {
+                    self.graph.add_node(Node::BackgroundTask {
+                        id: task_id,
+                        kind,
+                        status,
+                        description,
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    });
+                }
             }
             TaskMessage::ToolExtractionComplete {
                 trigger_message_id,
@@ -106,6 +112,7 @@ impl App {
         match event {
             AgentEvent::Progress(phase) => {
                 self.tui_state.status_message = Some(phase.to_string());
+                self.track_phase_node(&phase);
                 self.ensure_agent_display();
                 match phase {
                     AgentPhase::Receiving => {
@@ -179,6 +186,7 @@ impl App {
                 self.handle_tool_call_dispatched(tool_call_id, assistant_id, args, Some(api_id));
             }
             AgentEvent::Finished => {
+                self.complete_current_phase();
                 self.tui_state.agent_display = None;
                 self.tui_state.status_message = None;
                 self.agent_tool_tx = None;
@@ -238,6 +246,33 @@ impl App {
 
             if stop_reason.map(String::as_str) == Some("tool_use") {
                 d.phase = AgentVisualPhase::ExecutingTools { tool_count: 0 };
+            }
+        }
+    }
+
+    /// Mark the previous agent phase as Completed and create a new Running phase node.
+    fn track_phase_node(&mut self, phase: &AgentPhase) {
+        self.complete_current_phase();
+        let id = Uuid::new_v4();
+        self.graph.add_node(Node::BackgroundTask {
+            id,
+            kind: BackgroundTaskKind::AgentPhase,
+            status: TaskStatus::Running,
+            description: phase.to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        });
+        self.current_phase_id = Some(id);
+    }
+
+    /// Mark the current agent phase node as Completed if one exists.
+    fn complete_current_phase(&mut self) {
+        if let Some(id) = self.current_phase_id.take() {
+            if let Some(Node::BackgroundTask { description, .. }) = self.graph.node(id) {
+                let desc = description.clone();
+                let _ = self
+                    .graph
+                    .update_background_task_status(id, TaskStatus::Completed, desc);
             }
         }
     }

@@ -41,6 +41,7 @@ pub enum BackgroundTaskKind {
     ContextSummarize,
     ToolDiscovery,
     ToolExtraction,
+    AgentPhase,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -324,11 +325,6 @@ impl ConversationGraph {
         Ok(())
     }
 
-    /// Insert or update a node. Creates if absent, replaces if present.
-    pub fn upsert_node(&mut self, node: Node) {
-        self.nodes.insert(node.id(), node);
-    }
-
     /// Update the status (and optionally `completed_at`) of a `ToolCall` node in place.
     pub fn update_tool_call_status(
         &mut self,
@@ -351,6 +347,34 @@ impl ConversationGraph {
                 Ok(())
             }
             _ => anyhow::bail!("Node {id} is not a ToolCall"),
+        }
+    }
+
+    /// Update the status, description, and `updated_at` of a `BackgroundTask` in place.
+    /// Preserves `created_at` (unlike `upsert_node` which replaces the whole node).
+    pub fn update_background_task_status(
+        &mut self,
+        id: Uuid,
+        new_status: TaskStatus,
+        new_description: String,
+    ) -> anyhow::Result<()> {
+        let node = self
+            .nodes
+            .get_mut(&id)
+            .ok_or_else(|| anyhow::anyhow!("Node {id} not found"))?;
+        match node {
+            Node::BackgroundTask {
+                status,
+                description,
+                updated_at,
+                ..
+            } => {
+                *status = new_status;
+                *description = new_description;
+                *updated_at = Utc::now();
+                Ok(())
+            }
+            _ => anyhow::bail!("Node {id} is not a BackgroundTask"),
         }
     }
 

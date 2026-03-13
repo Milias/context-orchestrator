@@ -1,4 +1,3 @@
-use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::tui::{ContextTab, FocusPanel, TuiState};
 use ratatui::prelude::*;
@@ -67,7 +66,7 @@ fn render_tab_content(
         ContextTab::Outline => render_outline(frame, area, graph),
         ContextTab::Files => render_node_list(frame, area, graph, tui_state, is_git_file),
         ContextTab::Tools => render_node_list(frame, area, graph, tui_state, is_tool),
-        ContextTab::Tasks => render_node_list(frame, area, graph, tui_state, is_background_task),
+        ContextTab::Tasks => super::task_list::render(frame, area, graph, tui_state),
         ContextTab::Work => render_node_list(frame, area, graph, tui_state, is_work_item),
     }
 }
@@ -178,22 +177,6 @@ fn format_node_line(node: &Node) -> Line<'static> {
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
-        Node::BackgroundTask {
-            status,
-            description,
-            ..
-        } => {
-            let (marker, color) = match status {
-                crate::graph::TaskStatus::Pending => ("○", Color::DarkGray),
-                crate::graph::TaskStatus::Running => ("◉", Color::Yellow),
-                crate::graph::TaskStatus::Completed => ("✓", Color::Green),
-                crate::graph::TaskStatus::Failed => ("✗", Color::Red),
-            };
-            Line::from(vec![
-                Span::styled(format!("{marker} "), Style::default().fg(color)),
-                Span::styled(description.clone(), Style::default().fg(Color::White)),
-            ])
-        }
         Node::WorkItem { title, status, .. } => {
             let (marker, color) = match status {
                 crate::graph::WorkItemStatus::Todo => ("[]", Color::Yellow),
@@ -203,43 +186,6 @@ fn format_node_line(node: &Node) -> Line<'static> {
             Line::from(vec![
                 Span::styled(format!("{marker} "), Style::default().fg(color)),
                 Span::styled(title.clone(), Style::default().fg(Color::White)),
-            ])
-        }
-        Node::ToolCall {
-            arguments, status, ..
-        } => {
-            let (marker, color) = match status {
-                ToolCallStatus::Pending => ("○", Color::DarkGray),
-                ToolCallStatus::Running => ("◉", Color::Yellow),
-                ToolCallStatus::Completed => ("✓", Color::Green),
-                ToolCallStatus::Failed => ("✗", Color::Red),
-                ToolCallStatus::Cancelled => ("⊘", Color::DarkGray),
-            };
-            Line::from(vec![
-                Span::styled(format!("{marker} "), Style::default().fg(color)),
-                Span::styled(
-                    arguments.tool_name().to_string(),
-                    Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])
-        }
-        Node::ToolResult {
-            content, is_error, ..
-        } => {
-            let (marker, color) = if *is_error {
-                ("✗→", Color::Red)
-            } else {
-                ("→", Color::Green)
-            };
-            let text = content.text_content();
-            let suffix = if content.has_images() { " [img]" } else { "" };
-            let max_text = 60usize.saturating_sub(suffix.len());
-            let truncated: String = text.chars().take(max_text).chain(suffix.chars()).collect();
-            Line::from(vec![
-                Span::styled(format!("{marker} "), Style::default().fg(color)),
-                Span::styled(truncated, Style::default().fg(Color::DarkGray)),
             ])
         }
         _ => Line::from(node.content().to_string()),
@@ -330,13 +276,6 @@ fn is_git_file(node: &Node) -> bool {
 
 fn is_tool(node: &Node) -> bool {
     matches!(node, Node::Tool { .. })
-}
-
-fn is_background_task(node: &Node) -> bool {
-    matches!(
-        node,
-        Node::BackgroundTask { .. } | Node::ToolCall { .. } | Node::ToolResult { .. }
-    )
 }
 
 fn is_work_item(node: &Node) -> bool {

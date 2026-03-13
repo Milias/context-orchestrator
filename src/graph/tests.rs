@@ -112,7 +112,7 @@ fn test_typed_edges() {
 }
 
 #[test]
-fn test_upsert_node() {
+fn test_update_background_task_status() {
     let mut graph = ConversationGraph::new("System prompt");
     let id = Uuid::new_v4();
 
@@ -124,7 +124,7 @@ fn test_upsert_node() {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    graph.upsert_node(task);
+    graph.add_node(task);
     assert_eq!(
         graph
             .nodes_by(|n| matches!(
@@ -138,15 +138,9 @@ fn test_upsert_node() {
         1
     );
 
-    let updated = Node::BackgroundTask {
-        id,
-        kind: BackgroundTaskKind::GitIndex,
-        status: TaskStatus::Completed,
-        description: "Indexing...".to_string(),
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    };
-    graph.upsert_node(updated);
+    graph
+        .update_background_task_status(id, TaskStatus::Completed, "Done".to_string())
+        .unwrap();
     assert_eq!(
         graph
             .nodes_by(|n| matches!(
