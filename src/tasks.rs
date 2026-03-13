@@ -1,4 +1,4 @@
-use crate::graph::{BackgroundTaskKind, GitFileStatus, TaskStatus, ToolResultContent};
+use crate::graph::{BackgroundTaskKind, GitFileStatus, StopReason, TaskStatus, ToolResultContent};
 use crate::llm::ChatMessage;
 use crate::tools::PlanExtractionResult;
 use serde::{Deserialize, Serialize};
@@ -93,7 +93,7 @@ pub enum AgentEvent {
         response: String,
         think_text: String,
         output_tokens: Option<u32>,
-        stop_reason: Option<String>,
+        stop_reason: Option<StopReason>,
     },
     ToolCallRequest {
         tool_call_id: Uuid,
@@ -130,6 +130,13 @@ pub enum TaskMessage {
     },
     ToolCallCompleted {
         tool_call_id: Uuid,
+        content: ToolResultContent,
+        is_error: bool,
+    },
+    /// Result of a user-triggered tool (via `/tool_name args`).
+    UserToolResult {
+        trigger_message_id: Uuid,
+        tool_name: String,
         content: ToolResultContent,
         is_error: bool,
     },
@@ -258,30 +265,14 @@ pub fn spawn_tool_discovery(tx: mpsc::UnboundedSender<TaskMessage>) {
             description: "Tool discovery".to_string(),
         });
 
-        // Hardcoded initial tool list; will be extended with config-based
-        // or MCP-based tool discovery.
-        let tools = vec![
-            ToolSnapshot {
-                name: "web_search".to_string(),
-                description: "Search the web for information".to_string(),
-            },
-            ToolSnapshot {
-                name: "read_file".to_string(),
-                description: "Read a file from the filesystem".to_string(),
-            },
-            ToolSnapshot {
-                name: "write_file".to_string(),
-                description: "Write content to a file".to_string(),
-            },
-            ToolSnapshot {
-                name: "list_directory".to_string(),
-                description: "List files and directories at a given path".to_string(),
-            },
-            ToolSnapshot {
-                name: "search_files".to_string(),
-                description: "Search for a regex pattern across files".to_string(),
-            },
-        ];
+        // Derive tool list from the single source of truth (tool registry).
+        let tools: Vec<ToolSnapshot> = crate::tool_executor::tool_registry()
+            .iter()
+            .map(|entry| ToolSnapshot {
+                name: entry.name.to_string(),
+                description: entry.description.to_string(),
+            })
+            .collect();
         let _ = tx.send(TaskMessage::ToolsDiscovered(tools));
 
         let _ = tx.send(TaskMessage::TaskStatusChanged {

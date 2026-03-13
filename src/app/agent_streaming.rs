@@ -1,3 +1,4 @@
+use crate::graph::StopReason;
 use crate::llm::error::ApiError;
 use crate::llm::retry::RetryConfig;
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
@@ -20,7 +21,7 @@ pub(super) struct StreamResult {
     pub think_text: String,
     pub output_tokens: Option<u32>,
     pub tool_use_records: Vec<ToolUseRecord>,
-    pub stop_reason: Option<String>,
+    pub stop_reason: Option<StopReason>,
     pub cancelled: bool,
     /// Phase ID for the Receiving phase, created during connection.
     /// Caller must send `PhaseCompleted` for this ID when streaming ends.
@@ -152,7 +153,7 @@ struct StreamState {
     think_splitter: ThinkSplitter,
     output_tokens: Option<u32>,
     tool_use_records: Vec<ToolUseRecord>,
-    stop_reason: Option<String>,
+    stop_reason: Option<StopReason>,
     retries: u32,
     last_send: Instant,
     send_budget: Duration,

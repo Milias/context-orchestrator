@@ -2,7 +2,8 @@ pub mod node;
 pub mod tool_types;
 
 pub use node::{
-    BackgroundTaskKind, Edge, EdgeKind, GitFileStatus, Node, Role, TaskStatus, WorkItemStatus,
+    BackgroundTaskKind, Edge, EdgeKind, GitFileStatus, Node, Role, StopReason, TaskStatus,
+    WorkItemStatus,
 };
 pub use tool_types::{parse_tool_arguments, ToolCallArguments, ToolCallStatus, ToolResultContent};
 

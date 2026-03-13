@@ -1,5 +1,5 @@
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
-use crate::graph::{BackgroundTaskKind, EdgeKind, Node, Role, TaskStatus};
+use crate::graph::{BackgroundTaskKind, EdgeKind, Node, Role, StopReason, TaskStatus};
 use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage, ToolExtractionOutcome};
 use crate::tool_executor;
 use crate::tui::{AgentDisplayState, AgentVisualPhase};
@@ -98,6 +98,14 @@ impl App {
                 }
                 self.handle_tool_call_completed(tool_call_id, content, is_error);
             }
+            TaskMessage::UserToolResult {
+                trigger_message_id,
+                tool_name,
+                content,
+                is_error,
+            } => {
+                self.handle_user_tool_result(trigger_message_id, &tool_name, &content, is_error);
+            }
             TaskMessage::Agent(event) => self.handle_agent_event(event),
         }
     }
@@ -159,7 +167,7 @@ impl App {
                     &response,
                     think_text,
                     output_tokens,
-                    stop_reason.as_ref(),
+                    stop_reason,
                 );
             }
             AgentEvent::ToolCallRequest {
@@ -193,7 +201,7 @@ impl App {
         response: &str,
         think_text: String,
         output_tokens: Option<u32>,
-        stop_reason: Option<&String>,
+        stop_reason: Option<StopReason>,
     ) {
         let leaf = self.graph.active_leaf().expect("No active leaf");
         let assistant_node = Node::Message {
@@ -204,6 +212,7 @@ impl App {
             model: Some(self.config.anthropic_model.clone()),
             input_tokens: None,
             output_tokens,
+            stop_reason,
         };
         let _ = self.graph.add_message(leaf, assistant_node);
 
@@ -220,10 +229,15 @@ impl App {
                 .add_edge(think_id, assistant_id, EdgeKind::ThinkingOf);
         }
 
+        if stop_reason == Some(StopReason::MaxTokens) {
+            self.tui_state.error_message =
+                Some("Response truncated — continuing automatically".to_string());
+        }
+
         if let Some(ref mut d) = self.tui_state.agent_display {
             d.iteration_node_ids.push(assistant_id);
 
-            if stop_reason.map(String::as_str) == Some("tool_use") {
+            if stop_reason == Some(StopReason::ToolUse) {
                 d.phase = AgentVisualPhase::ExecutingTools;
             }
         }
@@ -325,6 +339,34 @@ impl App {
             .update_tool_call_status(tool_call_id, new_status, Some(Utc::now()));
         self.graph.add_tool_result(tool_call_id, content, is_error);
         self.task_tokens.remove(&tool_call_id);
+    }
+
+    /// Handle the result of a user-triggered tool (via `/tool_name args`).
+    fn handle_user_tool_result(
+        &mut self,
+        trigger_message_id: Uuid,
+        tool_name: &str,
+        content: &ToolResultContent,
+        is_error: bool,
+    ) {
+        // For the `set` tool, apply the config mutation in the main event loop
+        // (the executor validated the key/value; we apply the side effect here
+        // where `&mut self.config` is available).
+        if tool_name == "set" && !is_error {
+            if let Some(Node::Message { content, .. }) = self.graph.node(trigger_message_id) {
+                let content = content.clone();
+                for trigger in crate::tools::parse_triggers(&content) {
+                    if trigger.tool_name == "set" {
+                        let mut parts = trigger.args.splitn(2, ' ');
+                        let key = parts.next().unwrap_or("").trim();
+                        let value = parts.next().unwrap_or("").trim();
+                        crate::tool_executor::apply_config_set(&mut self.config, key, value);
+                    }
+                }
+            }
+        }
+        self.tui_state.status_message =
+            Some(content.text_content().chars().take(80).collect::<String>());
     }
 
     /// Cancel a running task by its graph node ID.

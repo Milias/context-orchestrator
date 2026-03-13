@@ -1,4 +1,5 @@
 use crate::config::AppConfig;
+use crate::graph::StopReason;
 use crate::llm::error::ApiError;
 use crate::llm::retry::{self, RetryConfig};
 use crate::llm::tool_types::{ApiToolDefinition, ToolDefinition};
@@ -156,7 +157,7 @@ struct SseState<S> {
     stream: Pin<Box<S>>,
     buffer: String,
     output_tokens: Option<u32>,
-    stop_reason: Option<String>,
+    stop_reason: Option<StopReason>,
     /// Pending `tool_use` block being accumulated across SSE events.
     pending_tool_use: Option<PendingToolUse>,
 }
@@ -268,7 +269,7 @@ struct ErrorPayload {
 fn parse_sse_event(
     event_text: &str,
     output_tokens: &mut Option<u32>,
-    stop_reason: &mut Option<String>,
+    stop_reason: &mut Option<StopReason>,
     pending_tool_use: &mut Option<PendingToolUse>,
 ) -> Option<anyhow::Result<StreamChunk>> {
     let mut event_type = "";
@@ -346,7 +347,11 @@ fn parse_sse_event(
             if let Some(tokens) = event.usage.and_then(|u| u.output_tokens) {
                 *output_tokens = Some(tokens);
             }
-            if let Some(reason) = event.delta.and_then(|d| d.stop_reason) {
+            if let Some(reason) = event
+                .delta
+                .and_then(|d| d.stop_reason)
+                .and_then(|s| StopReason::from_api(&s))
+            {
                 *stop_reason = Some(reason);
             }
             None

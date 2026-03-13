@@ -18,6 +18,7 @@ fn test_tool_call_serde_roundtrip() {
         model: Some("test".to_string()),
         input_tokens: None,
         output_tokens: None,
+        stop_reason: None,
     };
     graph.add_message(root_id, asst).unwrap();
 
@@ -151,6 +152,7 @@ fn test_invoked_edge_rebuilds_runtime_index() {
         model: None,
         input_tokens: None,
         output_tokens: None,
+        stop_reason: None,
     };
     graph.add_message(root_id, asst).unwrap();
 
@@ -197,6 +199,7 @@ fn test_tool_call_provenance_chain_query() {
                 model: None,
                 input_tokens: None,
                 output_tokens: None,
+                stop_reason: None,
             },
         )
         .unwrap();

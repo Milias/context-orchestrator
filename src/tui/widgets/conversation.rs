@@ -113,6 +113,7 @@ fn render_entries(
                     clip_top,
                     full_height: *height as u16,
                     has_thinking: *has_thinking,
+                    is_truncated: node.is_truncated(),
                 };
                 render_message(frame, msg_area, node, styled_text, &params);
             }

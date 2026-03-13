@@ -4,9 +4,8 @@ use super::*;
 fn test_parse_triggers_finds_plan() {
     let triggers = parse_triggers("/plan Fix the login bug");
     assert_eq!(triggers.len(), 1);
-    match &triggers[0] {
-        TriggerCommand::Plan { args } => assert_eq!(args, "Fix the login bug"),
-    }
+    assert_eq!(triggers[0].tool_name, "plan");
+    assert_eq!(triggers[0].args, "Fix the login bug");
 }
 
 #[test]
@@ -19,12 +18,8 @@ fn test_parse_triggers_no_triggers() {
 fn test_parse_triggers_multiple() {
     let triggers = parse_triggers("/plan First task\n/plan Second task");
     assert_eq!(triggers.len(), 2);
-    match &triggers[0] {
-        TriggerCommand::Plan { args } => assert_eq!(args, "First task"),
-    }
-    match &triggers[1] {
-        TriggerCommand::Plan { args } => assert_eq!(args, "Second task"),
-    }
+    assert_eq!(triggers[0].args, "First task");
+    assert_eq!(triggers[1].args, "Second task");
 }
 
 #[test]
@@ -49,9 +44,25 @@ fn test_parse_triggers_no_args_ignored() {
 fn test_parse_triggers_with_leading_whitespace() {
     let triggers = parse_triggers("  /plan Indented task");
     assert_eq!(triggers.len(), 1);
-    match &triggers[0] {
-        TriggerCommand::Plan { args } => assert_eq!(args, "Indented task"),
-    }
+    assert_eq!(triggers[0].args, "Indented task");
+}
+
+/// Registry-based parsing matches any registered tool, not just plan.
+#[test]
+fn test_parse_triggers_read_file() {
+    let triggers = parse_triggers("/read_file src/main.rs");
+    assert_eq!(triggers.len(), 1);
+    assert_eq!(triggers[0].tool_name, "read_file");
+    assert_eq!(triggers[0].args, "src/main.rs");
+}
+
+/// The /set tool is parsed from the registry.
+#[test]
+fn test_parse_triggers_set() {
+    let triggers = parse_triggers("/set max_tokens 16384");
+    assert_eq!(triggers.len(), 1);
+    assert_eq!(triggers[0].tool_name, "set");
+    assert_eq!(triggers[0].args, "max_tokens 16384");
 }
 
 #[test]
@@ -121,7 +132,6 @@ fn test_parse_triggers_plan_at_eof_no_newline() {
 
 #[test]
 fn test_truncate_content_unicode_safe() {
-    // Multi-byte UTF-8: each emoji is 4 bytes
     let emoji_str = "🎉🎊🎈🎁🎂";
     let result = truncate_content(emoji_str, 3);
     assert_eq!(result, "🎉🎊🎈...");

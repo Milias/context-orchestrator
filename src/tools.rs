@@ -1,3 +1,4 @@
+use crate::graph::tool_types::ToolCallArguments;
 use crate::graph::{EdgeKind, Node, WorkItemStatus};
 use crate::llm::{background_llm_call, BackgroundLlmConfig, ChatMessage, LlmProvider};
 use crate::tasks::{ContextSnapshot, TaskMessage, ToolExtractionOutcome};
@@ -8,30 +9,41 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Semaphore};
 use uuid::Uuid;
 
-use crate::graph::BackgroundTaskKind;
-use crate::graph::TaskStatus;
+use crate::graph::{BackgroundTaskKind, TaskStatus};
 
 // ── Trigger Parsing ─────────────────────────────────────────────────
 
+/// A parsed user trigger: the tool name and the raw argument string.
 #[derive(Debug, Clone)]
-pub enum TriggerCommand {
-    Plan { args: String },
+pub struct ParsedTrigger {
+    pub tool_name: String,
+    pub args: String,
 }
 
 /// Parse `/tool_name args` triggers from message text.
-/// The `/` must be at start of line or preceded by whitespace.
-/// Unknown tool names are ignored.
-pub fn parse_triggers(text: &str) -> Vec<TriggerCommand> {
+/// Only tools registered in the tool registry are matched.
+/// The `/` must be at start of line (after optional whitespace).
+pub fn parse_triggers(text: &str) -> Vec<ParsedTrigger> {
+    let registry = crate::tool_executor::tool_registry();
     let mut triggers = Vec::new();
 
     for line in text.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("/plan") {
-            // Ensure /plan is the full token (not /planning, etc.)
-            if rest.is_empty() || rest.starts_with(' ') {
-                let args = rest.trim().to_string();
-                if !args.is_empty() {
-                    triggers.push(TriggerCommand::Plan { args });
+        let Some(rest) = trimmed.strip_prefix('/') else {
+            continue;
+        };
+        for entry in registry {
+            if let Some(after) = rest.strip_prefix(entry.name) {
+                // Ensure the tool name is a full token (not a prefix of a longer word)
+                if after.is_empty() || after.starts_with(' ') {
+                    let args = after.trim().to_string();
+                    if !args.is_empty() {
+                        triggers.push(ParsedTrigger {
+                            tool_name: entry.name.to_string(),
+                            args,
+                        });
+                    }
+                    break;
                 }
             }
         }
@@ -40,42 +52,78 @@ pub fn parse_triggers(text: &str) -> Vec<TriggerCommand> {
     triggers
 }
 
-// ── LLM Extraction Results ──────────────────────────────────────────
+/// Parse positional user trigger args into typed `ToolCallArguments`.
+fn parse_user_trigger_args(tool_name: &str, args: &str) -> ToolCallArguments {
+    match tool_name {
+        "set" => {
+            let mut parts = args.splitn(2, ' ');
+            let key = parts.next().unwrap_or("").trim().to_string();
+            let value = parts.next().unwrap_or("").trim().to_string();
+            ToolCallArguments::Set { key, value }
+        }
+        "read_file" => ToolCallArguments::ReadFile {
+            path: args.to_string(),
+        },
+        "write_file" => {
+            let mut parts = args.splitn(2, ' ');
+            let path = parts.next().unwrap_or("").to_string();
+            let content = parts.next().unwrap_or("").to_string();
+            ToolCallArguments::WriteFile { path, content }
+        }
+        "list_directory" => ToolCallArguments::ListDirectory {
+            path: args.to_string(),
+            recursive: None,
+        },
+        "search_files" => ToolCallArguments::SearchFiles {
+            pattern: args.to_string(),
+            path: None,
+        },
+        _ => ToolCallArguments::Unknown {
+            tool_name: tool_name.to_string(),
+            raw_json: args.to_string(),
+        },
+    }
+}
+
+// ── Trigger Dispatch ────────────────────────────────────────────────
+
+/// Spawn the appropriate handler for a user trigger.
+/// - `plan` → LLM extraction (background LLM call to extract structured args)
+/// - Everything else → direct execution via `execute_tool()`
+pub fn spawn_trigger_handler(
+    trigger: ParsedTrigger,
+    snapshot: ContextSnapshot,
+    provider: Arc<dyn LlmProvider>,
+    semaphore: Arc<Semaphore>,
+    bg_config: BackgroundLlmConfig,
+    tx: mpsc::UnboundedSender<TaskMessage>,
+) {
+    if trigger.tool_name == "plan" {
+        tokio::spawn(async move {
+            run_plan_extraction(trigger.args, snapshot, provider, semaphore, bg_config, tx).await;
+        });
+    } else {
+        let args = parse_user_trigger_args(&trigger.tool_name, &trigger.args);
+        let tool_name = trigger.tool_name;
+        let trigger_id = snapshot.trigger_message_id;
+        tokio::spawn(async move {
+            let result = crate::tool_executor::execute_tool(&args).await;
+            let _ = tx.send(TaskMessage::UserToolResult {
+                trigger_message_id: trigger_id,
+                tool_name,
+                content: result.content,
+                is_error: result.is_error,
+            });
+        });
+    }
+}
+
+// ── LLM Extraction (plan) ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanExtractionResult {
     pub title: String,
     pub description: Option<String>,
-}
-
-// ── Background Tool Extraction ──────────────────────────────────────
-
-pub fn spawn_tool_extraction(
-    trigger: TriggerCommand,
-    snapshot: ContextSnapshot,
-    provider: Arc<dyn LlmProvider>,
-    semaphore: Arc<Semaphore>,
-    bg_config: BackgroundLlmConfig,
-    tx: mpsc::UnboundedSender<TaskMessage>,
-) {
-    tokio::spawn(async move {
-        run_tool_extraction(trigger, snapshot, provider, semaphore, bg_config, tx).await;
-    });
-}
-
-async fn run_tool_extraction(
-    trigger: TriggerCommand,
-    snapshot: ContextSnapshot,
-    provider: Arc<dyn LlmProvider>,
-    semaphore: Arc<Semaphore>,
-    bg_config: BackgroundLlmConfig,
-    tx: mpsc::UnboundedSender<TaskMessage>,
-) {
-    match trigger {
-        TriggerCommand::Plan { args } => {
-            run_plan_extraction(args, snapshot, provider, semaphore, bg_config, tx).await;
-        }
-    }
 }
 
 async fn run_plan_extraction(
@@ -185,6 +233,8 @@ fn build_plan_prompt(user_args: &str, snapshot: &ContextSnapshot) -> String {
          {{\"title\": \"concise title\", \"description\": \"detailed description or null\"}}"
     )
 }
+
+// ── Helpers ─────────────────────────────────────────────────────────
 
 /// Create a `WorkItem` node from a `PlanExtractionResult`.
 pub fn plan_result_to_node(result: &PlanExtractionResult) -> Node {

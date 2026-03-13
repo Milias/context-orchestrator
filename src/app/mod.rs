@@ -231,6 +231,7 @@ impl App {
             model: None,
             input_tokens: None,
             output_tokens: None,
+            stop_reason: None,
         };
         let user_msg_id = self.graph.add_message(parent_id, user_node)?;
 
@@ -273,7 +274,7 @@ impl App {
     fn spawn_tool_triggers(&self, text: &str, user_msg_id: Uuid) {
         for trigger in crate::tools::parse_triggers(text) {
             let snapshot = self.snapshot_context(user_msg_id);
-            crate::tools::spawn_tool_extraction(
+            crate::tools::spawn_trigger_handler(
                 trigger,
                 snapshot,
                 Arc::clone(&self.provider),

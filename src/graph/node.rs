@@ -6,6 +6,28 @@ use super::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
 
 // ── Enums ────────────────────────────────────────────────────────────
 
+/// The reason the LLM stopped generating output.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StopReason {
+    EndTurn,
+    MaxTokens,
+    ToolUse,
+}
+
+impl StopReason {
+    /// Convert an API stop reason string (e.g. `"end_turn"`) into a typed enum.
+    /// Returns `None` for unknown/future values.
+    pub fn from_api(s: &str) -> Option<Self> {
+        match s {
+            "end_turn" => Some(Self::EndTurn),
+            "max_tokens" => Some(Self::MaxTokens),
+            "tool_use" => Some(Self::ToolUse),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
@@ -96,6 +118,10 @@ pub enum Node {
         model: Option<String>,
         input_tokens: Option<u32>,
         output_tokens: Option<u32>,
+        /// Why the LLM stopped generating. `None` for user/system messages
+        /// and for messages loaded from older graph formats.
+        #[serde(default)]
+        stop_reason: Option<StopReason>,
     },
     SystemDirective {
         id: Uuid,
@@ -216,5 +242,18 @@ impl Node {
             Node::Message { model, .. } => model.as_deref(),
             _ => None,
         }
+    }
+
+    /// Returns the stop reason for assistant messages, `None` otherwise.
+    pub fn stop_reason(&self) -> Option<StopReason> {
+        match self {
+            Node::Message { stop_reason, .. } => *stop_reason,
+            _ => None,
+        }
+    }
+
+    /// Whether this message was truncated due to `max_tokens`.
+    pub fn is_truncated(&self) -> bool {
+        self.stop_reason() == Some(StopReason::MaxTokens)
     }
 }

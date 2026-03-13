@@ -95,6 +95,7 @@ fn v1_node_to_node(v1: V1Node) -> Node {
             model,
             input_tokens,
             output_tokens,
+            stop_reason: None,
         },
         V1Node::SystemDirective {
             id,

@@ -77,6 +77,7 @@ fn test_tool_call_persistence_roundtrip() {
                 model: Some("test-model".to_string()),
                 input_tokens: None,
                 output_tokens: None,
+                stop_reason: None,
             },
         )
         .unwrap();
@@ -159,6 +160,7 @@ fn test_blocks_content_persistence_roundtrip() {
                 model: None,
                 input_tokens: None,
                 output_tokens: None,
+                stop_reason: None,
             },
         )
         .unwrap();

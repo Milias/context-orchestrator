@@ -35,6 +35,10 @@ pub enum ToolCallArguments {
     WebSearch {
         query: String,
     },
+    Set {
+        key: String,
+        value: String,
+    },
     Unknown {
         tool_name: String,
         raw_json: String,
@@ -50,6 +54,7 @@ impl ToolCallArguments {
             Self::ListDirectory { .. } => "list_directory",
             Self::SearchFiles { .. } => "search_files",
             Self::WebSearch { .. } => "web_search",
+            Self::Set { .. } => "set",
             Self::Unknown { tool_name, .. } => tool_name,
         }
     }
@@ -70,6 +75,7 @@ impl ToolCallArguments {
                 None => format!("search_files: {pattern}"),
             },
             Self::WebSearch { query } => format!("web_search: {query}"),
+            Self::Set { key, value } => format!("set: {key}={value}"),
             Self::Unknown {
                 tool_name,
                 raw_json,
@@ -218,6 +224,7 @@ pub fn parse_tool_arguments(name: &str, raw_json: &str) -> ToolCallArguments {
         "list_directory" => "ListDirectory",
         "search_files" => "SearchFiles",
         "web_search" => "WebSearch",
+        "set" => "Set",
         _ => {
             return ToolCallArguments::Unknown {
                 tool_name: name.to_string(),

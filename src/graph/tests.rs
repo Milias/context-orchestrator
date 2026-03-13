@@ -23,6 +23,7 @@ fn test_add_message_and_history() {
         model: None,
         input_tokens: None,
         output_tokens: None,
+        stop_reason: None,
     };
     let user_id = graph.add_message(root_id, user_msg).unwrap();
 
@@ -34,6 +35,7 @@ fn test_add_message_and_history() {
         model: Some("claude".to_string()),
         input_tokens: Some(25),
         output_tokens: Some(10),
+        stop_reason: None,
     };
     let _asst_id = graph.add_message(user_id, asst_msg).unwrap();
 
@@ -57,6 +59,7 @@ fn test_serde_roundtrip() {
         model: None,
         input_tokens: None,
         output_tokens: None,
+        stop_reason: None,
     };
     graph.add_message(root_id, msg).unwrap();
 
@@ -217,6 +220,7 @@ fn test_think_block_not_in_history() {
         model: None,
         input_tokens: None,
         output_tokens: None,
+        stop_reason: None,
     };
     graph.add_message(root_id, asst).unwrap();
 

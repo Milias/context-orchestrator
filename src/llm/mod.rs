@@ -6,6 +6,7 @@ pub mod tool_types;
 pub use tool_types::{ChatContent, ContentBlock, RawJson, ToolDefinition};
 
 use crate::config::AppConfig;
+use crate::graph::StopReason;
 use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::StreamExt;
@@ -52,7 +53,7 @@ pub enum StreamChunk {
     },
     Done {
         output_tokens: Option<u32>,
-        stop_reason: Option<String>,
+        stop_reason: Option<StopReason>,
     },
     Error(String),
 }

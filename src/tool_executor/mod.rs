@@ -29,91 +29,166 @@ pub struct ToolExecutionResult {
     pub is_error: bool,
 }
 
-/// Return the tool definitions to register with the LLM API.
-pub fn registered_tool_definitions() -> Vec<ToolDefinition> {
+// ── Tool Registry ───────────────────────────────────────────────────
+
+/// Metadata for a registered tool. Every tool is equally callable by users
+/// (via `/name args`) and by the LLM (via `tool_use`).
+pub struct ToolRegistryEntry {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub input_schema: ToolInputSchema,
+}
+
+/// Single source of truth for all tools. Discovery, LLM registration,
+/// autocomplete, and trigger parsing all derive from this registry.
+pub fn tool_registry() -> &'static [ToolRegistryEntry] {
+    use std::sync::LazyLock;
+    static REGISTRY: LazyLock<Vec<ToolRegistryEntry>> = LazyLock::new(build_registry);
+    &REGISTRY
+}
+
+fn build_registry() -> Vec<ToolRegistryEntry> {
     vec![
-        ToolDefinition {
-            name: "read_file".to_string(),
-            description: "Read the contents of a file at the given path".to_string(),
-            input_schema: ToolInputSchema {
-                properties: vec![SchemaProperty {
-                    name: "path".to_string(),
-                    property_type: SchemaType::String,
-                    description: "Absolute or relative path to the file".to_string(),
-                    required: true,
-                }],
-            },
+        ToolRegistryEntry {
+            name: "set",
+            description: "Set a runtime configuration value (e.g. max_tokens, model)",
+            input_schema: schema(&[
+                prop(
+                    "key",
+                    SchemaType::String,
+                    "Config key: max_tokens, max_context_tokens, model, max_tool_loop_iterations",
+                    true,
+                ),
+                prop(
+                    "value",
+                    SchemaType::String,
+                    "New value for the config key",
+                    true,
+                ),
+            ]),
         },
-        ToolDefinition {
-            name: "write_file".to_string(),
-            description: "Write content to a file, creating parent directories if needed. Overwrites existing files.".to_string(),
-            input_schema: ToolInputSchema {
-                properties: vec![
-                    SchemaProperty {
-                        name: "path".to_string(),
-                        property_type: SchemaType::String,
-                        description: "Absolute or relative path to the file".to_string(),
-                        required: true,
-                    },
-                    SchemaProperty {
-                        name: "content".to_string(),
-                        property_type: SchemaType::String,
-                        description: "The full content to write to the file".to_string(),
-                        required: true,
-                    },
-                ],
-            },
+        ToolRegistryEntry {
+            name: "plan",
+            description: "Create a structured work item from a description",
+            input_schema: schema(&[prop(
+                "raw_input",
+                SchemaType::String,
+                "Free-text description of the work item",
+                true,
+            )]),
         },
-        ToolDefinition {
-            name: "list_directory".to_string(),
-            description: "List files and directories at a given path".to_string(),
-            input_schema: ToolInputSchema {
-                properties: vec![
-                    SchemaProperty {
-                        name: "path".to_string(),
-                        property_type: SchemaType::String,
-                        description: "Path to the directory to list".to_string(),
-                        required: true,
-                    },
-                    SchemaProperty {
-                        name: "recursive".to_string(),
-                        property_type: SchemaType::Boolean,
-                        description: "If true, list recursively. Defaults to false."
-                            .to_string(),
-                        required: false,
-                    },
-                ],
-            },
+        ToolRegistryEntry {
+            name: "read_file",
+            description: "Read the contents of a file at the given path",
+            input_schema: schema(&[prop(
+                "path",
+                SchemaType::String,
+                "Absolute or relative path to the file",
+                true,
+            )]),
         },
-        ToolDefinition {
-            name: "search_files".to_string(),
-            description: "Search for a regex pattern across files in the project"
-                .to_string(),
-            input_schema: ToolInputSchema {
-                properties: vec![
-                    SchemaProperty {
-                        name: "pattern".to_string(),
-                        property_type: SchemaType::String,
-                        description: "Regex pattern to search for".to_string(),
-                        required: true,
-                    },
-                    SchemaProperty {
-                        name: "path".to_string(),
-                        property_type: SchemaType::String,
-                        description: "Directory to search in. Defaults to the current working directory.".to_string(),
-                        required: false,
-                    },
-                ],
-            },
+        ToolRegistryEntry {
+            name: "write_file",
+            description: "Write content to a file, creating parent directories if needed",
+            input_schema: schema(&[
+                prop(
+                    "path",
+                    SchemaType::String,
+                    "Absolute or relative path to the file",
+                    true,
+                ),
+                prop(
+                    "content",
+                    SchemaType::String,
+                    "The full content to write to the file",
+                    true,
+                ),
+            ]),
+        },
+        ToolRegistryEntry {
+            name: "list_directory",
+            description: "List files and directories at a given path",
+            input_schema: schema(&[
+                prop(
+                    "path",
+                    SchemaType::String,
+                    "Path to the directory to list",
+                    true,
+                ),
+                prop(
+                    "recursive",
+                    SchemaType::Boolean,
+                    "If true, list recursively. Defaults to false.",
+                    false,
+                ),
+            ]),
+        },
+        ToolRegistryEntry {
+            name: "search_files",
+            description: "Search for a regex pattern across files in the project",
+            input_schema: schema(&[
+                prop(
+                    "pattern",
+                    SchemaType::String,
+                    "Regex pattern to search for",
+                    true,
+                ),
+                prop(
+                    "path",
+                    SchemaType::String,
+                    "Directory to search in. Defaults to cwd.",
+                    false,
+                ),
+            ]),
         },
     ]
 }
 
+/// Shorthand: build a `SchemaProperty`.
+fn prop(name: &str, ty: SchemaType, desc: &str, required: bool) -> SchemaProperty {
+    SchemaProperty {
+        name: name.to_string(),
+        property_type: ty,
+        description: desc.to_string(),
+        required,
+    }
+}
+
+/// Shorthand: build a `ToolInputSchema` from a slice of properties.
+fn schema(props: &[SchemaProperty]) -> ToolInputSchema {
+    ToolInputSchema {
+        properties: props.to_vec(),
+    }
+}
+
+/// Return tool definitions for the LLM API, derived from the registry.
+pub fn registered_tool_definitions() -> Vec<ToolDefinition> {
+    tool_registry()
+        .iter()
+        .map(|entry| ToolDefinition {
+            name: entry.name.to_string(),
+            description: entry.description.to_string(),
+            input_schema: entry.input_schema.clone(),
+        })
+        .collect()
+}
+
+/// Known config keys for the `set` tool.
+const VALID_SET_KEYS: &[&str] = &[
+    "max_tokens",
+    "max_context_tokens",
+    "model",
+    "max_tool_loop_iterations",
+];
+
 /// Execute a tool call and return the result.
 pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult {
     match arguments {
+        ToolCallArguments::Set { key, value } => execute_set(key, value),
         ToolCallArguments::Plan { .. } => ToolExecutionResult {
-            content: ToolResultContent::text("Plan tool execution not yet implemented"),
+            content: ToolResultContent::text(
+                "Plan tool: use /plan <description> to create work items",
+            ),
             is_error: true,
         },
         ToolCallArguments::ReadFile { path } => read_file::execute(path).await,
@@ -136,6 +211,74 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
             )),
             is_error: true,
         },
+    }
+}
+
+/// Validate a `set` command. The actual config mutation happens in the task handler
+/// (which has access to `&mut AppConfig`), not here.
+fn execute_set(key: &str, value: &str) -> ToolExecutionResult {
+    if !VALID_SET_KEYS.contains(&key) {
+        return ToolExecutionResult {
+            content: ToolResultContent::text(format!(
+                "Unknown config key: {key}. Valid keys: {}",
+                VALID_SET_KEYS.join(", ")
+            )),
+            is_error: true,
+        };
+    }
+    // Validate parsability for numeric keys
+    match key {
+        "max_tokens" | "max_context_tokens" => {
+            if value.parse::<u32>().is_err() {
+                return ToolExecutionResult {
+                    content: ToolResultContent::text(format!(
+                        "Invalid value for {key}: expected a number"
+                    )),
+                    is_error: true,
+                };
+            }
+        }
+        "max_tool_loop_iterations" => {
+            if value.parse::<usize>().is_err() {
+                return ToolExecutionResult {
+                    content: ToolResultContent::text(format!(
+                        "Invalid value for {key}: expected a number"
+                    )),
+                    is_error: true,
+                };
+            }
+        }
+        _ => {} // "model" accepts any string
+    }
+    ToolExecutionResult {
+        content: ToolResultContent::text(format!("{key} set to {value}")),
+        is_error: false,
+    }
+}
+
+/// Apply a `set` config mutation. Called from the main event loop where `AppConfig` is mutable.
+/// Session-scoped — does not persist across restarts.
+pub fn apply_config_set(config: &mut crate::config::AppConfig, key: &str, value: &str) {
+    match key {
+        "max_tokens" => {
+            if let Ok(v) = value.parse::<u32>() {
+                config.max_tokens = v;
+            }
+        }
+        "max_context_tokens" => {
+            if let Ok(v) = value.parse::<u32>() {
+                config.max_context_tokens = v;
+            }
+        }
+        "model" => {
+            config.anthropic_model = value.to_string();
+        }
+        "max_tool_loop_iterations" => {
+            if let Ok(v) = value.parse::<usize>() {
+                config.max_tool_loop_iterations = v;
+            }
+        }
+        _ => {}
     }
 }
 

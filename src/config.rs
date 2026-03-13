@@ -10,7 +10,7 @@ fn default_model() -> String {
 }
 
 fn default_max_tokens() -> u32 {
-    4096
+    16384
 }
 
 fn default_max_context_tokens() -> u32 {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::graph::StopReason;
 
 #[test]
 fn test_parse_text_delta() {
@@ -29,22 +30,22 @@ fn test_parse_message_delta_captures_output_tokens() {
     let result = parse_sse_event(event, &mut ot, &mut sr, &mut pending);
     assert!(result.is_none());
     assert_eq!(ot, Some(100));
-    assert_eq!(sr.as_deref(), Some("end_turn"));
+    assert_eq!(sr, Some(StopReason::EndTurn));
 }
 
 #[test]
 fn test_parse_message_stop() {
     let event = "event: message_stop\ndata: {\"type\":\"message_stop\"}";
     let mut ot = Some(100);
-    let mut sr = Some("end_turn".to_string());
+    let mut sr = Some(StopReason::EndTurn);
     let mut pending = None;
     let result = parse_sse_event(event, &mut ot, &mut sr, &mut pending);
     assert!(matches!(
         result,
         Some(Ok(StreamChunk::Done {
             output_tokens: Some(100),
-            stop_reason: Some(ref r),
-        })) if r == "end_turn"
+            stop_reason: Some(StopReason::EndTurn),
+        }))
     ));
 }
 

@@ -1,5 +1,5 @@
 use crate::graph::tool_types::{ToolCallStatus, ToolResultContent};
-use crate::graph::{parse_tool_arguments, ConversationGraph, EdgeKind, Node, Role};
+use crate::graph::{parse_tool_arguments, ConversationGraph, EdgeKind, Node, Role, StopReason};
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, ToolDefinition};
 use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
 
@@ -51,6 +51,9 @@ pub(super) fn spawn_agent_loop(
     });
 }
 
+/// Max times we auto-continue when the LLM hits `max_tokens`.
+const MAX_CONTINUATIONS: u32 = 3;
+
 async fn run_agent_loop(
     mut graph: ConversationGraph,
     provider: Arc<dyn LlmProvider>,
@@ -75,6 +78,8 @@ async fn run_agent_loop(
         system_prompt: None,
         tools: config.tools.clone(),
     };
+
+    let mut continuation_count: u32 = 0;
 
     for _ in 0..config.max_tool_loop_iterations {
         let ctx_phase = Uuid::new_v4();
@@ -126,10 +131,24 @@ async fn run_agent_loop(
 
         let assistant_id = apply_iteration_to_graph(&mut graph, &result, &loop_config, task_tx)?;
 
-        let is_tool_use = result.stop_reason.as_deref() == Some("tool_use")
-            && !result.tool_use_records.is_empty();
+        let is_tool_use =
+            result.stop_reason == Some(StopReason::ToolUse) && !result.tool_use_records.is_empty();
+        let is_truncated = result.stop_reason == Some(StopReason::MaxTokens);
 
-        if !is_tool_use {
+        if is_truncated {
+            continuation_count += 1;
+            if continuation_count > MAX_CONTINUATIONS {
+                send(
+                    task_tx,
+                    AgentEvent::Error("Max continuations reached after repeated truncation".into()),
+                );
+                break;
+            }
+        } else {
+            continuation_count = 0;
+        }
+
+        if !is_tool_use && !is_truncated {
             break;
         }
 
@@ -198,7 +217,7 @@ fn apply_iteration_to_graph(
             response: result.response.clone(),
             think_text: result.think_text.clone(),
             output_tokens: result.output_tokens,
-            stop_reason: result.stop_reason.clone(),
+            stop_reason: result.stop_reason,
         },
     );
 
@@ -211,6 +230,7 @@ fn apply_iteration_to_graph(
         model: Some(config.model.clone()),
         input_tokens: None,
         output_tokens: result.output_tokens,
+        stop_reason: result.stop_reason,
     };
     graph.add_message(leaf, assistant_node)?;
 

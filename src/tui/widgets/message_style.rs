@@ -169,6 +169,7 @@ pub struct MessageRenderParams {
     pub clip_top: u16,
     pub full_height: u16,
     pub has_thinking: bool,
+    pub is_truncated: bool,
 }
 
 pub fn render_message(
@@ -180,13 +181,19 @@ pub fn render_message(
 ) {
     let metadata = metadata_string(node, params.prev_created_at);
     let timestamp = timestamp_string(node);
-    let block = build_block(
+    let mut block = build_block(
         role_label(node),
         &metadata,
         &timestamp,
         area.width,
         role_color(node),
     );
+    if params.is_truncated {
+        block = block.title_bottom(
+            Line::styled(" truncated ", Style::default().fg(Color::Yellow))
+                .alignment(Alignment::Right),
+        );
+    }
     let mut content = styled_text.clone();
     if params.has_thinking {
         content.lines.insert(
