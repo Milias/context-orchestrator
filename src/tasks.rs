@@ -190,6 +190,14 @@ pub fn spawn_tool_discovery(tx: mpsc::UnboundedSender<TaskMessage>) {
                 name: "write_file".to_string(),
                 description: "Write content to a file".to_string(),
             },
+            ToolSnapshot {
+                name: "list_directory".to_string(),
+                description: "List files and directories at a given path".to_string(),
+            },
+            ToolSnapshot {
+                name: "search_files".to_string(),
+                description: "Search for a regex pattern across files".to_string(),
+            },
         ];
         let _ = tx.send(TaskMessage::ToolsDiscovered(tools));
 

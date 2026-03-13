@@ -450,3 +450,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tool_types_tests.rs"]
 mod tool_types_tests;
+
+#[cfg(test)]
+#[path = "tool_args_tests.rs"]
+mod tool_args_tests;
