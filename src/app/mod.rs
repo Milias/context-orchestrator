@@ -11,7 +11,7 @@ use crate::persistence::{self, ConversationMetadata};
 use crate::tasks::{self, AgentToolResult, ContextSnapshot, TaskMessage};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
-use crate::tui::{self, AgentDisplayState, AgentVisualPhase, TuiState};
+use crate::tui::{self, AgentDisplayState, TuiState};
 
 use chrono::Utc;
 use crossterm::event::{Event, EventStream, KeyEventKind};
@@ -156,9 +156,7 @@ impl App {
                                 }
                             }
                             Action::ScrollUp | Action::ScrollDown => {
-                                if agent_active {
-                                    self.tui_state.auto_scroll = false;
-                                }
+                                self.tui_state.auto_scroll = false;
                                 self.tui_state.scroll_offset = if matches!(action, Action::ScrollUp) {
                                     self.tui_state.scroll_offset.saturating_sub(3)
                                 } else {
@@ -166,9 +164,7 @@ impl App {
                                 };
                             }
                             Action::PageUp | Action::PageDown => {
-                                if agent_active {
-                                    self.tui_state.auto_scroll = false;
-                                }
+                                self.tui_state.auto_scroll = false;
                                 let page = terminal.size()?.height / 2;
                                 self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
                                     self.tui_state.scroll_offset.saturating_sub(page)
@@ -201,10 +197,7 @@ impl App {
     fn handle_send_message(&mut self, text: String) -> anyhow::Result<()> {
         self.tui_state.error_message = None;
 
-        let parent_id = self
-            .graph
-            .branch_leaf(self.graph.active_branch())
-            .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
+        let parent_id = self.graph.active_leaf()?;
 
         let text_for_triggers = text.clone();
         let user_node = Node::Message {
@@ -221,12 +214,7 @@ impl App {
         self.spawn_tool_triggers(&text_for_triggers, user_msg_id);
 
         // Set UI state for immediate feedback
-        self.tui_state.agent_display = Some(AgentDisplayState {
-            phase: AgentVisualPhase::Preparing,
-            accumulated_text: String::new(),
-            iteration_node_ids: Vec::new(),
-            spinner_tick: 0,
-        });
+        self.tui_state.agent_display = Some(AgentDisplayState::default());
         self.tui_state.status_message = Some("Counting tokens...".to_string());
         self.tui_state.auto_scroll = true;
         self.tui_state.scroll_offset = u16::MAX;

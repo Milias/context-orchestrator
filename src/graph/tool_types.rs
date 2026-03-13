@@ -193,6 +193,8 @@ impl ToolResultContent {
         }
     }
 
+    // User: accepatble use of #[cfg(test)].
+    #[cfg(test)]
     pub fn has_images(&self) -> bool {
         matches!(self, Self::Blocks(blocks) if blocks.iter().any(
             |b| matches!(b, ToolResultContentBlock::Image { .. })

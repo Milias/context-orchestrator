@@ -3,7 +3,7 @@ use crate::tui::widgets::display_helpers::{compute_styled_height, display_conten
 use crate::tui::widgets::markdown::render_markdown;
 use crate::tui::widgets::message_style::{render_agent_activity, render_message, render_streaming};
 use crate::tui::widgets::trigger_highlight::highlight_triggers;
-use crate::tui::{AgentVisualPhase, CachedRender, TuiState};
+use crate::tui::{AgentVisualPhase, CachedRender, TuiState, CURSOR_FRAMES};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders};
 
@@ -164,7 +164,6 @@ fn build_entries<'a>(
 ) -> Vec<MessageEntry<'a>> {
     let mut entries: Vec<MessageEntry<'a>> = Vec::new();
 
-    // IDs being rendered by the agent display (suppress from history)
     let in_progress_ids: Vec<uuid::Uuid> = tui_state
         .agent_display
         .as_ref()
@@ -174,7 +173,6 @@ fn build_entries<'a>(
         .iter()
         .filter(|n| !matches!(n, Node::ThinkBlock { .. }))
     {
-        // Skip nodes currently owned by the agent display
         if in_progress_ids.contains(&node.id()) {
             continue;
         }
@@ -186,21 +184,18 @@ fn build_entries<'a>(
             ..
         } = node
         {
-            if content.is_empty() {
-                let has_tools = !graph
+            if content.is_empty()
+                && !graph
                     .sources_by_edge(node.id(), EdgeKind::Invoked)
-                    .is_empty();
-                if has_tools {
-                    // Still render the tool calls inline
-                    push_tool_indicators(node.id(), graph, msg_content_width, &mut entries);
-                    continue;
-                }
+                    .is_empty()
+            {
+                push_tool_indicators(node.id(), graph, tui_state, msg_content_width, &mut entries);
+                continue;
             }
         }
 
         push_node_entry(node, graph, tui_state, msg_content_width, &mut entries);
 
-        // After an assistant message, inject its tool calls and results
         if matches!(
             node,
             Node::Message {
@@ -208,11 +203,10 @@ fn build_entries<'a>(
                 ..
             }
         ) {
-            push_tool_indicators(node.id(), graph, msg_content_width, &mut entries);
+            push_tool_indicators(node.id(), graph, tui_state, msg_content_width, &mut entries);
         }
     }
 
-    // Append agent display state at the bottom
     if let Some(ref display) = tui_state.agent_display {
         append_agent_display(
             display,
@@ -225,50 +219,27 @@ fn build_entries<'a>(
     entries
 }
 
-/// Build compact tool call indicator entries for an assistant message's tool calls.
 fn push_tool_indicators<'a>(
     assistant_id: uuid::Uuid,
     graph: &'a ConversationGraph,
+    tui_state: &mut TuiState,
     msg_content_width: usize,
     entries: &mut Vec<MessageEntry<'a>>,
 ) {
     let tool_call_ids = graph.sources_by_edge(assistant_id, EdgeKind::Invoked);
     for tc_id in &tool_call_ids {
         if let Some(tc_node) = graph.node(*tc_id) {
-            push_node_entry_raw(tc_node, graph, msg_content_width, entries);
+            push_node_entry(tc_node, graph, tui_state, msg_content_width, entries);
             let result_ids = graph.sources_by_edge(*tc_id, EdgeKind::Produced);
             for r_id in &result_ids {
                 if let Some(r_node) = graph.node(*r_id) {
-                    push_node_entry_raw(r_node, graph, msg_content_width, entries);
+                    push_node_entry(r_node, graph, tui_state, msg_content_width, entries);
                 }
             }
         }
     }
 }
 
-/// Push a node entry using a temporary cache (no `TuiState` needed).
-fn push_node_entry_raw<'a>(
-    node: &'a Node,
-    graph: &'a ConversationGraph,
-    msg_content_width: usize,
-    entries: &mut Vec<MessageEntry<'a>>,
-) {
-    // For tool indicators rendered outside the cache, compute inline.
-    // These are cheap since tool call summaries are short.
-    let content = display_content(node, graph);
-    let styled = render_markdown(&content);
-    let has_thinking = false;
-    let height = compute_styled_height(&styled, msg_content_width, has_thinking);
-
-    // We can't easily cache these without TuiState, so we use a raw entry
-    // that re-renders each frame. Tool summaries are small, so this is fine.
-    entries.push(MessageEntry::Streaming {
-        styled_text: styled,
-        height,
-    });
-}
-
-/// Append the agent display (spinner, streaming, or tool execution) at the bottom.
 fn append_agent_display(
     display: &crate::tui::AgentDisplayState,
     status_message: Option<&String>,
@@ -279,18 +250,17 @@ fn append_agent_display(
         AgentVisualPhase::Preparing => {
             let status = status_message.map_or("Preparing...", String::as_str);
             let spinner = display.spinner_char();
-            let line = Line::from(vec![
+            let styled = Text::from(Line::from(vec![
                 Span::styled(format!("{spinner} "), Style::default().fg(Color::Green)),
                 Span::styled(status.to_string(), Style::default().fg(Color::DarkGray)),
-            ]);
-            let styled = Text::from(line);
+            ]));
             entries.push(MessageEntry::AgentActivity {
                 height: 1,
                 styled_text: styled,
             });
         }
         AgentVisualPhase::Streaming { text, is_thinking } => {
-            let full_text = build_accumulated_streaming_text(&display.accumulated_text, text);
+            let full_text = combine_text(&display.accumulated_text, text);
             let mut styled = render_markdown(&full_text);
             if *is_thinking && text.is_empty() {
                 let spinner = display.spinner_char();
@@ -299,7 +269,7 @@ fn append_agent_display(
                     Style::default().fg(Color::DarkGray).italic(),
                 ));
             }
-            append_cursor(&mut styled);
+            append_cursor(&mut styled, display.spinner_tick);
             let height = compute_styled_height(&styled, msg_content_width, false);
             entries.push(MessageEntry::Streaming {
                 styled_text: styled,
@@ -309,13 +279,9 @@ fn append_agent_display(
         AgentVisualPhase::ExecutingTools { tool_count } => {
             let spinner = display.spinner_char();
             let tool_line = format!("{spinner} Executing {tool_count} tool call(s)...");
-            let full_text = if display.accumulated_text.is_empty() {
-                tool_line
-            } else {
-                format!("{}\n\n{tool_line}", display.accumulated_text)
-            };
+            let full_text = combine_text(&display.accumulated_text, &tool_line);
             let mut styled = render_markdown(&full_text);
-            append_cursor(&mut styled);
+            append_cursor(&mut styled, display.spinner_tick);
             let height = compute_styled_height(&styled, msg_content_width, false);
             entries.push(MessageEntry::Streaming {
                 styled_text: styled,
@@ -325,26 +291,21 @@ fn append_agent_display(
     }
 }
 
-fn build_accumulated_streaming_text(accumulated: &str, current: &str) -> String {
-    if accumulated.is_empty() {
-        current.to_string()
-    } else if current.is_empty() {
-        accumulated.to_string()
-    } else {
-        format!("{accumulated}\n\n{current}")
+fn combine_text(accumulated: &str, current: &str) -> String {
+    match (accumulated.is_empty(), current.is_empty()) {
+        (true, _) => current.to_string(),
+        (_, true) => accumulated.to_string(),
+        _ => format!("{accumulated}\n\n{current}"),
     }
 }
 
-fn append_cursor(styled: &mut Text<'static>) {
+fn append_cursor(styled: &mut Text<'static>, tick: usize) {
+    let cursor = CURSOR_FRAMES[tick % CURSOR_FRAMES.len()];
+    let span = Span::styled(cursor, Style::default().fg(Color::Green));
     if let Some(last_line) = styled.lines.last_mut() {
-        last_line
-            .spans
-            .push(Span::styled("▌", Style::default().fg(Color::Green)));
+        last_line.spans.push(span);
     } else {
-        styled.lines.push(Line::from(Span::styled(
-            "▌",
-            Style::default().fg(Color::Green),
-        )));
+        styled.lines.push(Line::from(span));
     }
 }
 
@@ -356,8 +317,10 @@ fn push_node_entry<'a>(
     entries: &mut Vec<MessageEntry<'a>>,
 ) {
     let id = node.id();
-    let cached = tui_state.render_cache.get(&id);
-    let valid = cached.is_some_and(|c| c.cached_width == msg_content_width);
+    let valid = tui_state
+        .render_cache
+        .get(&id)
+        .is_some_and(|c| c.cached_width == msg_content_width);
     if !valid {
         let content = display_content(node, graph);
         let mut styled = render_markdown(&content);

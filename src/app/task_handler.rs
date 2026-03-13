@@ -125,14 +125,10 @@ impl App {
                     }
                     AgentPhase::ExecutingTools { count } => {
                         if let Some(ref mut d) = self.tui_state.agent_display {
-                            // Preserve accumulated text from the streaming phase
+                            // Preserve streaming text before transitioning phase
                             if let AgentVisualPhase::Streaming { ref text, .. } = d.phase {
-                                if !text.is_empty() && !d.accumulated_text.is_empty() {
-                                    d.accumulated_text.push_str("\n\n");
-                                }
-                                if !text.is_empty() {
-                                    d.accumulated_text.push_str(text);
-                                }
+                                let text = text.clone();
+                                d.append_text(&text);
                             }
                             d.phase = AgentVisualPhase::ExecutingTools { tool_count: count };
                         }
@@ -207,10 +203,7 @@ impl App {
         output_tokens: Option<u32>,
         stop_reason: Option<&String>,
     ) {
-        let leaf = self
-            .graph
-            .branch_leaf(self.graph.active_branch())
-            .expect("No leaf node for active branch");
+        let leaf = self.graph.active_leaf().expect("No active leaf");
         let assistant_node = Node::Message {
             id: assistant_id,
             role: Role::Assistant,
@@ -236,12 +229,7 @@ impl App {
         }
 
         if let Some(ref mut d) = self.tui_state.agent_display {
-            if !response.is_empty() {
-                if !d.accumulated_text.is_empty() {
-                    d.accumulated_text.push_str("\n\n");
-                }
-                d.accumulated_text.push_str(response);
-            }
+            d.append_text(response);
             d.iteration_node_ids.push(assistant_id);
 
             if stop_reason.map(String::as_str) == Some("tool_use") {
@@ -280,12 +268,7 @@ impl App {
     /// Ensure `agent_display` exists (create with Preparing phase if missing).
     fn ensure_agent_display(&mut self) {
         if self.tui_state.agent_display.is_none() {
-            self.tui_state.agent_display = Some(AgentDisplayState {
-                phase: AgentVisualPhase::Preparing,
-                accumulated_text: String::new(),
-                iteration_node_ids: Vec::new(),
-                spinner_tick: 0,
-            });
+            self.tui_state.agent_display = Some(AgentDisplayState::default());
         }
     }
 
@@ -296,23 +279,12 @@ impl App {
         arguments: ToolCallArguments,
         api_tool_use_id: Option<String>,
     ) {
-        let tool_call = Node::ToolCall {
-            id: tool_call_id,
-            api_tool_use_id,
-            arguments: arguments.clone(),
-            status: ToolCallStatus::Pending,
+        self.graph.add_tool_call(
+            tool_call_id,
             parent_message_id,
-            created_at: Utc::now(),
-            completed_at: None,
-        };
-        self.graph.add_node(tool_call);
-        let _ = self
-            .graph
-            .add_edge(tool_call_id, parent_message_id, EdgeKind::Invoked);
-        let _ = self
-            .graph
-            .update_tool_call_status(tool_call_id, ToolCallStatus::Running, None);
-
+            arguments.clone(),
+            api_tool_use_id,
+        );
         tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone());
     }
 
@@ -322,6 +294,7 @@ impl App {
         content: ToolResultContent,
         is_error: bool,
     ) {
+        // Skip stale completions for tool calls already resolved (e.g. timed out).
         if let Some(Node::ToolCall { status, .. }) = self.graph.node(tool_call_id) {
             if *status == ToolCallStatus::Completed || *status == ToolCallStatus::Failed {
                 return;
@@ -336,18 +309,6 @@ impl App {
         let _ = self
             .graph
             .update_tool_call_status(tool_call_id, new_status, Some(Utc::now()));
-
-        let result_id = Uuid::new_v4();
-        let result_node = Node::ToolResult {
-            id: result_id,
-            tool_call_id,
-            content,
-            is_error,
-            created_at: Utc::now(),
-        };
-        self.graph.add_node(result_node);
-        let _ = self
-            .graph
-            .add_edge(result_id, tool_call_id, EdgeKind::Produced);
+        self.graph.add_tool_result(tool_call_id, content, is_error);
     }
 }

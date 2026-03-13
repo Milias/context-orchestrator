@@ -384,9 +384,7 @@ impl ConversationGraph {
         let now = Utc::now();
         for node in self.nodes.values_mut() {
             if let Node::BackgroundTask {
-                status,
-                updated_at,
-                ..
+                status, updated_at, ..
             } = node
             {
                 if matches!(status, TaskStatus::Running | TaskStatus::Pending) {
@@ -434,6 +432,55 @@ impl ConversationGraph {
 
     pub fn branch_leaf(&self, branch_name: &str) -> Option<Uuid> {
         self.branches.get(branch_name).copied()
+    }
+
+    /// Get the leaf node of the active branch, or error.
+    pub fn active_leaf(&self) -> anyhow::Result<Uuid> {
+        self.branch_leaf(&self.active_branch)
+            .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))
+    }
+
+    /// Add a `ToolCall` node linked to its parent message via `Invoked` edge.
+    pub fn add_tool_call(
+        &mut self,
+        id: Uuid,
+        parent_message_id: Uuid,
+        arguments: ToolCallArguments,
+        api_tool_use_id: Option<String>,
+    ) -> Uuid {
+        let node = Node::ToolCall {
+            id,
+            api_tool_use_id,
+            arguments,
+            status: ToolCallStatus::Pending,
+            parent_message_id,
+            created_at: Utc::now(),
+            completed_at: None,
+        };
+        self.add_node(node);
+        let _ = self.add_edge(id, parent_message_id, EdgeKind::Invoked);
+        let _ = self.update_tool_call_status(id, ToolCallStatus::Running, None);
+        id
+    }
+
+    /// Add a `ToolResult` node linked to its tool call via `Produced` edge.
+    pub fn add_tool_result(
+        &mut self,
+        tool_call_id: Uuid,
+        content: ToolResultContent,
+        is_error: bool,
+    ) -> Uuid {
+        let result_id = Uuid::new_v4();
+        let node = Node::ToolResult {
+            id: result_id,
+            tool_call_id,
+            content,
+            is_error,
+            created_at: Utc::now(),
+        };
+        self.add_node(node);
+        let _ = self.add_edge(result_id, tool_call_id, EdgeKind::Produced);
+        result_id
     }
 
     pub fn branch_names(&self) -> Vec<&str> {

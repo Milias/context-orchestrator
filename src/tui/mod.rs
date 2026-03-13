@@ -100,6 +100,7 @@ pub struct AutocompleteState {
 // ── Agent display state ──────────────────────────────────────────────
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+pub const CURSOR_FRAMES: &[&str] = &["█", "▓", "▒", "░", "▒", "▓"];
 
 #[derive(Debug)]
 pub enum AgentVisualPhase {
@@ -122,9 +123,30 @@ pub struct AgentDisplayState {
     pub spinner_tick: usize,
 }
 
+impl Default for AgentDisplayState {
+    fn default() -> Self {
+        Self {
+            phase: AgentVisualPhase::Preparing,
+            accumulated_text: String::new(),
+            iteration_node_ids: Vec::new(),
+            spinner_tick: 0,
+        }
+    }
+}
+
 impl AgentDisplayState {
     pub fn spinner_char(&self) -> &'static str {
         SPINNER_FRAMES[self.spinner_tick % SPINNER_FRAMES.len()]
+    }
+
+    /// Append text to the accumulated response, separated by blank lines.
+    pub fn append_text(&mut self, text: &str) {
+        if !text.is_empty() {
+            if !self.accumulated_text.is_empty() {
+                self.accumulated_text.push_str("\n\n");
+            }
+            self.accumulated_text.push_str(text);
+        }
     }
 }
 

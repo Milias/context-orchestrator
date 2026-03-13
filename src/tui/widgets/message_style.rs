@@ -47,7 +47,7 @@ pub fn metadata_string(node: &Node) -> String {
     }
 }
 
-pub fn build_block(label: &str, metadata: &str, color: Color) -> Block<'static> {
+fn build_block(label: &str, metadata: &str, color: Color) -> Block<'static> {
     let mut block = Block::default()
         .title(Line::styled(
             format!(" {label} "),
@@ -69,6 +69,23 @@ pub fn build_block(label: &str, metadata: &str, color: Color) -> Block<'static> 
     block
 }
 
+/// Shared paragraph rendering with block, wrap, scroll, and clipping.
+fn render_block_paragraph(
+    frame: &mut Frame,
+    area: Rect,
+    block: Block<'static>,
+    content: Text<'static>,
+    clip_top: u16,
+    full_height: u16,
+) {
+    let paragraph = Paragraph::new(content)
+        .block(block)
+        .wrap(Wrap { trim: false })
+        .scroll((clip_top, 0));
+    let render_area = Rect::new(area.x, area.y, area.width, area.height.min(full_height));
+    frame.render_widget(paragraph, render_area);
+}
+
 pub fn render_message(
     frame: &mut Frame,
     area: Rect,
@@ -78,11 +95,7 @@ pub fn render_message(
     full_height: u16,
     has_thinking: bool,
 ) {
-    let label = role_label(node);
-    let color = role_color(node);
-    let metadata = metadata_string(node);
-    let block = build_block(label, &metadata, color);
-
+    let block = build_block(role_label(node), &metadata_string(node), role_color(node));
     let mut content = styled_text.clone();
     if has_thinking {
         content.lines.insert(
@@ -93,14 +106,7 @@ pub fn render_message(
             ),
         );
     }
-
-    let paragraph = Paragraph::new(content)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((clip_top, 0));
-
-    let render_area = Rect::new(area.x, area.y, area.width, area.height.min(full_height));
-    frame.render_widget(paragraph, render_area);
+    render_block_paragraph(frame, area, block, content, clip_top, full_height);
 }
 
 pub fn render_streaming(
@@ -111,14 +117,14 @@ pub fn render_streaming(
     full_height: u16,
 ) {
     let block = build_block("assistant", "", Color::Green);
-
-    let paragraph = Paragraph::new(styled_text.clone())
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((clip_top, 0));
-
-    let render_area = Rect::new(area.x, area.y, area.width, area.height.min(full_height));
-    frame.render_widget(paragraph, render_area);
+    render_block_paragraph(
+        frame,
+        area,
+        block,
+        styled_text.clone(),
+        clip_top,
+        full_height,
+    );
 }
 
 /// Render a borderless spinner line for agent preparation phases.

@@ -165,9 +165,7 @@ fn apply_iteration_to_graph(
         },
     );
 
-    let leaf = graph
-        .branch_leaf(graph.active_branch())
-        .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))?;
+    let leaf = graph.active_leaf()?;
     let assistant_node = Node::Message {
         id: assistant_id,
         role: Role::Assistant,
@@ -216,17 +214,12 @@ async fn dispatch_and_wait_for_tools(
         pending_ids.insert(record.tool_call_id);
 
         let args = parse_tool_arguments(&record.name, &record.input);
-        let tool_call = Node::ToolCall {
-            id: record.tool_call_id,
-            api_tool_use_id: Some(record.api_id.clone()),
-            arguments: args,
-            status: ToolCallStatus::Running,
-            parent_message_id: assistant_id,
-            created_at: Utc::now(),
-            completed_at: None,
-        };
-        graph.add_node(tool_call);
-        let _ = graph.add_edge(record.tool_call_id, assistant_id, EdgeKind::Invoked);
+        graph.add_tool_call(
+            record.tool_call_id,
+            assistant_id,
+            args,
+            Some(record.api_id.clone()),
+        );
     }
 
     send(
@@ -277,30 +270,16 @@ fn apply_tool_result(graph: &mut ConversationGraph, result: &AgentToolResult) {
         ToolCallStatus::Completed
     };
     let _ = graph.update_tool_call_status(result.tool_call_id, status, Some(Utc::now()));
-    let result_id = Uuid::new_v4();
-    let result_node = Node::ToolResult {
-        id: result_id,
-        tool_call_id: result.tool_call_id,
-        content: result.content.clone(),
-        is_error: result.is_error,
-        created_at: Utc::now(),
-    };
-    graph.add_node(result_node);
-    let _ = graph.add_edge(result_id, result.tool_call_id, EdgeKind::Produced);
+    graph.add_tool_result(result.tool_call_id, result.content.clone(), result.is_error);
 }
 
 fn timeout_pending_tools(graph: &mut ConversationGraph, pending_ids: &mut HashSet<Uuid>) {
     for tc_id in pending_ids.drain() {
         let _ = graph.update_tool_call_status(tc_id, ToolCallStatus::Failed, Some(Utc::now()));
-        let result_id = Uuid::new_v4();
-        let result_node = Node::ToolResult {
-            id: result_id,
-            tool_call_id: tc_id,
-            content: ToolResultContent::text("Tool execution timed out"),
-            is_error: true,
-            created_at: Utc::now(),
-        };
-        graph.add_node(result_node);
-        let _ = graph.add_edge(result_id, tc_id, EdgeKind::Produced);
+        graph.add_tool_result(
+            tc_id,
+            ToolResultContent::text("Tool execution timed out"),
+            true,
+        );
     }
 }

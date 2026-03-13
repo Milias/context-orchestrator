@@ -1,6 +1,6 @@
 use super::*;
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus};
-use crate::graph::{BackgroundTaskKind, ConversationGraph, Node, TaskStatus};
+use crate::graph::{ConversationGraph, Node};
 use chrono::{Duration as ChronoDuration, Utc};
 use uuid::Uuid;
 
