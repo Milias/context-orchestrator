@@ -90,7 +90,7 @@ fn render_autocomplete_popup(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow))
-            .title("~triggers"),
+            .title("/commands"),
     );
 
     frame.render_widget(popup, popup_area);

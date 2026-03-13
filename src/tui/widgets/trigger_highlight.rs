@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 
-/// Highlight `~tool_name` patterns in styled text with a distinct style.
-/// Scans each span for `~word` tokens at word boundaries and splits them
+/// Highlight `/tool_name` patterns in styled text with a distinct style.
+/// Scans each span for `/word` tokens at word boundaries and splits them
 /// into separately styled spans.
 pub fn highlight_triggers(text: &mut Text<'static>) {
     let trigger_style = Style::default()
@@ -17,11 +17,7 @@ pub fn highlight_triggers(text: &mut Text<'static>) {
     }
 }
 
-fn split_triggers_in_span(
-    span: Span<'static>,
-    trigger_style: Style,
-    out: &mut Vec<Span<'static>>,
-) {
+fn split_triggers_in_span(span: Span<'static>, trigger_style: Style, out: &mut Vec<Span<'static>>) {
     let text = span.content.as_ref();
     let base_style = span.style;
     let chars: Vec<char> = text.chars().collect();
@@ -29,17 +25,17 @@ fn split_triggers_in_span(
     let mut last_flush = 0;
 
     while i < chars.len() {
-        if chars[i] == '~'
+        if chars[i] == '/'
             && (i == 0 || chars[i - 1].is_whitespace())
             && i + 1 < chars.len()
             && chars[i + 1].is_alphanumeric()
         {
-            // Flush text before the tilde
+            // Flush text before the slash
             if i > last_flush {
                 let before: String = chars[last_flush..i].iter().collect();
                 out.push(Span::styled(before, base_style));
             }
-            // Collect the trigger token: ~ + word chars (alphanumeric or _)
+            // Collect the trigger token: / + word chars (alphanumeric or _)
             let start = i;
             i += 1; // skip ~
             while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {

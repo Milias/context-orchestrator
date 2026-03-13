@@ -18,16 +18,16 @@ pub enum TriggerCommand {
     Plan { args: String },
 }
 
-/// Parse `~tool_name args` triggers from message text.
-/// The `~` must be at start of line or preceded by whitespace.
+/// Parse `/tool_name args` triggers from message text.
+/// The `/` must be at start of line or preceded by whitespace.
 /// Unknown tool names are ignored.
 pub fn parse_triggers(text: &str) -> Vec<TriggerCommand> {
     let mut triggers = Vec::new();
 
     for line in text.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("~plan") {
-            // Ensure ~plan is the full token (not ~planning, etc.)
+        if let Some(rest) = trimmed.strip_prefix("/plan") {
+            // Ensure /plan is the full token (not /planning, etc.)
             if rest.is_empty() || rest.starts_with(' ') {
                 let args = rest.trim().to_string();
                 if !args.is_empty() {

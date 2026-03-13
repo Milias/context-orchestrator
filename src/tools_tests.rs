@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_parse_triggers_finds_plan() {
-    let triggers = parse_triggers("~plan Fix the login bug");
+    let triggers = parse_triggers("/plan Fix the login bug");
     assert_eq!(triggers.len(), 1);
     match &triggers[0] {
         TriggerCommand::Plan { args } => assert_eq!(args, "Fix the login bug"),
@@ -17,7 +17,7 @@ fn test_parse_triggers_no_triggers() {
 
 #[test]
 fn test_parse_triggers_multiple() {
-    let triggers = parse_triggers("~plan First task\n~plan Second task");
+    let triggers = parse_triggers("/plan First task\n/plan Second task");
     assert_eq!(triggers.len(), 2);
     match &triggers[0] {
         TriggerCommand::Plan { args } => assert_eq!(args, "First task"),
@@ -29,25 +29,25 @@ fn test_parse_triggers_multiple() {
 
 #[test]
 fn test_parse_triggers_ignores_unknown() {
-    let triggers = parse_triggers("~foobar some stuff");
+    let triggers = parse_triggers("/foobar some stuff");
     assert!(triggers.is_empty());
 }
 
 #[test]
 fn test_parse_triggers_mid_word_ignored() {
-    let triggers = parse_triggers("approx~plan should not match");
+    let triggers = parse_triggers("approx/plan should not match");
     assert!(triggers.is_empty());
 }
 
 #[test]
 fn test_parse_triggers_no_args_ignored() {
-    let triggers = parse_triggers("~plan");
+    let triggers = parse_triggers("/plan");
     assert!(triggers.is_empty());
 }
 
 #[test]
 fn test_parse_triggers_with_leading_whitespace() {
-    let triggers = parse_triggers("  ~plan Indented task");
+    let triggers = parse_triggers("  /plan Indented task");
     assert_eq!(triggers.len(), 1);
     match &triggers[0] {
         TriggerCommand::Plan { args } => assert_eq!(args, "Indented task"),
@@ -102,20 +102,20 @@ fn test_plan_result_to_node() {
 
 #[test]
 fn test_parse_triggers_planning_not_matched() {
-    let triggers = parse_triggers("~planning some stuff");
+    let triggers = parse_triggers("/planning some stuff");
     assert!(triggers.is_empty());
 }
 
 #[test]
 fn test_parse_triggers_plan_with_punctuation() {
-    // ~plan. is not a match because '.' is not ' ' or empty
-    let triggers = parse_triggers("~plan.something");
+    // /plan. is not a match because '.' is not ' ' or empty
+    let triggers = parse_triggers("/plan.something");
     assert!(triggers.is_empty());
 }
 
 #[test]
 fn test_parse_triggers_plan_at_eof_no_newline() {
-    let triggers = parse_triggers("~plan Fix it");
+    let triggers = parse_triggers("/plan Fix it");
     assert_eq!(triggers.len(), 1);
 }
 

@@ -139,29 +139,29 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     action
 }
 
-/// Detect `~` trigger and filter autocomplete candidates.
+/// Detect `/` trigger and filter autocomplete candidates.
 fn update_autocomplete(tui_state: &mut TuiState) {
     let chars: Vec<char> = tui_state.input_text.chars().collect();
     let cursor = tui_state.input_cursor;
 
-    // Scan backwards from cursor to find `~`
+    // Scan backwards from cursor to find `/`
     let before_cursor = &chars[..cursor];
-    let mut tilde_pos = None;
+    let mut slash_pos = None;
     for i in (0..before_cursor.len()).rev() {
-        if before_cursor[i] == '~' {
-            // `~` must be at position 0 or preceded by whitespace
+        if before_cursor[i] == '/' {
+            // `/` must be at position 0 or preceded by whitespace
             if i == 0 || before_cursor[i - 1].is_whitespace() {
-                tilde_pos = Some(i);
+                slash_pos = Some(i);
             }
             break;
         }
-        // If we hit whitespace before finding `~`, no active trigger
+        // If we hit whitespace before finding `/`, no active trigger
         if before_cursor[i].is_whitespace() {
             break;
         }
     }
 
-    let Some(tpos) = tilde_pos else {
+    let Some(tpos) = slash_pos else {
         tui_state.autocomplete.active = false;
         return;
     };
@@ -183,7 +183,7 @@ fn update_autocomplete(tui_state: &mut TuiState) {
         .collect();
 
     tui_state.autocomplete.active = true;
-    tui_state.autocomplete.trigger_char = '~';
+    tui_state.autocomplete.trigger_char = '/';
     tui_state.autocomplete.prefix = prefix;
     tui_state.autocomplete.selected = tui_state
         .autocomplete
@@ -192,7 +192,7 @@ fn update_autocomplete(tui_state: &mut TuiState) {
     tui_state.autocomplete.candidates = candidates;
 }
 
-/// Accept the selected completion: replace `~prefix` with `~name `.
+/// Accept the selected completion: replace `/prefix` with `/name `.
 fn accept_completion(tui_state: &mut TuiState) {
     let Some(candidate) = tui_state
         .autocomplete
@@ -201,22 +201,22 @@ fn accept_completion(tui_state: &mut TuiState) {
     else {
         return;
     };
-    let replacement = format!("~{} ", candidate.name);
+    let replacement = format!("/{} ", candidate.name);
 
     let chars: Vec<char> = tui_state.input_text.chars().collect();
     let cursor = tui_state.input_cursor;
 
-    // Find the tilde position (scan backwards)
+    // Find the slash position (scan backwards)
     let before_cursor = &chars[..cursor];
-    let mut tilde_pos = None;
+    let mut slash_pos = None;
     for i in (0..before_cursor.len()).rev() {
-        if before_cursor[i] == '~' {
-            tilde_pos = Some(i);
+        if before_cursor[i] == '/' {
+            slash_pos = Some(i);
             break;
         }
     }
 
-    let Some(tpos) = tilde_pos else {
+    let Some(tpos) = slash_pos else {
         return;
     };
 
