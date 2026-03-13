@@ -47,7 +47,7 @@ fn draw_status_bar(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui
     } else {
         format!("Context Manager v0.1  [branch: {}]", graph.active_branch())
     };
-    let status =
-        Paragraph::new(status_text).style(Style::default().bg(Color::Blue).fg(Color::White));
+    let status = Paragraph::new(status_text)
+        .style(Style::default().bg(Color::Rgb(30, 30, 80)).fg(Color::White));
     frame.render_widget(status, area);
 }
