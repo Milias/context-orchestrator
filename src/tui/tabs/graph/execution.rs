@@ -101,7 +101,15 @@ fn build_flat_tree(
     width: usize,
 ) -> Vec<FlatItem> {
     let mut roots: Vec<&Node> = graph
-        .nodes_by(|n| matches!(n, Node::Message { role: Role::Assistant, .. }))
+        .nodes_by(|n| {
+            matches!(
+                n,
+                Node::Message {
+                    role: Role::Assistant,
+                    ..
+                }
+            )
+        })
         .into_iter()
         .collect();
 
@@ -216,7 +224,10 @@ fn build_assistant_item(
         Span::styled(collapse.to_string(), Style::default().fg(Color::DarkGray)),
         Span::styled("A ", Style::default().fg(Color::Green).bold()),
         Span::styled(display_content, Style::default().fg(Color::White)),
-        Span::styled(format!(" {timestamp}"), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!(" {timestamp}"),
+            Style::default().fg(Color::DarkGray),
+        ),
     ];
 
     FlatItem {
@@ -322,7 +333,11 @@ fn build_tool_result_item(
 
     let prefix_str = prefix.render(is_last);
     let result_label = "Result: ";
-    let color = if *is_error { Color::Red } else { Color::DarkGray };
+    let color = if *is_error {
+        Color::Red
+    } else {
+        Color::DarkGray
+    };
 
     // Budget: prefix + "-> " + "Result: " + content.
     let fixed_width = prefix_str.chars().count() + 3 + result_label.chars().count();

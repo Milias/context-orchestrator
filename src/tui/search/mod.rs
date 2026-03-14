@@ -53,12 +53,37 @@ impl SearchState {
         }
     }
 
-    /// Update the query text, re-parse, and re-evaluate against the graph.
-    /// Called on every keystroke in the search bar.
-    pub fn update_query(&mut self, text: String, graph: &ConversationGraph) {
-        self.cursor = text.len();
-        self.parsed = parse_query(&text);
-        self.query_text = text;
+    /// Insert a character at the current cursor position and re-evaluate.
+    pub fn insert_char(&mut self, ch: char, graph: &ConversationGraph) {
+        let byte_pos = char_to_byte_offset(&self.query_text, self.cursor);
+        self.query_text.insert(byte_pos, ch);
+        self.cursor += 1;
+        self.reparse_and_evaluate(graph);
+    }
+
+    /// Delete the character before the cursor and re-evaluate.
+    /// No-op if the cursor is at position 0.
+    pub fn delete_char(&mut self, graph: &ConversationGraph) {
+        if self.cursor == 0 {
+            return;
+        }
+        self.cursor -= 1;
+        let byte_pos = char_to_byte_offset(&self.query_text, self.cursor);
+        self.query_text.remove(byte_pos);
+        self.reparse_and_evaluate(graph);
+    }
+
+    /// Toggle scope between `Tab` and `Global`.
+    pub fn toggle_scope(&mut self) {
+        self.scope = match self.scope {
+            SearchScope::Tab => SearchScope::Global,
+            SearchScope::Global => SearchScope::Tab,
+        };
+    }
+
+    /// Re-parse the query text and re-evaluate against the graph.
+    pub fn reparse_and_evaluate(&mut self, graph: &ConversationGraph) {
+        self.parsed = parse_query(&self.query_text);
         self.evaluate(graph);
     }
 
@@ -75,4 +100,12 @@ impl SearchState {
             }
         }
     }
+}
+
+/// Convert a character offset to a byte offset within a UTF-8 string.
+/// Clamps to the string length if the character offset exceeds the char count.
+fn char_to_byte_offset(s: &str, char_offset: usize) -> usize {
+    s.char_indices()
+        .nth(char_offset)
+        .map_or(s.len(), |(byte_pos, _)| byte_pos)
 }

@@ -121,8 +121,8 @@ pub fn render(
 /// CBR nodes are roots (sorted newest-first by `created_at`). Under each
 /// CBR, selected nodes are grouped into tier headers with leaf children.
 fn build_flat_tree(graph: &ConversationGraph, explorer: &ExplorerState) -> Vec<FlatItem> {
-    let mut cbr_nodes: Vec<&Node> = graph
-        .nodes_by(|n| matches!(n, Node::ContextBuildingRequest { .. }));
+    let mut cbr_nodes: Vec<&Node> =
+        graph.nodes_by(|n| matches!(n, Node::ContextBuildingRequest { .. }));
 
     // Sort newest first by created_at.
     cbr_nodes.sort_by_key(|n| Reverse(n.created_at()));
@@ -178,13 +178,7 @@ fn flatten_cbr(
         }
         rendered += 1;
         let is_last_tier = rendered == non_empty_count;
-        flatten_tier_group(
-            &child_prefix,
-            tier_label,
-            nodes,
-            is_last_tier,
-            out,
-        );
+        flatten_tier_group(&child_prefix, tier_label, nodes, is_last_tier, out);
     }
 }
 
@@ -210,11 +204,7 @@ fn flatten_tier_group(
     let total = nodes.len();
     for (i, node) in nodes.iter().enumerate() {
         let is_last_leaf = i + 1 == total;
-        let node_label = format!(
-            "{}: {}",
-            node.type_badge(),
-            first_line(node.content()),
-        );
+        let node_label = format!("{}: {}", node.type_badge(), first_line(node.content()),);
         out.push(FlatItem {
             id: Some(node.id()),
             prefix: leaf_prefix.render(is_last_leaf),
@@ -316,13 +306,16 @@ fn render_flat_item(
 
     // Collapse/expand indicator for CBR roots with children.
     let collapse_indicator = if item.has_children {
-        if item.is_collapsed { "\u{25b6} " } else { "\u{25bc} " }
+        if item.is_collapsed {
+            "\u{25b6} "
+        } else {
+            "\u{25bc} "
+        }
     } else {
         ""
     };
 
-    let prefix_width = item.prefix.chars().count()
-        + collapse_indicator.chars().count();
+    let prefix_width = item.prefix.chars().count() + collapse_indicator.chars().count();
     let label_budget = width.saturating_sub(prefix_width + 2);
     let label = truncate(&item.label, label_budget);
 
@@ -333,9 +326,7 @@ fn render_flat_item(
     };
 
     let label_style = if is_selected {
-        let mut s = Style::default()
-            .fg(label_color)
-            .bg(Color::Rgb(40, 40, 60));
+        let mut s = Style::default().fg(label_color).bg(Color::Rgb(40, 40, 60));
         if label_bold {
             s = s.add_modifier(Modifier::BOLD);
         }
@@ -349,10 +340,7 @@ fn render_flat_item(
     let mut spans = Vec::new();
 
     if is_selected {
-        spans.push(Span::styled(
-            "\u{2192} ",
-            Style::default().fg(Color::Cyan),
-        ));
+        spans.push(Span::styled("\u{2192} ", Style::default().fg(Color::Cyan)));
     }
 
     spans.push(Span::styled(item.prefix.clone(), dim));

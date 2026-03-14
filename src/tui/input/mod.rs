@@ -1,9 +1,10 @@
+mod autocomplete;
 pub mod buffer;
 mod cursor;
 
-use crate::graph::{ConversationGraph, Node};
+use crate::graph::ConversationGraph;
 use crate::tui::state::FocusZone;
-use crate::tui::{CompletionCandidate, TuiState};
+use crate::tui::TuiState;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub(crate) use cursor::cursor_line_col;
@@ -51,7 +52,7 @@ pub fn handle_key_event(
             && tui_state.autocomplete.active
             && !tui_state.autocomplete.candidates.is_empty()
         {
-            accept_completion(tui_state);
+            autocomplete::accept(tui_state);
             return Action::None;
         }
         tui_state.nav.focus = match tui_state.nav.focus {
@@ -61,10 +62,18 @@ pub fn handle_key_event(
         return Action::None;
     }
 
+    // ── Search mode intercept ────────────────────────────────────
+    // When the search bar is active, route keystrokes to it regardless
+    // of focus zone. Only Escape and Ctrl+G are special; all others
+    // are typed into the search query.
+    if tui_state.search.is_some() {
+        return handle_search_key(key, tui_state, graph);
+    }
+
     // ── Per-zone dispatch ────────────────────────────────────────
     match tui_state.nav.focus {
         FocusZone::ChatPanel => handle_chat_panel_key(key, tui_state, graph),
-        FocusZone::TabContent => handle_tab_content_key(key, tui_state),
+        FocusZone::TabContent => handle_tab_content_key(key, tui_state, graph),
     }
 }
 
@@ -86,8 +95,26 @@ fn handle_chat_panel_key(
 }
 
 /// Handle keys when a tab's content area is focused.
-/// Up/Down scrolls through the overview's activity stream.
-fn handle_tab_content_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
+/// `/` activates search. Up/Down scrolls through the overview's activity stream.
+fn handle_tab_content_key(
+    key: KeyEvent,
+    tui_state: &mut TuiState,
+    graph: &ConversationGraph,
+) -> Action {
+    // `/` activates the search bar (unless modified).
+    if key.code == KeyCode::Char('/')
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        tui_state.search = Some(crate::tui::search::SearchState::new());
+        // Re-evaluate immediately with empty query so matching_ids is populated.
+        if let Some(search) = &mut tui_state.search {
+            search.reparse_and_evaluate(graph);
+        }
+        return Action::None;
+    }
+
     match tui_state.nav.active_tab {
         crate::tui::state::TopTab::Overview => match key.code {
             KeyCode::Up => tui_state
@@ -103,6 +130,49 @@ fn handle_tab_content_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     Action::None
 }
 
+/// Handle keys when the search bar is active.
+///
+/// Routes character input to the search query, handles backspace/escape,
+/// and passes Ctrl+G for scope toggling. All other keys are ignored to
+/// prevent accidental tab/panel navigation while searching.
+fn handle_search_key(key: KeyEvent, tui_state: &mut TuiState, graph: &ConversationGraph) -> Action {
+    // Ctrl+G: toggle scope (Tab vs Global).
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+        if let Some(search) = &mut tui_state.search {
+            search.toggle_scope();
+        }
+        return Action::None;
+    }
+
+    // Ctrl+Q still quits even in search mode.
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
+        return Action::Quit;
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            tui_state.search = None;
+        }
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            if let Some(search) = &mut tui_state.search {
+                search.insert_char(c, graph);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(search) = &mut tui_state.search {
+                search.delete_char(graph);
+            }
+        }
+        // Absorb other keys while searching — do not pass through.
+        _ => {}
+    }
+    Action::None
+}
+
 /// Autocomplete popup keys. Returns `Some` if consumed, `None` to fall through.
 fn handle_autocomplete_key(key: &KeyEvent, tui_state: &mut TuiState) -> Option<Action> {
     if !tui_state.autocomplete.active || tui_state.autocomplete.candidates.is_empty() {
@@ -110,7 +180,7 @@ fn handle_autocomplete_key(key: &KeyEvent, tui_state: &mut TuiState) -> Option<A
     }
     match key.code {
         KeyCode::Enter => {
-            accept_completion(tui_state);
+            autocomplete::accept(tui_state);
             Some(Action::None)
         }
         KeyCode::Up => {
@@ -150,7 +220,7 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState, graph: &Conversatio
 
     // Re-filter autocomplete after text/cursor changes.
     if modifies_text_or_cursor(&key) {
-        update_autocomplete(tui_state, graph);
+        autocomplete::update(tui_state, graph);
     }
 
     action
@@ -285,108 +355,4 @@ fn modifies_text_or_cursor(key: &KeyEvent) -> bool {
             | KeyCode::Home
             | KeyCode::End
     )
-}
-
-/// Detect `/` trigger and filter autocomplete candidates.
-fn update_autocomplete(tui_state: &mut TuiState, graph: &ConversationGraph) {
-    let chars: Vec<char> = tui_state.input.text().chars().collect();
-    let cursor = tui_state.input.cursor();
-
-    // Scan backwards from cursor to find `/`
-    let before_cursor = &chars[..cursor];
-    let mut slash_pos = None;
-    for i in (0..before_cursor.len()).rev() {
-        if before_cursor[i] == '/' {
-            if i == 0 || before_cursor[i - 1].is_whitespace() {
-                slash_pos = Some(i);
-            }
-            break;
-        }
-        if before_cursor[i].is_whitespace() {
-            break;
-        }
-    }
-
-    let Some(tpos) = slash_pos else {
-        tui_state.autocomplete.active = false;
-        return;
-    };
-
-    let prefix: String = before_cursor[tpos + 1..cursor].iter().collect();
-
-    if prefix.contains(char::is_whitespace) {
-        tui_state.autocomplete.active = false;
-        return;
-    }
-
-    let prefix_lower = prefix.to_lowercase();
-    let candidates: Vec<_> = graph
-        .nodes_by(|n| matches!(n, Node::Tool { .. }))
-        .into_iter()
-        .filter_map(|n| {
-            if let Node::Tool {
-                name, description, ..
-            } = n
-            {
-                if name.to_lowercase().starts_with(&prefix_lower) {
-                    Some(CompletionCandidate {
-                        name: name.clone(),
-                        description: description.clone(),
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    tui_state.autocomplete.active = true;
-    tui_state.autocomplete.trigger_char = '/';
-    tui_state.autocomplete.prefix = prefix;
-    tui_state.autocomplete.selected = tui_state
-        .autocomplete
-        .selected
-        .min(candidates.len().saturating_sub(1));
-    tui_state.autocomplete.candidates = candidates;
-}
-
-/// Accept the selected completion: replace `/prefix` with `/name `.
-fn accept_completion(tui_state: &mut TuiState) {
-    let Some(candidate) = tui_state
-        .autocomplete
-        .candidates
-        .get(tui_state.autocomplete.selected)
-    else {
-        return;
-    };
-    let replacement = format!("/{} ", candidate.name);
-
-    let chars: Vec<char> = tui_state.input.text().chars().collect();
-    let cursor = tui_state.input.cursor();
-
-    // Find the slash position (scan backwards)
-    let before_cursor = &chars[..cursor];
-    let mut slash_pos = None;
-    for i in (0..before_cursor.len()).rev() {
-        if before_cursor[i] == '/' {
-            slash_pos = Some(i);
-            break;
-        }
-    }
-
-    let Some(tpos) = slash_pos else {
-        return;
-    };
-
-    // Build new text: everything before `/` + replacement + everything after cursor
-    let before: String = chars[..tpos].iter().collect();
-    let after: String = chars[cursor..].iter().collect();
-    let new_text = format!("{before}{replacement}{after}");
-    let new_cursor = tpos + replacement.chars().count();
-    tui_state.input.set_text(new_text);
-    // set_text puts cursor at end; adjust to after replacement.
-    tui_state.input.set_cursor(new_cursor);
-    tui_state.autocomplete.active = false;
 }

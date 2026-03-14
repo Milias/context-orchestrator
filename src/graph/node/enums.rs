@@ -293,14 +293,21 @@ impl EdgeKind {
     /// Semantic group this edge belongs to.
     pub fn group(self) -> EdgeGroup {
         match self {
-            Self::RespondsTo | Self::SubtaskOf | Self::DependsOn
-            | Self::Invoked | Self::Produced | Self::ThinkingOf => EdgeGroup::Structure,
-            Self::Asks | Self::Answers | Self::Triggers
-            | Self::Supersedes | Self::About => EdgeGroup::QA,
-            Self::RelevantTo | Self::Tracks | Self::Indexes
-            | Self::Provides => EdgeGroup::References,
-            Self::ClaimedBy | Self::OccurredDuring | Self::SelectedFor
-            | Self::ConsumedBy => EdgeGroup::Coordination,
+            Self::RespondsTo
+            | Self::SubtaskOf
+            | Self::DependsOn
+            | Self::Invoked
+            | Self::Produced
+            | Self::ThinkingOf => EdgeGroup::Structure,
+            Self::Asks | Self::Answers | Self::Triggers | Self::Supersedes | Self::About => {
+                EdgeGroup::QA
+            }
+            Self::RelevantTo | Self::Tracks | Self::Indexes | Self::Provides => {
+                EdgeGroup::References
+            }
+            Self::ClaimedBy | Self::OccurredDuring | Self::SelectedFor | Self::ConsumedBy => {
+                EdgeGroup::Coordination
+            }
         }
     }
 }

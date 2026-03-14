@@ -30,7 +30,7 @@ fn active_work_height(graph: &ConversationGraph) -> u16 {
         )
     }) {
         count += 1; // The work item itself.
-        // Count active children (one level deep).
+                    // Count active children (one level deep).
         let children = graph.children_of(node.id());
         for cid in children {
             if let Some(Node::WorkItem {
@@ -129,12 +129,7 @@ const STATS_HEIGHT: u16 = 9;
 /// Stacked sections that auto-size based on content:
 /// Agents | Active Work | Running | Questions | Stats.
 /// Empty sections collapse to zero height.
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &mut TuiState,
-) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let agent_h = agents::agent_card_height(tui_state);
     let work_h = active_work_height(graph);
     let running_h = agents::running_tasks_height(graph);
@@ -167,9 +162,7 @@ fn render_active_work(frame: &mut Frame, area: Rect, graph: &ConversationGraph) 
     if area.height < 3 {
         return;
     }
-    let block = Block::default()
-        .title("Active Work")
-        .borders(Borders::ALL);
+    let block = Block::default().title("Active Work").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -234,9 +227,7 @@ fn render_questions(frame: &mut Frame, area: Rect, graph: &ConversationGraph) {
     if area.height < 3 {
         return;
     }
-    let block = Block::default()
-        .title("Questions")
-        .borders(Borders::ALL);
+    let block = Block::default().title("Questions").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -277,14 +268,8 @@ fn render_questions(frame: &mut Frame, area: Rect, graph: &ConversationGraph) {
 
         lines.push(Line::from(vec![
             Span::styled("? ", Style::default().fg(Color::Yellow)),
-            Span::styled(
-                format!("\"{preview}\""),
-                Style::default().fg(Color::White),
-            ),
-            Span::styled(
-                format!(" [{label}]"),
-                Style::default().fg(color),
-            ),
+            Span::styled(format!("\"{preview}\""), Style::default().fg(Color::White)),
+            Span::styled(format!(" [{label}]"), Style::default().fg(color)),
         ]));
 
         // Answers for this question.
@@ -312,11 +297,6 @@ fn render_questions(frame: &mut Frame, area: Rect, graph: &ConversationGraph) {
 // ── Stats section ───────────────────────────────────────────────────
 
 /// Render the Stats section using the shared stats panel widget.
-fn render_stats(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &TuiState,
-) {
+fn render_stats(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
     crate::tui::widgets::stats_panel::render(frame, area, graph, tui_state);
 }

@@ -15,4 +15,5 @@ pub mod graph;
 pub mod overview;
 #[path = "overview_legacy.rs"]
 pub mod overview_legacy;
+pub mod system;
 pub mod work;

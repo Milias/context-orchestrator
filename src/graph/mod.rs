@@ -338,7 +338,9 @@ impl ConversationGraph {
     /// Find the parent of a node via a `SubtaskOf` edge, if any.
     /// Returns the target of the first `SubtaskOf` edge from this node.
     pub fn parent_of(&self, child_id: Uuid) -> Option<Uuid> {
-        self.targets_by_edge(child_id, EdgeKind::SubtaskOf).into_iter().next()
+        self.targets_by_edge(child_id, EdgeKind::SubtaskOf)
+            .into_iter()
+            .next()
     }
 
     /// Find all plans that `plan_id` depends on (via `DependsOn` edges).
@@ -376,24 +378,26 @@ impl ConversationGraph {
 
     /// Check if a node has an associated `ThinkBlock` linked via `ThinkingOf`.
     pub fn has_think_block(&self, node_id: Uuid) -> bool {
-        !self.sources_by_edge(node_id, EdgeKind::ThinkingOf).is_empty()
+        !self
+            .sources_by_edge(node_id, EdgeKind::ThinkingOf)
+            .is_empty()
     }
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
-#[path = "mutation_tests.rs"]
-mod mutation_tests;
-#[cfg(test)]
-#[path = "history_tests.rs"]
-mod history_tests;
-#[cfg(test)]
-#[path = "question_tests.rs"]
-mod question_tests;
+#[path = "coordination_tests.rs"]
+mod coordination_tests;
 #[cfg(test)]
 #[path = "event_tests.rs"]
 mod event_tests;
 #[cfg(test)]
-#[path = "coordination_tests.rs"]
-mod coordination_tests;
+#[path = "history_tests.rs"]
+mod history_tests;
+#[cfg(test)]
+#[path = "mutation_tests.rs"]
+mod mutation_tests;
+#[cfg(test)]
+#[path = "question_tests.rs"]
+mod question_tests;
+#[cfg(test)]
+mod tests;

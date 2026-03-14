@@ -30,12 +30,7 @@ const COLLAPSED_ARROW: &str = "\u{25b6} "; // ▶
 /// Vertical layout: one row per section. The active section gets flexible
 /// space and renders as a tree (60%) + detail (40%) horizontal split.
 /// Collapsed sections render as single-line summary headers.
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &mut TuiState,
-) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let active = tui_state.nav.active_graph_section;
     let sections = GraphSection::all();
 
@@ -137,7 +132,10 @@ fn render_collapsed_header(
     let line = Line::from(vec![
         Span::styled(COLLAPSED_ARROW, dim),
         Span::styled(format!("[{}]", section.label()), dim),
-        Span::styled(format!(" ({summary})"), Style::default().fg(Color::Rgb(80, 80, 100))),
+        Span::styled(
+            format!(" ({summary})"),
+            Style::default().fg(Color::Rgb(80, 80, 100)),
+        ),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -162,15 +160,11 @@ fn section_summary(section: GraphSection, graph: &ConversationGraph) -> String {
             format!("{plans} plans, {tasks} tasks")
         }
         GraphSection::QA => {
-            let count = graph
-                .nodes_by(|n| matches!(n, Node::Question { .. }))
-                .len();
+            let count = graph.nodes_by(|n| matches!(n, Node::Question { .. })).len();
             format!("{count} questions")
         }
         GraphSection::Execution => {
-            let count = graph
-                .nodes_by(|n| matches!(n, Node::ToolCall { .. }))
-                .len();
+            let count = graph.nodes_by(|n| matches!(n, Node::ToolCall { .. })).len();
             format!("{count} tool calls")
         }
         GraphSection::Context => {

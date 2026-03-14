@@ -52,7 +52,10 @@ fn check_type_filter(query: &SearchQuery, node: &Node) -> bool {
             | (NodeTypeFilter::GitFile, Node::GitFile { .. })
             | (NodeTypeFilter::BackgroundTask, Node::BackgroundTask { .. })
             | (NodeTypeFilter::ApiError, Node::ApiError { .. })
-            | (NodeTypeFilter::ContextBuildingRequest, Node::ContextBuildingRequest { .. })
+            | (
+                NodeTypeFilter::ContextBuildingRequest,
+                Node::ContextBuildingRequest { .. }
+            )
     )
 }
 

@@ -225,7 +225,11 @@ fn render_flat_item(
 
     // Collapse/expand indicator for items with children.
     let collapse_indicator = if item.has_children {
-        if item.is_collapsed { "\u{25b6} " } else { "\u{25bc} " } // ▶ or ▼
+        if item.is_collapsed {
+            "\u{25b6} "
+        } else {
+            "\u{25bc} "
+        } // ▶ or ▼
     } else {
         ""
     };
@@ -262,12 +266,16 @@ fn render_flat_item(
     let mut spans = Vec::new();
 
     if is_selected {
-        spans.push(Span::styled("\u{2192} ", Style::default().fg(Color::Cyan))); // →
+        spans.push(Span::styled("\u{2192} ", Style::default().fg(Color::Cyan)));
+        // →
     }
 
     spans.push(Span::styled(item.prefix.clone(), dim));
     spans.push(Span::styled(collapse_indicator, dim));
-    spans.push(Span::styled(format!("{icon} "), Style::default().fg(icon_color)));
+    spans.push(Span::styled(
+        format!("{icon} "),
+        Style::default().fg(icon_color),
+    ));
     spans.push(Span::styled(kind_prefix, dim));
     spans.push(Span::styled(title, title_style));
 
@@ -305,7 +313,10 @@ fn append_badges(spans: &mut Vec<Span<'static>>, item: &FlatItem) {
             .map(|d| truncate(d, 20))
             .collect::<Vec<_>>()
             .join(", ");
-        spans.push(Span::styled("  (needs: ", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            "  (needs: ",
+            Style::default().fg(Color::DarkGray),
+        ));
         spans.push(Span::styled(dep_names, Style::default().fg(Color::Magenta)));
         spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
     }

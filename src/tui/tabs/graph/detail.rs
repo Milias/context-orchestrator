@@ -176,12 +176,7 @@ fn render_header(node: &crate::graph::Node, lines: &mut Vec<Line<'_>>) {
 ///
 /// Shows up to [`MAX_CONTENT_LINES`] of the content text, truncated at `width`.
 /// Reserves some lines for the edges section below.
-fn render_content(
-    content: &str,
-    width: usize,
-    budget_lines: usize,
-    lines: &mut Vec<Line<'_>>,
-) {
+fn render_content(content: &str, width: usize, budget_lines: usize, lines: &mut Vec<Line<'_>>) {
     if content.is_empty() {
         lines.push(Line::from(Span::styled(
             "(empty)",

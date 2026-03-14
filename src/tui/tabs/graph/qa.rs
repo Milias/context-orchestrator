@@ -328,9 +328,9 @@ fn status_badge(status: QuestionStatus) -> (&'static str, Color) {
 /// Destination badge string for display.
 fn destination_badge(dest: QuestionDestination) -> &'static str {
     match dest {
-        QuestionDestination::User => "(\u{2192}user)",    // (→user)
-        QuestionDestination::Llm => "(\u{2192}llm)",      // (→llm)
-        QuestionDestination::Auto => "(\u{2192}auto)",     // (→auto)
+        QuestionDestination::User => "(\u{2192}user)", // (→user)
+        QuestionDestination::Llm => "(\u{2192}llm)",   // (→llm)
+        QuestionDestination::Auto => "(\u{2192}auto)", // (→auto)
     }
 }
 
