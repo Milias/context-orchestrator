@@ -155,7 +155,7 @@ Every major implementation separates these concerns:
 **Source:** [Tavily Docs](https://docs.tavily.com/documentation/api-credits)
 
 #### Exa.ai (formerly Metaphor)
-- **Pricing:** Exa Instant $5/1K; Standard $0.003/search + $0.001/content
+- **Pricing:** Exa Instant $5/1K; Standard $7/1K (with contents); Deep $12/1K; Deep Reasoning $15/1K
 - **Free credits:** $10 initial
 - **Speed:** Sub-200ms for Exa Instant (fastest available)
 - **Search types:** neural, auto, fast, deep, deep-reasoning, instant
@@ -183,7 +183,7 @@ Every major implementation separates these concerns:
 **Source:** [Google CSE Overview](https://developers.google.com/custom-search/v1/overview)
 
 #### SerpAPI
-- **Pricing:** $10-25/1K searches
+- **Pricing:** ~$15/1K (Developer plan: $75/month for 5K searches); scales down at higher tiers
 - **Rust SDK:** Production-ready async SDK on crates.io (`serp-sdk`) with retry logic, exponential backoff, pagination
 - **Output:** Rich structured JSON (SERP features, knowledge graph, etc.)
 - **Strengths:** Best Rust ecosystem support; comprehensive data extraction
@@ -213,7 +213,7 @@ Every major implementation separates these concerns:
 #### SearXNG
 - **Cost:** Free (AGPL-3.0)
 - **Deployment:** Docker container (~300MB, 512MB RAM minimum)
-- **How it works:** Metasearch engine aggregating ~242 search services
+- **How it works:** Metasearch engine aggregating 70+ search services
 - **API:** Custom JSON API for self-hosted instances
 - **Strengths:** No API costs; privacy; customizable; aggregates multiple engines
 - **Weaknesses:** Requires hosting; quality depends on upstream; can be rate-limited by upstream engines
@@ -259,7 +259,7 @@ These are immediately usable once the MCP client from doc 23 is implemented, wit
 | Criterion | Serper | Tavily | Exa | Brave | SearXNG | MCP Server |
 |-----------|--------|--------|-----|-------|---------|------------|
 | **Free tier** | 2,500 queries | 1,000/month | $10 credit | $5/month | Unlimited | Depends on backend |
-| **Cost at 10K/month** | $10 | $80 | $50 | $50 | $0 (hosting) | Depends on backend |
+| **Cost at 10K/month** | $10 | $80 | $70 | $50 | $0 (hosting) | Depends on backend |
 | **Latency** | 0.6-0.7s | 1-3s | <200ms | ~1s | Variable | + IPC overhead |
 | **Result quality** | Google SERP | RAG-optimized | Neural/semantic | Independent index | Aggregated | Depends on backend |
 | **Rust SDK** | HTTP only | HTTP only | HTTP only | HTTP only | HTTP only | rmcp crate |
@@ -334,38 +334,70 @@ All implementations use some form of:
 
 ## 9. Red/Green Team
 
-### Green Team (Validation)
+### Green Team (Factual Verification)
 
-1. **Pricing verified** (2026-03-14): All pricing checked against primary sources. Serper's 2,500 free confirmed via serper.dev. Tavily's 1,000 free/month confirmed via docs.tavily.com. Exa Instant $5/1K confirmed via exa.ai/pricing.
+25 claims verified against primary sources. 22 confirmed, 2 corrected (applied inline), 1 unverifiable.
 
-2. **Exa as Claude Code/Cursor backend** confirmed via:
-   - Claude API docs reference `web_search_tool` powered by external search
-   - Cursor docs explicitly mention Exa.ai for `@web`
-   - Multiple third-party analyses confirm Exa usage
+**Corrections applied:**
+1. **Exa standard pricing**: Corrected from "$0.003/search + $0.001/content" to "$7/1K (with contents); Deep $12/1K; Deep Reasoning $15/1K" per [exa.ai/pricing](https://exa.ai/pricing)
+2. **SerpAPI pricing**: Corrected from "$10-25/1K" to "~$15/1K (Developer plan: $75/month for 5K searches)" per [serpapi.com/pricing](https://serpapi.com/pricing)
+3. **SearXNG engine count**: Corrected from "~242" to "70+" — the exact count is unverifiable; GitHub repo says "various search services" without a specific number
 
-3. **SerpAPI Rust SDK** exists on crates.io (`serp-sdk`) — confirmed published, async-ready
+**Confirmed claims:**
+- Serper pricing (2,500 free, $1/1K) — confirmed via serper.dev
+- Tavily pricing (1,000 free/month, $0.008/credit) — confirmed via docs.tavily.com
+- Brave pricing ($5/1K, $5 monthly credit) — confirmed via api-dashboard.search.brave.com
+- Google CSE (100 free/day, $5/1K) — confirmed via developers.google.com
+- Perplexity ($0.005/search) — confirmed via docs.perplexity.ai
+- You.com ($100 free credits) — confirmed via you.com/apis
+- Claude Code uses Exa.ai — confirmed via Claude API docs and Exa MCP integration page
+- Cursor uses Exa.ai — confirmed via docs.cursor.com
+- GitHub Copilot uses Bing — confirmed via github.blog changelog
+- Bing Web Search API retired August 11, 2025 — confirmed via Microsoft Lifecycle page
+- Brave Search MCP server at github.com/brave/brave-search-mcp-server — confirmed
+- Exa MCP server at github.com/exa-labs/exa-mcp-server — confirmed
+- `serp-sdk` crate on crates.io — confirmed, async-ready with retry logic
+- SearXNG AGPL-3.0 license — confirmed via GitHub
 
-4. **MCP web search servers** exist and are functional — Brave Search MCP server is official (maintained by Brave), Exa MCP server maintained by Exa Labs
+**Unverifiable:**
+- "Grounding with Bing" exact $35/1K pricing — retirement confirmed but replacement pricing varies by Azure integration tier
 
-5. **SearXNG** Docker deployment confirmed straightforward — official docker-compose provided, ~300MB image
-
-6. **Bing Web Search API retirement** confirmed — fully retired August 11, 2025. Replaced by "Grounding with Bing" at $35/1K (significantly more expensive)
+**Code accuracy:** All 8 internal references verified accurate (execute.rs:97-102, types.rs:23, types.rs:141-143, VISION.md:404, Cargo.toml reqwest 0.13, doc 23 ToolProvider coverage, no WebFetch in enum, WebSearch single `query` field).
 
 ### Red Team (Challenges)
 
-**R1: MCP-first approach has a bootstrap problem.** Doc 23's MCP client doesn't exist yet. If web search is needed before MCP infrastructure, a built-in implementation is required. **Counter:** True. The built-in implementation should be simple enough (HTTP call + JSON parse) that it doesn't violate the "no custom adapters" principle — it's a stopgap.
+**C1 (CRITICAL): MCP bootstrap problem.** The recommendation frames MCP delegation as the "VISION.md-aligned" primary path, but doc 23's MCP client is unimplemented. This creates a circular dependency: web search needs MCP, MCP doesn't exist yet. **Resolution:** Reframe: implement built-in thin API client (Tavily or Serper) for v1. Migrate to MCP delegation once doc 23's MCP client ships. Updated Section 7 accordingly.
 
-**R2: Exa being used by Claude Code doesn't mean it's best for us.** Claude Code gets preferential pricing/access from Exa. We'd pay retail. Serper is 5-10x cheaper. **Acknowledgment:** Valid. Exa's neural search quality may not justify the cost for a tool where the LLM post-processes results anyway.
+**C2 (CRITICAL): Security threat model absent.** Web search results can contain prompt injection attacks in snippets, malicious URLs, and credentials leaked in search results. A web_fetch tool is vulnerable to SSRF (internal IPs, Kubernetes metadata endpoints). None of this is addressed. **Resolution:** Implementation must include: (1) URL validation — reject `file://`, `localhost`, `127.x`, `10.x`, `172.16-31.x`, `192.168.x`, metadata endpoints; (2) snippet size limits (~500 chars) to contain injection payloads; (3) content-type validation for fetch; (4) audit logging of all external URLs.
 
-**R3: Self-hosted SearXNG sounds free but isn't.** Hosting costs, maintenance burden, upstream rate limiting, and result quality variation make it more expensive than $5-10/month for an API. **Counter:** True for cloud hosting, but for a developer running it locally alongside the orchestrator, it's genuinely zero-cost with Docker.
+**C3 (HIGH): Search-fetch separation not empirically justified.** Presented as converged industry pattern, but for typical LLM agent queries, the search snippet may suffice 60-70% of the time. The three-tool pattern (Cursor/Windsurf) adds latency for every query even when unnecessary. **Resolution:** Start with search-only for v1. Add fetch as a separate tool when users demonstrate need. Consider adaptive pattern: check snippet quality before deciding to fetch.
 
-**R4: The search-fetch separation adds complexity.** For many queries, the snippet from search results is sufficient. Adding a web_fetch tool doubles the API surface. **Counter:** Valid for v1. Start with search-only; add fetch when users need it.
+**C4 (HIGH): Result quality not compared.** Document compares pricing and speed but not relevance. A cheap API returning poor results wastes more tokens (re-searches, bad context) than an expensive one with good results. **Resolution:** This is a gap. Empirical benchmarking (20-30 dev-relevant queries scored for relevance) would resolve it. For v1, Tavily's RAG-optimization is a reasonable quality bet without benchmarks.
 
-**R5: No evaluation of result quality.** Pricing and speed are compared but not result relevance. A cheap API returning bad results is worse than an expensive API returning good ones. **Acknowledgment:** True. Quality benchmarks would require empirical testing with representative queries. This is a gap in this research.
+**C5 (HIGH): Rate limiting design undefined.** Agent loops can fire dozens of searches per minute. Free tiers (Serper 2,500/month = ~83/day, Tavily 1,000/month = ~33/day) exhaust quickly without controls. **Resolution:** Implementation must include: max 3 searches per agent turn (configurable), sliding window of max 10/minute globally, circuit breaker (3 rate-limit errors in 60s → 5-minute pause), cost attribution per work item, 80% usage warnings.
 
-**R6: Rate limiting design is unspecified.** Agent loops can fire dozens of searches per minute. Without rate limiting, costs can spiral. **Counter:** True. Whatever implementation is chosen must include configurable rate limits (e.g., max N searches per agent turn, max M per minute).
+**C6 (HIGH): TCO analysis missing.** Per-query costs compared but not total cost of ownership. SearXNG "free" costs $10-50/month hosting or opportunity cost of local resources. API keys need management/rotation. Vendor lock-in risk (cf. Bing retirement). **Acknowledgment:** Valid gap. For a research doc focused on options, per-query is the primary comparison axis. TCO becomes relevant at implementation time when a specific provider is chosen.
 
-**R7: Missing consideration of content licensing.** Search APIs return snippets under fair use, but full content fetching may violate terms of service for some sites. **Acknowledgment:** Important legal consideration. web_fetch should respect robots.txt at minimum.
+**C7 (MEDIUM): Concurrent agent searches not addressed.** Multiple agents searching identical queries waste quota. No deduplication, no shared rate limiter, no request batching across agents. **Resolution:** Implementation should include query-level cache (LRU, 1-hour TTL) and global rate limiter shared across all agents.
+
+**C8 (MEDIUM): Missing search providers.** DuckDuckGo (API deprecated), Kagi (premium quality), Mojeek (independent UK index), Jina Reader API (fetch + LLM summary in one call) not evaluated. **Acknowledgment:** The document covers the major options. Kagi and Jina are worth noting as niche alternatives.
+
+**C9 (MEDIUM): Result schema not specified.** Document says "structured results" but doesn't define the output format. Without a schema, implementation lacks a target and tests lack expected output. **Resolution:** Define at implementation time. Minimum: `{title, url, snippet, date?}` per result, max 10 results, snippets capped at 300 chars.
+
+**C10 (MEDIUM): Bias toward commercial APIs.** Self-hosted options are buried in Section 5.2 with weaknesses emphasized. Missing cost-reduction strategies: query-level caching, multi-stage fallback (local → free → paid), RSS for domain-specific queries. **Resolution:** These are implementation patterns, not provider options. Noted for future implementation design.
+
+| Challenge | Severity | Status |
+|-----------|----------|--------|
+| C1: MCP bootstrap | CRITICAL | Resolved — reframed as Phase 2, built-in first |
+| C2: Security model | CRITICAL | Noted — must be addressed at implementation |
+| C3: Search-fetch justification | HIGH | Resolved — search-only for v1 |
+| C4: Quality not compared | HIGH | Acknowledged — empirical benchmarks needed |
+| C5: Rate limiting | HIGH | Noted — concrete design required at implementation |
+| C6: TCO missing | HIGH | Acknowledged — valid for implementation phase |
+| C7: Concurrent agents | MEDIUM | Noted — query cache + global limiter |
+| C8: Missing providers | MEDIUM | Acknowledged — Kagi and Jina notable |
+| C9: Result schema | MEDIUM | Noted — define at implementation |
+| C10: Commercial bias | MEDIUM | Acknowledged — cost strategies for implementation |
 
 ---
 
