@@ -243,8 +243,16 @@ struct ToolLineParams<'a> {
 /// Render a tool status line: icon + name (Magenta) + args (White) + size + duration.
 fn format_tool_line(p: &ToolLineParams<'_>) -> Line<'static> {
     let dur = format_duration(p.duration);
-    let dur_color = if p.is_active { Color::Yellow } else { Color::DarkGray };
-    let size_w = if p.size_str.is_empty() { 0 } else { p.size_str.len() + 1 };
+    let dur_color = if p.is_active {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+    let size_w = if p.size_str.is_empty() {
+        0
+    } else {
+        p.size_str.len() + 1
+    };
     let fixed = 2 + 1 + size_w + dur.len();
     let budget = p.width.saturating_sub(fixed);
     let sep = if p.tool_args.is_empty() { "" } else { " " };
@@ -255,7 +263,10 @@ fn format_tool_line(p: &ToolLineParams<'_>) -> Line<'static> {
 
     let mut spans = vec![
         Span::styled(format!("{} ", p.icon), Style::default().fg(p.icon_color)),
-        Span::styled(p.tool_name.to_string(), Style::default().fg(Color::Magenta).bold()),
+        Span::styled(
+            p.tool_name.to_string(),
+            Style::default().fg(Color::Magenta).bold(),
+        ),
     ];
     if !p.tool_args.is_empty() {
         spans.push(Span::styled(sep, Style::default().fg(Color::DarkGray)));

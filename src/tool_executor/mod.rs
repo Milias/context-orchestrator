@@ -360,3 +360,7 @@ mod tests;
 #[cfg(test)]
 #[path = "execute_tests.rs"]
 mod execute_tests;
+
+#[cfg(test)]
+#[path = "plan_qa_tests.rs"]
+mod plan_qa_tests;

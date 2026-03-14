@@ -293,3 +293,7 @@ pub fn spawn_context_summarization(tx: mpsc::UnboundedSender<TaskMessage>) {
         });
     });
 }
+
+#[cfg(test)]
+#[path = "tasks_tests.rs"]
+mod tests;

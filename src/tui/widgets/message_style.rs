@@ -237,3 +237,7 @@ pub fn render_streaming(
         full_height,
     );
 }
+
+#[cfg(test)]
+#[path = "message_style_tests.rs"]
+mod tests;

@@ -8,17 +8,28 @@ use async_trait::async_trait;
 use futures::stream;
 use std::pin::Pin;
 
-/// A mock LLM provider that returns fixed token counts.
-/// Extend with `chunks` to also mock streaming responses.
+/// A mock LLM provider that returns fixed token counts and optional stream chunks.
 pub struct MockLlmProvider {
     /// Fixed token count returned by `count_tokens`.
     token_count: u32,
+    /// Optional stream chunks returned by `chat()`. When `None`, returns an empty stream.
+    chunks: Option<Vec<StreamChunk>>,
 }
 
 impl MockLlmProvider {
-    /// Create a mock that returns the given fixed token count.
+    /// Create a mock that returns the given fixed token count and an empty stream.
     pub fn with_token_count(token_count: u32) -> Self {
-        Self { token_count }
+        Self {
+            token_count,
+            chunks: None,
+        }
+    }
+
+    /// Configure the stream chunks returned by `chat()`.
+    /// Each call to `chat()` yields these chunks in order.
+    pub fn with_chunks(mut self, chunks: Vec<StreamChunk>) -> Self {
+        self.chunks = Some(chunks);
+        self
     }
 }
 
@@ -31,8 +42,14 @@ impl LlmProvider for MockLlmProvider {
     ) -> anyhow::Result<
         Pin<Box<dyn futures::stream::Stream<Item = anyhow::Result<StreamChunk>> + Send>>,
     > {
-        // Return an empty stream — tests that need streaming should extend this.
-        Ok(Box::pin(stream::empty()))
+        match &self.chunks {
+            Some(chunks) => {
+                let items: Vec<anyhow::Result<StreamChunk>> =
+                    chunks.iter().cloned().map(Ok).collect();
+                Ok(Box::pin(stream::iter(items)))
+            }
+            None => Ok(Box::pin(stream::empty())),
+        }
     }
 
     async fn count_tokens(

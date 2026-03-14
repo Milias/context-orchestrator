@@ -275,8 +275,8 @@ fn render_event_row(event: &EventRow, width: usize) -> Line<'static> {
     let sep = if event.args.is_empty() { "" } else { " " };
     let args_budget = content_budget.saturating_sub(name.chars().count() + sep.len());
     let args = truncate(&event.args, args_budget);
-    let padding = content_budget
-        .saturating_sub(name.chars().count() + sep.len() + args.chars().count());
+    let padding =
+        content_budget.saturating_sub(name.chars().count() + sep.len() + args.chars().count());
 
     let dim = Style::default().fg(Color::DarkGray);
 

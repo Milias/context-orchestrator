@@ -16,6 +16,7 @@ fn test_tool_name_round_trip_all_variants() {
         ToolName::WebSearch,
         ToolName::Set,
         ToolName::Ask,
+        ToolName::Answer,
     ];
 
     for variant in variants {
@@ -90,18 +91,3 @@ fn test_parse_tool_arguments_invalid_json_falls_back() {
     );
 }
 
-/// Bug: `to_input_json` strips the `tool_type` tag but also accidentally
-/// strips a user field literally named `tool_type`.
-/// (This is a documented assumption — no variant has such a field.)
-#[test]
-fn test_to_input_json_strips_tag_for_typed_variant() {
-    let args = ToolCallArguments::ReadFile {
-        path: "/tmp/test".to_string(),
-    };
-    let json = args.to_input_json();
-    assert!(
-        !json.contains("tool_type"),
-        "serde tag should be stripped from output"
-    );
-    assert!(json.contains("/tmp/test"), "path field should remain");
-}

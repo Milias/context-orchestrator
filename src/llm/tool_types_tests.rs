@@ -78,3 +78,40 @@ fn test_chat_content_blocks_serde_roundtrip() {
         ChatContent::Text(_) => panic!("Expected Blocks variant"),
     }
 }
+
+/// Bug: `ChatContent::char_len()` for `Text` variant returns wrong value,
+/// causing token budget miscalculation and context truncation failures.
+#[test]
+fn test_chat_content_char_len_text() {
+    let content = ChatContent::Text("hello".to_string());
+    assert_eq!(content.char_len(), 5);
+}
+
+/// Bug: `ChatContent::char_len()` miscalculates sum across `Text`,
+/// `ToolUse`, and `ToolResult` blocks — budget is over/under-estimated.
+#[test]
+fn test_chat_content_char_len_blocks_mixed() {
+    let content = ChatContent::Blocks(vec![
+        ContentBlock::Text {
+            text: "abc".to_string(), // 3
+        },
+        ContentBlock::ToolUse {
+            id: "tu".to_string(),
+            name: "read_file".to_string(),
+            input: RawJson(r#"{"p":"v"}"#.to_string()), // 9 (RawJson inner string len)
+        },
+        ContentBlock::ToolResult {
+            tool_use_id: "tu".to_string(),
+            content: crate::graph::tool_types::ToolResultContent::text("xy"), // 2
+            is_error: false,
+        },
+    ]);
+    assert_eq!(content.char_len(), 14); // 3 + 9 + 2
+}
+
+/// Bug: empty `ChatContent::Text("")` returns non-zero length.
+#[test]
+fn test_chat_content_char_len_empty() {
+    assert_eq!(ChatContent::Text(String::new()).char_len(), 0);
+    assert_eq!(ChatContent::Blocks(vec![]).char_len(), 0);
+}

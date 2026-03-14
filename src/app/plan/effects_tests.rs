@@ -207,3 +207,132 @@ fn test_add_dependency_with_cycle_returns_error() {
     let b_deps = graph.dependencies_of(plan_b);
     assert!(b_deps.is_empty(), "cyclic edge should not have been added");
 }
+
+/// Bug: `Plan` tool creates a `WorkItem` but the `RelevantTo` edge
+/// linking it to the parent message is missing — plan becomes an
+/// orphan invisible to context building.
+#[test]
+fn test_plan_creates_work_item_with_relevant_to_edge() {
+    let (mut graph, msg_id) = graph_with_message();
+
+    let content = apply_tool_call(
+        &mut graph,
+        msg_id,
+        ToolCallArguments::Plan {
+            title: "Auth Refactor".to_string(),
+            description: Some("Rewrite auth module".to_string()),
+        },
+    );
+
+    assert!(
+        content.contains("Auth Refactor"),
+        "should mention plan title, got: {content}"
+    );
+
+    // A Plan WorkItem should exist.
+    let plans = graph.nodes_by(|n| {
+        matches!(
+            n,
+            Node::WorkItem {
+                kind: WorkItemKind::Plan,
+                ..
+            }
+        )
+    });
+    assert_eq!(plans.len(), 1, "exactly one Plan should exist");
+    let plan_id = plans[0].id();
+
+    // RelevantTo edge must link plan → parent message.
+    let has_edge = graph
+        .edges
+        .iter()
+        .any(|e| e.from == plan_id && e.to == msg_id && e.kind == EdgeKind::RelevantTo);
+    assert!(
+        has_edge,
+        "Plan should have RelevantTo edge to parent message"
+    );
+}
+
+/// Bug: `UpdateWorkItem` with a status change silently no-ops — the
+/// work item stays in its original status.
+#[test]
+fn test_update_work_item_changes_status() {
+    let (mut graph, msg_id) = graph_with_message();
+    let plan_id = add_plan(&mut graph, "My Plan");
+
+    let content = apply_tool_call(
+        &mut graph,
+        msg_id,
+        ToolCallArguments::UpdateWorkItem {
+            id: plan_id,
+            status: Some(WorkItemStatus::Active),
+            description: None,
+        },
+    );
+
+    assert!(
+        !content.contains("Error"),
+        "should not error, got: {content}"
+    );
+
+    if let Some(Node::WorkItem { status, .. }) = graph.node(plan_id) {
+        assert_eq!(*status, WorkItemStatus::Active, "status should be Active");
+    } else {
+        panic!("plan node should exist");
+    }
+}
+
+/// Bug: `UpdateWorkItem` with a description change silently no-ops.
+#[test]
+fn test_update_work_item_changes_description() {
+    let (mut graph, msg_id) = graph_with_message();
+    let plan_id = add_plan(&mut graph, "My Plan");
+
+    let content = apply_tool_call(
+        &mut graph,
+        msg_id,
+        ToolCallArguments::UpdateWorkItem {
+            id: plan_id,
+            status: None,
+            description: Some("Updated description".to_string()),
+        },
+    );
+
+    assert!(
+        !content.contains("Error"),
+        "should not error, got: {content}"
+    );
+
+    if let Some(Node::WorkItem { description, .. }) = graph.node(plan_id) {
+        assert_eq!(
+            description.as_deref(),
+            Some("Updated description"),
+            "description should be updated"
+        );
+    } else {
+        panic!("plan node should exist");
+    }
+}
+
+/// Bug: `UpdateWorkItem` with a non-existent ID silently succeeds
+/// instead of returning an error, misleading the agent.
+#[test]
+fn test_update_work_item_nonexistent_returns_error() {
+    let (mut graph, msg_id) = graph_with_message();
+    let fake_id = Uuid::new_v4();
+
+    let content = apply_tool_call(
+        &mut graph,
+        msg_id,
+        ToolCallArguments::UpdateWorkItem {
+            id: fake_id,
+            status: Some(WorkItemStatus::Done),
+            description: None,
+        },
+    );
+
+    assert!(
+        content.contains("Error") || content.contains("not found"),
+        "should return error for non-existent ID, got: {content}"
+    );
+}

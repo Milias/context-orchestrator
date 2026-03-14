@@ -1,5 +1,5 @@
 use crate::graph::node::{QuestionDestination, QuestionStatus};
-use crate::graph::{ConversationGraph, EdgeKind, Node, WorkItemKind, WorkItemStatus};
+use crate::graph::{ConversationGraph, EdgeKind, Node};
 use chrono::Utc;
 use uuid::Uuid;
 

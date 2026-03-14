@@ -232,7 +232,11 @@ impl ToolCallArguments {
             Self::Answer { question_id, .. } => question_id.to_string(),
             Self::Unknown { raw_json, .. } => {
                 let t: String = raw_json.chars().take(80).collect();
-                if raw_json.len() > 80 { format!("{t}...") } else { t }
+                if raw_json.len() > 80 {
+                    format!("{t}...")
+                } else {
+                    t
+                }
             }
         };
         (name, args)

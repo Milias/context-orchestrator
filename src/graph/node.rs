@@ -360,3 +360,7 @@ impl Node {
         self.stop_reason() == Some(StopReason::MaxTokens)
     }
 }
+
+#[cfg(test)]
+#[path = "node_tests.rs"]
+mod node_tests;

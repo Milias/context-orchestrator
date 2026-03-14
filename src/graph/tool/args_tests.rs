@@ -281,3 +281,34 @@ fn test_tool_result_content_char_len() {
     ]);
     assert_eq!(blocks.char_len(), 7); // 3 + 4
 }
+
+/// Bug: `text_content()` on `Blocks` containing only `Image` entries
+/// panics instead of returning `""`.
+#[test]
+fn test_blocks_only_images_text_content_empty() {
+    let content = ToolResultContent::Blocks(vec![ToolResultContentBlock::Image {
+        source: ImageSource::Base64 {
+            media_type: "image/png".to_string(),
+            data: "iVBOR".to_string(),
+        },
+    }]);
+    assert_eq!(content.text_content(), "");
+}
+
+/// Bug: `char_len()` panics on `Blocks(vec![])` (empty blocks array).
+#[test]
+fn test_empty_blocks_char_len_zero() {
+    let content = ToolResultContent::Blocks(vec![]);
+    assert_eq!(content.char_len(), 0);
+    assert_eq!(content.text_content(), "");
+}
+
+/// Bug: `has_images()` returns `true` when `Blocks` contains only `Text`
+/// entries (no images present).
+#[test]
+fn test_has_images_false_for_text_only_blocks() {
+    let content = ToolResultContent::Blocks(vec![ToolResultContentBlock::Text {
+        text: "just text".to_string(),
+    }]);
+    assert!(!content.has_images());
+}
