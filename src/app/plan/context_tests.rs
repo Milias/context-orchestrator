@@ -77,3 +77,57 @@ fn test_build_plan_section_renders_hierarchy() {
         );
     }
 }
+
+/// Bug: `build_plan_section` omits `depends on:` lines when `DependsOn` edges exist.
+/// If the dependency rendering branch is dead or the edge query is broken, the output
+/// will contain Plan A's title but never mention its prerequisite (Plan B).
+#[test]
+fn test_build_plan_section_renders_depends_on() {
+    let mut graph = ConversationGraph::new("sys");
+
+    // Plan B: the prerequisite.
+    let prerequisite_id = Uuid::new_v4();
+    graph.add_node(Node::WorkItem {
+        id: prerequisite_id,
+        kind: WorkItemKind::Plan,
+        title: "Setup database".to_string(),
+        status: WorkItemStatus::Active,
+        description: None,
+        created_at: Utc::now(),
+    });
+
+    // Plan A: depends on Plan B.
+    let dependent_id = Uuid::new_v4();
+    graph.add_node(Node::WorkItem {
+        id: dependent_id,
+        kind: WorkItemKind::Plan,
+        title: "Build API layer".to_string(),
+        status: WorkItemStatus::Todo,
+        description: None,
+        created_at: Utc::now(),
+    });
+
+    // Edge: A --DependsOn--> B.
+    graph
+        .add_edge(dependent_id, prerequisite_id, EdgeKind::DependsOn)
+        .unwrap();
+
+    let section =
+        super::build_plan_section(&graph).expect("should produce a section when plans exist");
+
+    // Plan A's title must appear.
+    assert!(
+        section.contains("Build API layer"),
+        "output should contain Plan A's title, got:\n{section}"
+    );
+
+    // The dependency line must reference Plan B.
+    assert!(
+        section.contains("depends on:"),
+        "output should contain a 'depends on:' line, got:\n{section}"
+    );
+    assert!(
+        section.contains("Setup database"),
+        "depends-on line should reference Plan B's title, got:\n{section}"
+    );
+}

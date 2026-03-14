@@ -149,6 +149,10 @@ impl ConversationGraph {
     /// Walk `SubtaskOf` edges upward, auto-transitioning parent status:
     /// - If all children are `Done` → parent becomes `Done`
     /// - If any child is `Active` and parent is `Todo` → parent becomes `Active`
+    ///
+    /// Propagation only moves status forward (`Todo` → `Active` → `Done`).
+    /// If a child reverts from `Done`, the parent is NOT automatically reverted.
+    /// This is intentional — completed plans should not auto-reopen.
     fn propagate_status(&mut self, child_id: Uuid) {
         let Some(parent_id) = self.parent_of(child_id) else {
             return;

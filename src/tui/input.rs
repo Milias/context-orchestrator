@@ -355,6 +355,7 @@ fn move_cursor_down(tui_state: &mut TuiState) {
 
 fn handle_context_panel_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     let on_tasks_tab = tui_state.context_tab == crate::tui::ContextTab::Tasks;
+    let on_work_tab = tui_state.context_tab == crate::tui::ContextTab::Work;
 
     match key.code {
         KeyCode::Left => {
@@ -367,6 +368,7 @@ fn handle_context_panel_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
             tui_state.context_list_offset = 0;
             tui_state.task_selection = None;
         }
+        // Tasks tab navigation.
         KeyCode::Up if on_tasks_tab && !tui_state.active_task_ids.is_empty() => {
             let cur = tui_state.task_selection.unwrap_or(0);
             tui_state.task_selection = Some(cur.saturating_sub(1));
@@ -383,6 +385,28 @@ fn handle_context_panel_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
                 }
             }
         }
+        // Work tab navigation + expand/collapse.
+        KeyCode::Up if on_work_tab && !tui_state.work_tree.visible_ids.is_empty() => {
+            let cur = tui_state.work_tree.selected.unwrap_or(0);
+            tui_state.work_tree.selected = Some(cur.saturating_sub(1));
+        }
+        KeyCode::Down if on_work_tab && !tui_state.work_tree.visible_ids.is_empty() => {
+            let max = tui_state.work_tree.visible_ids.len();
+            let cur = tui_state.work_tree.selected.unwrap_or(0);
+            tui_state.work_tree.selected = Some((cur + 1).min(max.saturating_sub(1)));
+        }
+        KeyCode::Enter if on_work_tab => {
+            if let Some(idx) = tui_state.work_tree.selected {
+                if let Some(&node_id) = tui_state.work_tree.visible_ids.get(idx) {
+                    if tui_state.work_tree.expanded.contains(&node_id) {
+                        tui_state.work_tree.expanded.remove(&node_id);
+                    } else {
+                        tui_state.work_tree.expanded.insert(node_id);
+                    }
+                }
+            }
+        }
+        // Generic scroll for other tabs.
         KeyCode::Up => {
             tui_state.context_list_offset = tui_state.context_list_offset.saturating_sub(1);
         }

@@ -255,6 +255,81 @@ fn test_children_of_returns_subtask_children() {
     );
 }
 
+/// Bug: `propagate_status` recursive call fails to cascade through 3+ levels.
+/// If Plan has child Task A, and Task A has child Task B, completing Task B
+/// must cascade upward: Task A becomes Done, then Plan becomes Done.
+/// A shallow propagation that only walks one level would leave the Plan as Todo.
+#[test]
+fn test_propagate_status_cascades_through_three_levels() {
+    let mut graph = ConversationGraph::new("sys");
+
+    // Level 0: Plan (root).
+    let plan_id = Uuid::new_v4();
+    graph.add_node(Node::WorkItem {
+        id: plan_id,
+        kind: WorkItemKind::Plan,
+        title: "Root plan".to_string(),
+        status: WorkItemStatus::Todo,
+        description: None,
+        created_at: Utc::now(),
+    });
+
+    // Level 1: Task A (only child of Plan).
+    let mid_task_id = Uuid::new_v4();
+    graph.add_node(Node::WorkItem {
+        id: mid_task_id,
+        kind: WorkItemKind::Task,
+        title: "Task A".to_string(),
+        status: WorkItemStatus::Todo,
+        description: None,
+        created_at: Utc::now(),
+    });
+    graph
+        .add_edge(mid_task_id, plan_id, EdgeKind::SubtaskOf)
+        .unwrap();
+
+    // Level 2: Task B (only child of Task A).
+    let leaf_task_id = Uuid::new_v4();
+    graph.add_node(Node::WorkItem {
+        id: leaf_task_id,
+        kind: WorkItemKind::Task,
+        title: "Task B".to_string(),
+        status: WorkItemStatus::Todo,
+        description: None,
+        created_at: Utc::now(),
+    });
+    graph
+        .add_edge(leaf_task_id, mid_task_id, EdgeKind::SubtaskOf)
+        .unwrap();
+
+    // Complete the leaf node (Task B).
+    graph
+        .update_work_item_status(leaf_task_id, WorkItemStatus::Done)
+        .unwrap();
+
+    // Task A should auto-complete (its only child is Done).
+    if let Some(Node::WorkItem { status, .. }) = graph.node(mid_task_id) {
+        assert_eq!(
+            *status,
+            WorkItemStatus::Done,
+            "Task A should auto-complete when its only child (Task B) is Done"
+        );
+    } else {
+        panic!("Task A node should exist and be a WorkItem");
+    }
+
+    // Plan should auto-complete (its only child, Task A, is now Done).
+    if let Some(Node::WorkItem { status, .. }) = graph.node(plan_id) {
+        assert_eq!(
+            *status,
+            WorkItemStatus::Done,
+            "Plan should cascade to Done through 3 levels"
+        );
+    } else {
+        panic!("Plan node should exist and be a WorkItem");
+    }
+}
+
 /// Bug: `add_tool_call` Pending→Running must produce a Pending snapshot.
 #[test]
 fn test_add_tool_call_captures_pending_snapshot() {

@@ -14,10 +14,17 @@ use uuid::Uuid;
 pub struct WorkTreeState {
     /// UUIDs of expanded items (collapsed by default).
     pub expanded: HashSet<Uuid>,
+    /// Currently selected item index in the flattened visible list.
+    pub selected: Option<usize>,
+    /// Node UUIDs in render order, rebuilt each frame. Used by the input
+    /// handler to map selection index → node UUID for expand/collapse.
+    pub visible_ids: Vec<Uuid>,
 }
 
 /// Render the Work tab as a tree of plans and tasks.
-pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, state: &WorkTreeState) {
+/// Rebuilds `state.visible_ids` each frame for input handler mapping.
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, state: &mut WorkTreeState) {
+    state.visible_ids = flatten_visible(graph, state);
     let mut items = Vec::new();
     let plans = collect_plans(graph);
 
@@ -30,6 +37,15 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, state: &
             "No plans yet. Use /plan <description> to create one.",
             Style::default().fg(Color::DarkGray),
         ))));
+    }
+
+    // Highlight the selected row.
+    if let Some(sel) = state.selected {
+        if sel < items.len() {
+            items[sel] = items[sel]
+                .clone()
+                .style(Style::default().bg(Color::DarkGray));
+        }
     }
 
     let list = List::new(items);
@@ -55,6 +71,7 @@ fn collect_plans(graph: &ConversationGraph) -> Vec<Uuid> {
 }
 
 /// Render a single work item and its children recursively.
+/// Does NOT update `visible_ids` — that is handled by `flatten_visible`.
 fn render_plan_item(
     graph: &ConversationGraph,
     node_id: &Uuid,
@@ -123,6 +140,37 @@ fn render_plan_item(
     }
 }
 
+/// Flatten the tree of visible node IDs in render order without requiring a `Frame`.
+/// Expanded items include their children recursively; collapsed items do not.
+/// Used by `render` internally and directly testable in isolation.
+pub fn flatten_visible(graph: &ConversationGraph, state: &WorkTreeState) -> Vec<Uuid> {
+    let mut ids = Vec::new();
+    let plans = collect_plans(graph);
+    for plan_id in &plans {
+        flatten_node(graph, plan_id, state, &mut ids);
+    }
+    ids
+}
+
+/// Recursively collect a node and its children (if expanded) into `ids`.
+fn flatten_node(
+    graph: &ConversationGraph,
+    node_id: &Uuid,
+    state: &WorkTreeState,
+    ids: &mut Vec<Uuid>,
+) {
+    if graph.node(*node_id).is_none() {
+        return;
+    }
+    ids.push(*node_id);
+    if state.expanded.contains(node_id) {
+        let children = graph.children_of(*node_id);
+        for child_id in &children {
+            flatten_node(graph, child_id, state, ids);
+        }
+    }
+}
+
 /// Map status to a display marker and color.
 fn status_style(status: &WorkItemStatus) -> (&'static str, Color) {
     match status {
@@ -131,3 +179,7 @@ fn status_style(status: &WorkItemStatus) -> (&'static str, Color) {
         WorkItemStatus::Done => ("v", Color::Green),
     }
 }
+
+#[cfg(test)]
+#[path = "work_tree_tests.rs"]
+mod tests;
