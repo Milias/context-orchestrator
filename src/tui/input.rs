@@ -1,5 +1,5 @@
 use crate::graph::{ConversationGraph, Node};
-use crate::tui::state::{FocusZone, TopTab};
+use crate::tui::state::FocusZone;
 use crate::tui::{CompletionCandidate, TuiState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -46,7 +46,7 @@ pub fn handle_key_event(
     // Number keys 1-3: switch tabs (only when not typing in input).
     if tui_state.nav.focus != FocusZone::Input {
         if let KeyCode::Char(c @ '1'..='3') = key.code {
-            if let Some(tab) = TopTab::from_number(c.to_digit(10).unwrap_or(0)) {
+            if let Some(tab) = crate::tui::state::TopTab::from_number(c.to_digit(10).unwrap_or(0)) {
                 tui_state.nav.active_tab = tab;
                 return Action::None;
             }
@@ -75,8 +75,7 @@ pub fn handle_key_event(
     }
 }
 
-/// Handle keys when the conversation panel is focused.
-/// Supports scrolling and the End key for autoscroll re-enable.
+/// Handle keys when the conversation panel is focused (scrolling).
 fn handle_conversation_key(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Up => Action::ScrollUp,
@@ -89,15 +88,27 @@ fn handle_conversation_key(key: KeyEvent) -> Action {
 }
 
 /// Handle keys when a tab's content area is focused.
-/// Placeholder — per-tab handlers will be added in later phases.
+/// Dispatches Up/Down navigation to the active tab.
 fn handle_tab_content_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
-    // TODO(Phase 2-4): dispatch by tui_state.nav.active_tab
-    let _ = (key, tui_state);
+    // Work tab: arrow key navigation through the tree.
+    if tui_state.nav.active_tab == crate::tui::state::TopTab::Work {
+        let max = tui_state.work_visible_count.saturating_sub(1);
+        return match key.code {
+            KeyCode::Up => {
+                tui_state.work_selected = tui_state.work_selected.saturating_sub(1);
+                Action::None
+            }
+            KeyCode::Down => {
+                tui_state.work_selected = (tui_state.work_selected + 1).min(max);
+                Action::None
+            }
+            _ => Action::None,
+        };
+    }
     Action::None
 }
 
-/// Handle key events when autocomplete popup is active.
-/// Returns `Some(Action)` if the key was consumed, `None` to fall through.
+/// Autocomplete popup keys. Returns `Some` if consumed, `None` to fall through.
 fn handle_autocomplete_key(key: &KeyEvent, tui_state: &mut TuiState) -> Option<Action> {
     if !tui_state.autocomplete.active || tui_state.autocomplete.candidates.is_empty() {
         return None;
@@ -285,7 +296,6 @@ fn update_autocomplete(tui_state: &mut TuiState, graph: &ConversationGraph) {
         .min(candidates.len().saturating_sub(1));
     tui_state.autocomplete.candidates = candidates;
 }
-
 /// Accept the selected completion: replace `/prefix` with `/name `.
 fn accept_completion(tui_state: &mut TuiState) {
     let Some(candidate) = tui_state

@@ -34,7 +34,7 @@ pub fn build_plan_section(graph: &ConversationGraph) -> Option<String> {
             continue;
         };
 
-        let status_label = status_marker(status);
+        let status_label = status_marker(*status);
         lines.push(format!("Plan: \"{title}\" [{status_label}] (id: {id})"));
 
         // Show dependencies.
@@ -69,7 +69,7 @@ fn render_children(
             id, title, status, ..
         }) = graph.node(*child_id)
         {
-            let marker = status_marker(status);
+            let marker = status_marker(*status);
             lines.push(format!("{indent}- [{marker}] {title} (id: {id})"));
             render_children(graph, *id, depth + 1, lines);
         }
@@ -77,7 +77,7 @@ fn render_children(
 }
 
 /// Map `WorkItemStatus` to a compact display marker.
-fn status_marker(status: &WorkItemStatus) -> &'static str {
+fn status_marker(status: WorkItemStatus) -> &'static str {
     match status {
         WorkItemStatus::Todo => "todo",
         WorkItemStatus::Active => "active",

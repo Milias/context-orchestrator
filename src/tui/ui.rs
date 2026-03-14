@@ -15,48 +15,43 @@ use ratatui::widgets::Paragraph;
 pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let area = frame.area();
 
-    // Conversation panel is visible when:
-    // - User has toggled it on (Ctrl+B), AND
-    // - Terminal is at least 80 columns wide (below that, no room).
+    // Conversation panel visible when toggled on and terminal >= 80 cols.
     let show_conversation = tui_state.nav.conversation_visible && area.width >= 80;
 
-    // Vertical split: tab bar (1) | content (flex) | status bar (1) | input (3).
-    let vertical = Layout::default()
+    // Outer vertical: tab bar (1) | main content (flex) | status bar (1).
+    let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(5),
             Constraint::Length(1),
-            Constraint::Length(3),
         ])
         .split(area);
 
-    let tab_bar_area = vertical[0];
-    let content_area = vertical[1];
-    let status_bar_area = vertical[2];
-    let input_area = vertical[3];
+    draw_tab_status_bar(frame, outer[0], graph, tui_state);
+    draw_status_bar(frame, outer[2], tui_state);
 
-    // Tab bar with status info merged into the right side.
-    draw_tab_status_bar(frame, tab_bar_area, graph, tui_state);
-
-    // Master horizontal split: left (tab content) | right (conversation).
+    // Horizontal: left (tab content) | right (conversation + input).
     if show_conversation {
         let horizontal = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(content_area);
+            .constraints([Constraint::Percentage(75), Constraint::Percentage(25)])
+            .split(outer[1]);
 
         render_tab_content(frame, horizontal[0], graph, tui_state);
-        conversation::render(frame, horizontal[1], graph, tui_state);
+
+        // Right column: conversation (flex) + input (3 rows).
+        let right_col = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(3)])
+            .split(horizontal[1]);
+
+        conversation::render(frame, right_col[0], graph, tui_state);
+        input_box::render(frame, right_col[1], area, tui_state);
     } else {
-        render_tab_content(frame, content_area, graph, tui_state);
+        // No conversation: tab content fills the area, no input box visible.
+        render_tab_content(frame, outer[1], graph, tui_state);
     }
-
-    // Status bar below content.
-    draw_status_bar(frame, status_bar_area, tui_state);
-
-    // Persistent input box.
-    input_box::render(frame, input_area, area, tui_state);
 }
 
 /// Dispatch to the active tab's renderer.
@@ -64,7 +59,7 @@ fn render_tab_content(
     frame: &mut Frame,
     area: Rect,
     graph: &ConversationGraph,
-    tui_state: &TuiState,
+    tui_state: &mut TuiState,
 ) {
     match tui_state.nav.active_tab {
         crate::tui::state::TopTab::Agents => {
@@ -176,6 +171,7 @@ fn build_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'static str)> {
 
     match tui_state.nav.focus {
         FocusZone::Conversation => {
+            shortcuts.insert(0, ("Ctrl+E", "tools"));
             shortcuts.insert(0, ("End", "auto-scroll"));
             shortcuts.insert(0, ("Up/Dn", "scroll"));
         }
@@ -183,7 +179,7 @@ fn build_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'static str)> {
             shortcuts.insert(0, ("Enter", "send"));
         }
         FocusZone::TabContent => {
-            shortcuts.insert(0, ("j/k", "nav"));
+            shortcuts.insert(0, ("Up/Dn", "nav"));
         }
     }
     shortcuts

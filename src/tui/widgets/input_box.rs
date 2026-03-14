@@ -55,8 +55,10 @@ fn render_autocomplete_popup(
         .unwrap_or(10);
 
     // +2 for borders, +2 for padding
+    // content_width is bounded by terminal width (u16), so truncation is safe.
     #[allow(clippy::cast_possible_truncation)]
     let popup_width = (content_width as u16 + 4).min(frame_area.width.saturating_sub(2));
+    // visible_count is capped at max_visible (5), so truncation is safe.
     #[allow(clippy::cast_possible_truncation)]
     let popup_height = visible_count as u16 + 2; // +2 for borders
 

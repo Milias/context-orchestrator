@@ -15,12 +15,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 /// Render the Activity tab content into the given area.
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    _tui_state: &TuiState,
-) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, _tui_state: &TuiState) {
     let block = Block::default().title("Activity").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -51,10 +46,7 @@ pub fn render(
         return;
     }
 
-    let lines: Vec<Line<'_>> = events
-        .iter()
-        .map(|e| render_event_row(e, width))
-        .collect();
+    let lines: Vec<Line<'_>> = events.iter().map(|e| render_event_row(e, width)).collect();
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
@@ -86,9 +78,9 @@ fn collect_tool_calls(
         {
             let (icon, icon_color) = tool_call_status_icon(status);
             let duration = match (status, completed_at) {
-                (ToolCallStatus::Pending, _) => format_duration(
-                    &crate::tui::widgets::tool_status::TaskDuration::Pending,
-                ),
+                (ToolCallStatus::Pending, _) => {
+                    format_duration(&crate::tui::widgets::tool_status::TaskDuration::Pending)
+                }
                 (ToolCallStatus::Running, _) => format_duration(&elapsed(now, *created_at)),
                 (_, Some(end)) => format_duration(&finished(*end, *created_at)),
                 (_, None) => format_duration(&finished(now, *created_at)),
@@ -155,9 +147,7 @@ fn collect_background_tasks(
                 _ => ("○", Color::DarkGray),
             };
             let duration = match status {
-                crate::graph::TaskStatus::Running => {
-                    format_duration(&elapsed(now, *created_at))
-                }
+                crate::graph::TaskStatus::Running => format_duration(&elapsed(now, *created_at)),
                 _ => format_duration(&finished(*updated_at, *created_at)),
             };
             events.push(EventRow {
@@ -189,7 +179,10 @@ fn render_event_row(event: &EventRow, width: usize) -> Line<'static> {
         Span::styled(time, dim),
         Span::raw(" "),
         Span::styled(format!("{:<8}", event.kind), dim),
-        Span::styled(format!("{} ", event.icon), Style::default().fg(event.icon_color)),
+        Span::styled(
+            format!("{} ", event.icon),
+            Style::default().fg(event.icon_color),
+        ),
         Span::styled(name, Style::default().fg(Color::White)),
         Span::raw(" ".repeat(padding)),
     ];

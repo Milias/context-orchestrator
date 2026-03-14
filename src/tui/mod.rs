@@ -220,6 +220,10 @@ pub struct TuiState {
     pub max_scroll: u16,
     /// Lifetime token usage displayed in the status bar (animated).
     pub token_usage: TokenUsage,
+    /// Selected item index in the Work tab tree view.
+    pub work_selected: usize,
+    /// Number of visible items in the Work tab (set each frame by the renderer).
+    pub work_visible_count: usize,
 }
 
 #[derive(Debug)]
@@ -248,6 +252,8 @@ impl TuiState {
             tool_display: ToolDisplayMode::Compact,
             max_scroll: 0,
             token_usage: TokenUsage::default(),
+            work_selected: 0,
+            work_visible_count: 0,
         }
     }
 }

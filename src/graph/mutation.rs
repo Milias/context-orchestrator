@@ -147,7 +147,7 @@ impl ConversationGraph {
         id: Uuid,
         new_status: WorkItemStatus,
     ) -> anyhow::Result<()> {
-        let status_for_event = new_status.clone();
+        let status_for_event = new_status;
         self.mutate_node(id, |node| match node {
             Node::WorkItem { status, .. } => {
                 *status = new_status;
@@ -195,7 +195,7 @@ impl ConversationGraph {
         });
 
         let parent_status = self.node(parent_id).and_then(|n| match n {
-            Node::WorkItem { status, .. } => Some(status.clone()),
+            Node::WorkItem { status, .. } => Some(*status),
             _ => None,
         });
 
@@ -210,7 +210,7 @@ impl ConversationGraph {
         if let Some(new_status) = new_parent_status {
             let _ = self.mutate_node(parent_id, |node| {
                 if let Node::WorkItem { status, .. } = node {
-                    *status = new_status.clone();
+                    *status = new_status;
                 }
                 Ok(())
             });

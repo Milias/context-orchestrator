@@ -6,18 +6,14 @@
 
 use crate::graph::node::{WorkItemKind, WorkItemStatus};
 use crate::graph::{ConversationGraph, Node};
+use crate::tui::widgets::tool_status::truncate;
 use crate::tui::TuiState;
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 /// Render the Work tab content into the given area.
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    _tui_state: &TuiState,
-) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let block = Block::default().title("Work").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -45,15 +41,17 @@ pub fn render(
         if lines.len() >= max_lines {
             break;
         }
-        render_item(&mut lines, item, 0, width, max_lines);
+        render_item(&mut lines, item, 0, width, max_lines, tui_state.work_selected);
     }
+
+    // Publish visible count so input handler can clamp selection.
+    tui_state.work_visible_count = lines.len();
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 /// A flattened work item with its children for tree rendering.
 struct WorkTreeItem {
-    id: uuid::Uuid,
     title: String,
     kind: WorkItemKind,
     status: WorkItemStatus,
@@ -106,11 +104,7 @@ fn build_item(graph: &ConversationGraph, node: &Node) -> WorkTreeItem {
     let deps: Vec<String> = graph
         .dependencies_of(*id)
         .iter()
-        .filter_map(|dep_id| {
-            graph
-                .node(*dep_id)
-                .map(|n| n.content().to_string())
-        })
+        .filter_map(|dep_id| graph.node(*dep_id).map(|n| n.content().to_string()))
         .collect();
 
     let child_ids = graph.children_of(*id);
@@ -122,65 +116,64 @@ fn build_item(graph: &ConversationGraph, node: &Node) -> WorkTreeItem {
     children.sort_by(|a, b| a.title.cmp(&b.title));
 
     WorkTreeItem {
-        id: *id,
         title: title.clone(),
         kind: *kind,
-        status: status.clone(),
+        status: *status,
         deps,
         children,
     }
 }
 
 /// Render a single item and its children recursively.
+/// `selected_idx` highlights the item at that flat index.
 fn render_item(
     lines: &mut Vec<Line<'static>>,
     item: &WorkTreeItem,
     depth: usize,
     width: usize,
     max_lines: usize,
+    selected_idx: usize,
 ) {
     if lines.len() >= max_lines {
         return;
     }
 
+    let is_selected = lines.len() == selected_idx;
     let indent = "  ".repeat(depth);
-    let status_icon = status_icon(&item.status);
+    let (icon, icon_color) = status_icon(item.status);
     let kind_prefix = match item.kind {
         WorkItemKind::Plan => "v ",
         WorkItemKind::Task => "",
     };
 
-    let (icon, icon_color) = status_icon;
-    let _ = item.id; // Will be used for selection in future phases.
-
     let title_budget = width.saturating_sub(indent.len() + 4 + kind_prefix.len());
-    let title = if item.title.len() > title_budget {
-        let mut t: String = item.title.chars().take(title_budget.saturating_sub(1)).collect();
-        t.push('…');
-        t
+    let title = truncate(&item.title, title_budget);
+
+    let title_style = if is_selected {
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Rgb(40, 40, 60))
+            .add_modifier(Modifier::BOLD)
     } else {
-        item.title.clone()
+        Style::default().fg(Color::White)
     };
 
     let mut spans = vec![
         Span::raw(indent.clone()),
         Span::styled(format!("{icon} "), Style::default().fg(icon_color)),
         Span::styled(kind_prefix, Style::default().fg(Color::DarkGray)),
-        Span::styled(title, Style::default().fg(Color::White)),
+        Span::styled(title, title_style),
     ];
+    if is_selected {
+        spans.insert(0, Span::styled("→ ", Style::default().fg(Color::Cyan)));
+    }
 
     // Show dependency annotations.
     if !item.deps.is_empty() {
         let dep_names: String = item
             .deps
             .iter()
-            .map(|d| {
-                if d.len() > 20 {
-                    format!("{}…", &d[..19])
-                } else {
-                    d.clone()
-                }
-            })
+            .map(|d| truncate(d, 20))
             .collect::<Vec<_>>()
             .join(", ");
         spans.push(Span::styled(
@@ -193,12 +186,12 @@ fn render_item(
 
     // Render children.
     for child in &item.children {
-        render_item(lines, child, depth + 1, width, max_lines);
+        render_item(lines, child, depth + 1, width, max_lines, selected_idx);
     }
 }
 
 /// Status icon and color for a work item.
-fn status_icon(status: &WorkItemStatus) -> (&'static str, Color) {
+fn status_icon(status: WorkItemStatus) -> (&'static str, Color) {
     match status {
         WorkItemStatus::Todo => ("[ ]", Color::DarkGray),
         WorkItemStatus::Active => ("[*]", Color::Yellow),

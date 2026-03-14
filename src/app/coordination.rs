@@ -16,16 +16,16 @@ use super::App;
 
 impl App {
     /// User answered a pending question. Creates an `Answer` node in the graph.
+    /// Status/error updates flow through the `EventBus` (via `QuestionAnswered`
+    /// or `ErrorOccurred`).
     pub(super) fn handle_user_answer(&mut self, question_id: Uuid, text: String) {
         let mut g = self.graph.write();
-        match g.add_answer(question_id, text) {
-            Ok(_answer_id) => {
-                self.tui_state.status_message = None;
-            }
-            Err(e) => {
-                self.tui_state.error_message = Some(format!("Answer failed: {e}"));
-            }
+        if let Err(e) = g.add_answer(question_id, text) {
+            g.emit(GraphEvent::ErrorOccurred {
+                message: format!("Answer failed: {e}"),
+            });
         }
+        // Status clears via QuestionAnswered → handle_tui_event.
     }
 
     /// React to graph events. Effects only mutate the graph; all cross-component
@@ -50,6 +50,7 @@ impl App {
                 tracing::debug!("Question {question_id} answered by {answer_id}");
                 if self.pending_user_question == Some(*question_id) {
                     self.pending_user_question = None;
+                    self.tui_state.status_message = None;
                 }
                 self.check_ready_work();
             }
@@ -217,6 +218,8 @@ impl App {
                 }
                 drop(g);
                 self.pending_user_question = Some(question_id);
+                // This TUI mutation is event-driven: route_question is called
+                // from handle_graph_event → QuestionAdded.
                 let g = self.graph.read();
                 let content = g
                     .node(question_id)

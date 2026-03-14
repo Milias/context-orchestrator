@@ -130,7 +130,7 @@ fn apply_update_work_item(
     }
 
     if let Some(status) = new_status {
-        if let Err(e) = graph.update_work_item_status(id, status.clone()) {
+        if let Err(e) = graph.update_work_item_status(id, *status) {
             return ToolResultContent::text(format!("Error updating status: {e}"));
         }
     }

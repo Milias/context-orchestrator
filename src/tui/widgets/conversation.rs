@@ -40,7 +40,10 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         clippy::cast_lossless
     )]
     {
-        let total_height: u16 = entries.iter().map(|e| e.height() as u16).sum();
+        // Accumulate in u32 to avoid u16 overflow on very long conversations,
+        // then clamp to u16 for scroll offset arithmetic.
+        let total_height_u32: u32 = entries.iter().map(|e| e.height() as u32).sum();
+        let total_height: u16 = total_height_u32.min(u32::from(u16::MAX)) as u16;
         let max_scroll = total_height.saturating_sub(inner.height);
         // Publish max_scroll so handle_scroll can clamp immediately.
         tui_state.max_scroll = max_scroll;

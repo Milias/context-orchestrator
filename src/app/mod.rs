@@ -179,7 +179,6 @@ impl App {
     }
 
     /// Dispatch a user action from the input handler.
-    /// Dispatch a user action from the input handler.
     fn handle_action(
         &mut self,
         action: Action,
