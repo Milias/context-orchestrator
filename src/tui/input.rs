@@ -8,6 +8,8 @@ pub enum Action {
     None,
     Quit,
     SendMessage(String),
+    /// Dismiss the pending user question without answering.
+    DismissQuestion,
     ScrollUp,
     ScrollDown,
     PageUp,
@@ -220,6 +222,7 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState, graph: &Conversatio
         KeyCode::PageUp => Action::PageUp,
         KeyCode::PageDown => Action::PageDown,
         KeyCode::End => Action::ScrollToBottom,
+        KeyCode::Esc if tui_state.pending_question_text.is_some() => Action::DismissQuestion,
         _ => Action::None,
     };
 

@@ -166,8 +166,13 @@ fn build_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'static str)> {
 
     match tui_state.nav.focus {
         FocusZone::ChatPanel => {
-            shortcuts.insert(0, ("Ctrl+E", "tools"));
-            shortcuts.insert(0, ("Enter", "send"));
+            if tui_state.pending_question_text.is_some() {
+                shortcuts.insert(0, ("Esc", "dismiss"));
+                shortcuts.insert(0, ("Enter", "answer"));
+            } else {
+                shortcuts.insert(0, ("Ctrl+E", "tools"));
+                shortcuts.insert(0, ("Enter", "send"));
+            }
         }
         FocusZone::TabContent => {
             shortcuts.insert(0, ("Up/Dn", "nav"));

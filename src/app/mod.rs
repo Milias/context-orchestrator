@@ -1,6 +1,6 @@
 mod agent;
 mod context;
-mod coordination;
+mod event_dispatch;
 mod plan;
 mod qa;
 mod task_handler;
@@ -8,6 +8,7 @@ mod think_splitter;
 
 use crate::config::AppConfig;
 use crate::graph::event::GraphEvent;
+use crate::graph::node::QuestionStatus;
 use crate::graph::{ConversationGraph, Node, Role};
 use crate::llm::LlmProvider;
 use crate::persistence::{self, ConversationMetadata};
@@ -204,6 +205,15 @@ impl App {
             Action::ScrollUp | Action::ScrollDown | Action::PageUp | Action::PageDown => {
                 self.handle_scroll(&action, page_size);
             }
+            Action::DismissQuestion => {
+                if let Some(q_id) = self.pending_user_question.take() {
+                    let mut g = self.graph.write();
+                    if let Err(e) = g.update_question_status(q_id, QuestionStatus::TimedOut) {
+                        tracing::warn!("Failed to dismiss question {q_id}: {e}");
+                    }
+                    g.release_claim(q_id);
+                }
+            }
             Action::ScrollToBottom => {
                 self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
                 self.tui_state.scroll_offset = u16::MAX;
@@ -242,10 +252,11 @@ impl App {
         }
     }
 
-    /// Send a message: add user node to graph, spawn agent loop, return immediately.
-    /// TUI feedback (agent display, scroll) flows through the `EventBus` — the
-    /// emitted `AgentPhaseChanged` event will create the display on the next
-    /// `drain_pending_events` pass before the frame is drawn.
+    /// Send a message: add user node to graph, spawn or wake agent loop.
+    ///
+    /// If a continuous agent is already running (idle or active), the `MessageAdded`
+    /// event from `add_message()` wakes it. If no agent exists, spawn one.
+    /// TUI feedback flows through the `EventBus`.
     fn handle_send_message(&mut self, text: String) -> anyhow::Result<()> {
         let trigger_text = text.clone();
         let user_msg_id = {
@@ -270,30 +281,33 @@ impl App {
         self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
         self.tui_state.scroll_offset = u16::MAX;
 
-        let agent_id = Uuid::new_v4();
-        let (tool_rx, cancel_token) = self.agents.register(agent_id);
-        self.agents.primary_agent_id = Some(agent_id);
+        // Spawn agent only if none is running. Existing agents wake from
+        // the `MessageAdded` event emitted by `add_message()` above.
+        if self.agents.primary_agent_id.is_none() {
+            let agent_id = Uuid::new_v4();
+            let (tool_rx, cancel_token) = self.agents.register(agent_id);
+            self.agents.primary_agent_id = Some(agent_id);
 
-        // Emit an initial phase event for immediate TUI feedback.
-        // Processed by `drain_pending_events` before the next frame.
-        self.graph.read().emit(GraphEvent::AgentPhaseChanged {
-            agent_id,
-            phase: AgentPhase::CountingTokens,
-        });
+            // Emit an initial phase event for immediate TUI feedback.
+            self.graph.read().emit(GraphEvent::AgentPhaseChanged {
+                agent_id,
+                phase: AgentPhase::CountingTokens,
+            });
 
-        let loop_config = agent::AgentLoopConfig {
-            graph: Arc::clone(&self.graph),
-            provider: Arc::clone(&self.provider),
-            model: self.config.anthropic_model.clone(),
-            max_tokens: self.config.max_tokens,
-            max_context_tokens: self.config.max_context_tokens,
-            max_tool_loop_iterations: self.config.max_tool_loop_iterations,
-            tools: crate::tool_executor::registered_tool_definitions(),
-            anchor_id: user_msg_id,
-            agent_id,
-        };
+            let loop_config = agent::AgentLoopConfig {
+                graph: Arc::clone(&self.graph),
+                provider: Arc::clone(&self.provider),
+                model: self.config.anthropic_model.clone(),
+                max_tokens: self.config.max_tokens,
+                max_context_tokens: self.config.max_context_tokens,
+                max_tool_loop_iterations: self.config.max_tool_loop_iterations,
+                tools: crate::tool_executor::registered_tool_definitions(),
+                anchor_id: user_msg_id,
+                agent_id,
+            };
 
-        agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
+            agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
+        }
 
         Ok(())
     }

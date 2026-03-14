@@ -77,8 +77,12 @@ pub enum GraphEvent {
     },
     /// Agent loop finished (all iterations complete).
     AgentFinished { agent_id: Uuid },
+    /// Agent entered idle state — waiting for new work events.
+    AgentIdle { agent_id: Uuid },
 
     // ── System events ───────────────────────────────────────────────
+    /// A question was routed to the user for answering. TUI should show the prompt.
+    QuestionRoutedToUser { question_id: Uuid, content: String },
     /// A non-fatal error to display in the status bar.
     ErrorOccurred { message: String },
     /// Fresh lifetime token totals from the analytics DB.

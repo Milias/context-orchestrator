@@ -1,3 +1,4 @@
+pub mod event_handler;
 pub mod input;
 pub mod state;
 pub mod tabs;
@@ -232,6 +233,10 @@ pub struct TuiState {
     pub agents_scroll: usize,
     /// Total line count in the Agents tab (set each frame by the renderer).
     pub agents_total: usize,
+    /// Text of the pending user question. Set by `QuestionRoutedToUser` event,
+    /// cleared by `QuestionAnswered` or `QuestionStatusChanged(TimedOut)`.
+    /// When `Some`, the input box shows answer mode.
+    pub pending_question_text: Option<String>,
 }
 
 #[derive(Debug)]
@@ -266,6 +271,7 @@ impl TuiState {
             activity_total: 0,
             agents_scroll: 0,
             agents_total: 0,
+            pending_question_text: None,
         }
     }
 }

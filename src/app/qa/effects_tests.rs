@@ -30,7 +30,7 @@ fn test_ask_creates_question_with_asks_edge() {
     assert!(result.is_some(), "ask tool should produce enriched content");
 
     // Find the created Question node.
-    let questions = graph.pending_questions();
+    let questions = graph.open_questions();
     assert_eq!(questions.len(), 1, "exactly one Question should exist");
     let q_id = questions[0].id();
 
@@ -82,7 +82,7 @@ fn test_ask_with_about_creates_about_edge() {
 
     super::apply(&mut graph, tc_id);
 
-    let q_id = graph.pending_questions()[0].id();
+    let q_id = graph.open_questions()[0].id();
 
     // Verify About edge: Question → WorkItem.
     let about_edges: Vec<_> = graph
@@ -127,7 +127,7 @@ fn test_ask_with_invalid_about_skips_edge() {
     assert!(result.is_some(), "should still return enriched content");
 
     // Question created despite invalid about_node_id.
-    let questions = graph.pending_questions();
+    let questions = graph.open_questions();
     assert_eq!(questions.len(), 1);
 
     // No About edges.

@@ -5,7 +5,7 @@
 
 use super::event::GraphEvent;
 use super::node::QuestionStatus;
-use super::{ConversationGraph, EdgeKind, Node, TaskStatus, WorkItemStatus};
+use super::{ConversationGraph, EdgeKind, Node};
 use uuid::Uuid;
 
 impl ConversationGraph {
@@ -18,60 +18,6 @@ impl ConversationGraph {
                 if *status != QuestionStatus::Answered && *status != QuestionStatus::TimedOut
             )
         })
-    }
-
-    /// All `Question` nodes with `Pending` status (available for routing/claiming).
-    pub fn pending_questions(&self) -> Vec<&Node> {
-        self.nodes_by(|n| {
-            matches!(
-                n,
-                Node::Question {
-                    status: QuestionStatus::Pending,
-                    ..
-                }
-            )
-        })
-    }
-
-    /// Whether a node counts as "resolved" for `DependsOn` purposes.
-    /// A resolved node no longer blocks dependents.
-    pub fn is_resolved(&self, node_id: Uuid) -> bool {
-        matches!(
-            self.node(node_id),
-            Some(
-                Node::WorkItem {
-                    status: WorkItemStatus::Done,
-                    ..
-                } | Node::Question {
-                    status: QuestionStatus::Answered,
-                    ..
-                } | Node::BackgroundTask {
-                    status: TaskStatus::Completed,
-                    ..
-                }
-            )
-        )
-    }
-
-    /// All nodes whose `DependsOn` targets are all resolved and that have no
-    /// `ClaimedBy` edge. These are ready for an agent to claim and process.
-    ///
-    /// Nodes with zero dependencies are excluded — they were never blocked and
-    /// don't participate in the scheduling system. Only nodes that had blocking
-    /// prerequisites (and those prerequisites are now resolved) appear here.
-    pub fn ready_unclaimed_nodes(&self) -> Vec<Uuid> {
-        self.nodes
-            .keys()
-            .copied()
-            .filter(|&id| {
-                let deps = self.dependencies_of(id);
-                if deps.is_empty() {
-                    return false;
-                }
-                let all_resolved = deps.iter().all(|&dep| self.is_resolved(dep));
-                all_resolved && !self.is_claimed(id)
-            })
-            .collect()
     }
 
     /// Whether a node has a `ClaimedBy` edge (is currently assigned to an agent).

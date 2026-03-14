@@ -147,46 +147,6 @@ fn test_try_claim_prevents_double_claim() {
     assert!(graph.is_claimed(q_id));
 }
 
-/// Bug: node with `DependsOn` → unanswered `Question` appears in ready set.
-/// It should be excluded until the question is answered.
-#[test]
-fn test_ready_unclaimed_excludes_unanswered_dep() {
-    let mut graph = ConversationGraph::new("system");
-
-    // Create a question (not yet answered)
-    let q_id = add_question(&mut graph, QuestionStatus::Pending);
-
-    // Create a work item that depends on the question
-    let wi_id = Uuid::new_v4();
-    graph.add_node(Node::WorkItem {
-        id: wi_id,
-        kind: WorkItemKind::Task,
-        title: "blocked task".to_string(),
-        status: WorkItemStatus::Todo,
-        description: None,
-        created_at: Utc::now(),
-    });
-    let _ = graph.add_edge(wi_id, q_id, EdgeKind::DependsOn);
-
-    // Work item should NOT be ready (question unanswered)
-    assert!(
-        !graph.ready_unclaimed_nodes().contains(&wi_id),
-        "should not be ready while question is Pending"
-    );
-
-    // Answer the question
-    graph
-        .update_question_status(q_id, QuestionStatus::Claimed)
-        .unwrap();
-    graph.add_answer(q_id, "done".to_string()).unwrap();
-
-    // Now the work item should be ready
-    assert!(
-        graph.ready_unclaimed_nodes().contains(&wi_id),
-        "should be ready after question is Answered"
-    );
-}
-
 /// Bug: stale `ClaimedBy` edges survive restart. `release_all_claims` must
 /// clear all of them so crashed agents' work becomes re-claimable.
 #[test]

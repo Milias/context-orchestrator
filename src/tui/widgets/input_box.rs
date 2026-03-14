@@ -5,17 +5,28 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 /// Render the persistent input box at the bottom of the screen.
-/// Highlights the border when the input zone has keyboard focus.
+/// Shows answer mode (cyan border, question text) when a user question is pending.
 pub fn render(frame: &mut Frame, area: Rect, frame_area: Rect, tui_state: &TuiState) {
-    let border_color = if tui_state.nav.focus == FocusZone::ChatPanel {
-        Color::Yellow
+    let (title, border_color) = if let Some(ref q) = tui_state.pending_question_text {
+        let max_len = 60;
+        let truncated = if q.len() > max_len {
+            format!("{}...", &q[..max_len - 3])
+        } else {
+            q.clone()
+        };
+        (format!("Answer: {truncated}"), Color::Cyan)
     } else {
-        Color::DarkGray
+        let color = if tui_state.nav.focus == FocusZone::ChatPanel {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
+        ("Message".to_string(), color)
     };
 
     let input = Paragraph::new(tui_state.input_text.as_str()).block(
         Block::default()
-            .title("Message (Enter: send | Shift+Enter: newline | Ctrl+Q: quit)")
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color)),
     );

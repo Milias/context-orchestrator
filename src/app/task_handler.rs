@@ -173,6 +173,10 @@ impl App {
                     token,
                 );
             }
+            AgentEvent::Idle => {
+                // TUI update flows through EventBus — clears agent display.
+                self.graph.read().emit(GraphEvent::AgentIdle { agent_id });
+            }
             AgentEvent::Finished => {
                 let phase_ids = self.agents.drain_phases(agent_id);
                 for pid in phase_ids {
@@ -185,7 +189,6 @@ impl App {
                     .edges
                     .retain(|e| !(e.kind == EdgeKind::ClaimedBy && e.to == agent_id));
                 let _ = self.save();
-                self.check_ready_work();
                 // TUI update flows through EventBus.
                 self.graph
                     .read()

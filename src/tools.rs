@@ -83,16 +83,18 @@ pub fn parse_user_trigger_args(tool_name: &str, args: &str) -> ToolCallArguments
             path: None,
         },
         ToolName::Ask => {
-            // /ask user What JWT library? → destination=User, question="What JWT library?"
-            // /ask llm Should we use JWT? → destination=Llm
+            // /ask What is X?        → destination=Llm (default), question="What is X?"
+            // /ask user What is X?   → destination=User, question="What is X?"
+            // /ask llm What is X?    → destination=Llm,  question="What is X?"
             use crate::graph::node::QuestionDestination;
-            let mut parts = args.splitn(2, ' ');
-            let dest_str = parts.next().unwrap_or("user");
-            let question = parts.next().unwrap_or("").to_string();
-            let destination = match dest_str {
-                "llm" => QuestionDestination::Llm,
-                "auto" => QuestionDestination::Auto,
-                _ => QuestionDestination::User,
+            let (destination, question) = match args.split_once(' ') {
+                Some((first, rest)) => match first {
+                    "user" => (QuestionDestination::User, rest.to_string()),
+                    "llm" => (QuestionDestination::Llm, rest.to_string()),
+                    "auto" => (QuestionDestination::Auto, rest.to_string()),
+                    _ => (QuestionDestination::Llm, args.to_string()),
+                },
+                None => (QuestionDestination::Llm, args.to_string()),
             };
             ToolCallArguments::Ask {
                 question,

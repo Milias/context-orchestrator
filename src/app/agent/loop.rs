@@ -1,8 +1,11 @@
-//! Background agent loop: context building → LLM streaming → tool dispatch → repeat.
+//! Continuous agent loop: context building → LLM streaming → tool dispatch → idle → repeat.
 //!
-//! Each agent loop runs as an independent tokio task. It communicates with the
-//! main loop via [`AgentContext`] (events out) and a tool-result receiver (results in).
+//! The agent loop runs as a persistent tokio task that stays alive for the
+//! entire conversation. After completing an activation (`EndTurn` or max
+//! iterations), it enters idle state and waits for wake events (new user
+//! messages or claimed work). It only exits on cancellation or shutdown.
 
+use crate::graph::event::GraphEvent;
 use crate::graph::tool::result::ToolResultContent;
 use crate::graph::tool::types::ToolCallStatus;
 use crate::graph::{parse_tool_arguments, EdgeKind, Node, Role, StopReason};
@@ -17,7 +20,7 @@ use chrono::Utc;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -30,12 +33,13 @@ pub(in crate::app) struct AgentLoopConfig {
     pub max_context_tokens: u32,
     pub max_tool_loop_iterations: usize,
     pub tools: Vec<ToolDefinition>,
-    /// The anchor node ID (user message).
+    /// The anchor node ID (user message that triggered the first activation).
     pub anchor_id: Uuid,
     pub agent_id: Uuid,
 }
 
-/// Spawn the agent loop as a background task.
+/// Spawn the agent loop as a persistent background task.
+/// The loop stays alive between activations, waiting for wake events.
 pub(in crate::app) fn spawn_agent_loop(
     config: AgentLoopConfig,
     task_tx: mpsc::UnboundedSender<TaskMessage>,
@@ -70,6 +74,20 @@ const MAX_CONTINUATIONS: u32 = 3;
 
 use crate::tasks::TaskMessage;
 
+/// Check whether a graph event should wake the agent from idle.
+fn is_wake_event(event: &GraphEvent, agent_id: Uuid) -> bool {
+    match event {
+        GraphEvent::MessageAdded {
+            role: Role::User, ..
+        } => true,
+        GraphEvent::NodeClaimed {
+            agent_id: claimed_for,
+            ..
+        } => *claimed_for == agent_id,
+        _ => false,
+    }
+}
+
 async fn run_agent_loop(
     graph: &SharedGraph,
     provider: Arc<dyn LlmProvider>,
@@ -79,6 +97,12 @@ async fn run_agent_loop(
     mut tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
     cancel_token: CancellationToken,
 ) -> anyhow::Result<()> {
+    // Subscribe to graph events for wake-on-idle.
+    let mut event_rx = graph
+        .read()
+        .subscribe_events()
+        .unwrap_or_else(|| broadcast::channel(1).1);
+
     // Fire-and-forget: token counting is independent of context building.
     spawn_count_user_tokens(
         Arc::clone(graph),
@@ -95,6 +119,61 @@ async fn run_agent_loop(
         tools: config.tools.clone(),
     };
 
+    // Outer loop: activations. Each activation processes work until EndTurn.
+    // Between activations, the agent idles waiting for wake events.
+    loop {
+        let activation_result = run_activation(
+            graph,
+            &provider,
+            &config,
+            ctx,
+            &mut tool_result_rx,
+            &cancel_token,
+            &chat_config,
+        )
+        .await?;
+
+        if cancel_token.is_cancelled() || activation_result == ActivationResult::Cancelled {
+            return Ok(());
+        }
+
+        // Enter idle: notify TUI, then wait for wake events.
+        ctx.send(AgentEvent::Idle);
+
+        loop {
+            tokio::select! {
+                result = event_rx.recv() => {
+                    match result {
+                        Ok(ref event) if is_wake_event(event, config.agent_id) => break,
+                        Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                        _ => {} // ignore irrelevant events or lagged
+                    }
+                }
+                () = cancel_token.cancelled() => return Ok(()),
+            }
+        }
+    }
+}
+
+/// Result of a single activation (one bounded inner loop).
+#[derive(Debug, PartialEq, Eq)]
+enum ActivationResult {
+    /// Agent completed normally (`EndTurn` or max iterations).
+    Completed,
+    /// Agent was cancelled.
+    Cancelled,
+}
+
+/// Run a single activation: bounded context→LLM→tools loop.
+async fn run_activation(
+    graph: &SharedGraph,
+    provider: &Arc<dyn LlmProvider>,
+    config: &AgentLoopConfig,
+    ctx: &AgentContext,
+    tool_result_rx: &mut mpsc::UnboundedReceiver<AgentToolResult>,
+    cancel_token: &CancellationToken,
+    chat_config: &ChatConfig,
+) -> anyhow::Result<ActivationResult> {
     let mut continuation_count: u32 = 0;
 
     for _ in 0..config.max_tool_loop_iterations {
@@ -128,11 +207,11 @@ async fn run_agent_loop(
         };
 
         let result = agent_streaming::stream_llm_response(
-            &provider,
+            provider,
             messages,
             &loop_config,
             ctx,
-            &cancel_token,
+            cancel_token,
         )
         .await?;
 
@@ -141,7 +220,7 @@ async fn run_agent_loop(
         }
 
         if result.cancelled || (result.response.is_empty() && result.tool_use_records.is_empty()) {
-            break;
+            return Ok(ActivationResult::Cancelled);
         }
 
         let assistant_id = apply_iteration_to_graph(graph, &result, &loop_config, ctx)?;
@@ -156,7 +235,7 @@ async fn run_agent_loop(
                 ctx.send(AgentEvent::Error(
                     "Max continuations reached after repeated truncation".into(),
                 ));
-                break;
+                return Ok(ActivationResult::Completed);
             }
         } else {
             continuation_count = 0;
@@ -167,19 +246,18 @@ async fn run_agent_loop(
         } else if is_truncated {
             continue;
         } else {
-            break;
+            return Ok(ActivationResult::Completed);
         }
 
         let timed_out =
-            dispatch_and_wait_for_tools(graph, &result, assistant_id, &mut tool_result_rx, ctx)
-                .await;
+            dispatch_and_wait_for_tools(graph, &result, assistant_id, tool_result_rx, ctx).await;
 
         if timed_out {
-            break;
+            return Ok(ActivationResult::Completed);
         }
     }
 
-    Ok(())
+    Ok(ActivationResult::Completed)
 }
 
 /// Spawn token counting as a fire-and-forget task.

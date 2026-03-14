@@ -132,6 +132,12 @@ impl ConversationGraph {
         rx
     }
 
+    /// Subscribe to the event bus. Returns `None` if the bus is not initialized.
+    /// Used by the agent loop to receive wake events while idle.
+    pub fn subscribe_events(&self) -> Option<tokio::sync::broadcast::Receiver<event::GraphEvent>> {
+        self.event_bus.as_ref().map(event::EventBus::subscribe)
+    }
+
     /// Emit a graph event to all subscribers. No-op if the bus is not initialized.
     pub(crate) fn emit(&self, event: event::GraphEvent) {
         if let Some(bus) = &self.event_bus {

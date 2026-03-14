@@ -86,6 +86,8 @@ pub enum AgentEvent {
         tool_call_id: Uuid,
         arguments: ToolCallArguments,
     },
+    /// Agent entered idle state — waiting for new work events.
+    Idle,
     Finished,
     Error(String),
 }

@@ -282,7 +282,9 @@ impl ConversationGraph {
                         QuestionStatus::Claimed | QuestionStatus::TimedOut
                     ) | (
                         QuestionStatus::Claimed,
-                        QuestionStatus::Answered | QuestionStatus::PendingApproval
+                        QuestionStatus::Answered
+                            | QuestionStatus::PendingApproval
+                            | QuestionStatus::TimedOut
                     ) | (
                         QuestionStatus::PendingApproval,
                         QuestionStatus::Answered | QuestionStatus::Rejected
