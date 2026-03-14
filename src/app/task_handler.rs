@@ -104,6 +104,8 @@ impl App {
                                 text: String::new(),
                                 is_thinking: false,
                             };
+                            // Reset reveal so the new iteration animates from scratch
+                            d.revealed_chars = 0;
                         }
                     }
                     AgentPhase::ExecutingTools { .. } => {
@@ -335,6 +337,8 @@ impl App {
                 Some("Response truncated — continuing automatically".to_string());
         }
         if let Some(ref mut d) = self.tui_state.agent_display {
+            // Snap reveal to full before committing — no trailing animation
+            d.revealed_chars = usize::MAX;
             d.iteration_node_ids.push(assistant_id);
             if stop_reason == Some(StopReason::ToolUse) {
                 d.phase = AgentVisualPhase::ExecutingTools;

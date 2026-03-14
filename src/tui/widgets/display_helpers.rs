@@ -7,6 +7,98 @@ use std::path::Path;
 
 const MAX_RESULT_LINES: usize = 20;
 
+/// Brightness factors for the fade-in gradient. Index 0 = char closest to the
+/// reveal frontier (dimmest), index 7 = furthest faded char (almost full).
+const FADE_FACTORS: [f32; 8] = [0.15, 0.15, 0.40, 0.40, 0.70, 0.70, 0.90, 0.90];
+
+/// Dim the last `fade_width` characters of rendered text to create a fade-in
+/// effect at the reveal frontier. Characters closest to the end are dimmest;
+/// characters further back transition to full brightness.
+pub fn apply_reveal_fade(text: &mut Text<'static>, fade_width: usize) {
+    let mut remaining = fade_width;
+    for line in text.lines.iter_mut().rev() {
+        if remaining == 0 {
+            break;
+        }
+        let old_spans: Vec<Span<'static>> = line.spans.drain(..).collect();
+        let mut new_spans: Vec<Span<'static>> = Vec::new();
+
+        for span in old_spans.into_iter().rev() {
+            if remaining == 0 {
+                new_spans.push(span);
+                continue;
+            }
+            let char_count = span.content.chars().count();
+            if char_count <= remaining {
+                let factor = fade_factor(remaining, fade_width);
+                new_spans.push(Span::styled(span.content, dim_style(span.style, factor)));
+                remaining = remaining.saturating_sub(char_count);
+            } else {
+                // Split: last `remaining` chars get dimmed, rest stays normal
+                let split_at = char_count - remaining;
+                let byte_boundary = span
+                    .content
+                    .char_indices()
+                    .nth(split_at)
+                    .map_or(span.content.len(), |(i, _)| i);
+                let normal_part: String = span.content[..byte_boundary].into();
+                let dimmed_part: String = span.content[byte_boundary..].into();
+                let factor = fade_factor(remaining, fade_width);
+                new_spans.push(Span::styled(dimmed_part, dim_style(span.style, factor)));
+                new_spans.push(Span::styled(normal_part, span.style));
+                remaining = 0;
+            }
+        }
+
+        new_spans.reverse();
+        line.spans = new_spans;
+    }
+}
+
+/// Look up the brightness factor for a character based on its position in the
+/// fade zone. `remaining` = how many fade chars are left to process (starts at
+/// `fade_width`, decreases). The frontier (remaining == `fade_width`) maps to
+/// the dimmest factor; the oldest faded char (remaining == 1) is the brightest.
+fn fade_factor(remaining: usize, fade_width: usize) -> f32 {
+    // distance_from_frontier: 0 = right at the frontier (dimmest)
+    let distance_from_frontier = fade_width.saturating_sub(remaining);
+    FADE_FACTORS
+        .get(distance_from_frontier)
+        .copied()
+        .unwrap_or(1.0)
+}
+
+/// Compute a dimmed version of a style by reducing foreground brightness.
+/// For `Rgb` colors the hue is preserved. Named colors fall back to the
+/// terminal `DIM` modifier.
+pub(super) fn dim_style(style: Style, factor: f32) -> Style {
+    match style.fg {
+        Some(Color::Rgb(r, g, b)) => style.fg(Color::Rgb(
+            dim_channel(r, factor),
+            dim_channel(g, factor),
+            dim_channel(b, factor),
+        )),
+        Some(Color::Reset) | None => {
+            // Default foreground — assume ~white on dark terminal
+            let v = dim_channel(240, factor);
+            style.fg(Color::Rgb(v, v, v))
+        }
+        _ => style.add_modifier(Modifier::DIM),
+    }
+}
+
+/// Scale a single colour channel by `factor`, clamped to `[0, 255]`.
+fn dim_channel(channel: u8, factor: f32) -> u8 {
+    let scaled = f32::from(channel) * factor;
+    // factor is in [0.0, 1.0] and channel in [0, 255], so the product fits in
+    // u8 after rounding. Clamp defensively for safety.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // Justified: scaled ∈ [0.0, 255.0] because factor ∈ [0.0, 1.0] and channel ∈ [0, 255].
+    {
+        scaled.clamp(0.0, 255.0) as u8
+    }
+}
+
 pub fn display_content<'a>(node: &'a Node, graph: &'a ConversationGraph) -> Cow<'a, str> {
     match node {
         Node::ToolCall { arguments, .. } => Cow::Owned(arguments.display_summary()),

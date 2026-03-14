@@ -1,6 +1,6 @@
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::tui::widgets::display_helpers::{
-    compute_styled_height, display_content, format_scroll_indicator,
+    apply_reveal_fade, compute_styled_height, display_content, format_scroll_indicator,
 };
 use crate::tui::widgets::markdown::render_markdown;
 use crate::tui::widgets::message_style::{render_message, render_streaming, MessageRenderParams};
@@ -301,7 +301,22 @@ fn append_agent_display(
             });
         }
         AgentVisualPhase::Streaming { text, is_thinking } => {
-            let mut styled = render_markdown(text);
+            // Slice text at the revealed character boundary
+            let total_chars = text.chars().count();
+            let reveal_count = display.revealed_chars.min(total_chars);
+            let byte_offset = text
+                .char_indices()
+                .nth(reveal_count)
+                .map_or(text.len(), |(i, _)| i);
+            let revealed = &text[..byte_offset];
+
+            let mut styled = render_markdown(revealed);
+
+            // Apply fade-in gradient when there are unrevealed characters
+            if reveal_count < total_chars {
+                apply_reveal_fade(&mut styled, 8);
+            }
+
             if *is_thinking && text.is_empty() {
                 let spinner = display.spinner_char();
                 styled.lines.push(Line::styled(

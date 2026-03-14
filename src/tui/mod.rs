@@ -119,6 +119,9 @@ pub struct AgentDisplayState {
     /// Assistant node IDs from this run (suppressed from history rendering).
     pub iteration_node_ids: Vec<Uuid>,
     pub spinner_tick: usize,
+    /// How many characters of the streaming text are currently visible.
+    /// Trails behind the actual text length to create a progressive reveal effect.
+    pub revealed_chars: usize,
 }
 
 impl Default for AgentDisplayState {
@@ -127,6 +130,7 @@ impl Default for AgentDisplayState {
             phase: AgentVisualPhase::Preparing,
             iteration_node_ids: Vec::new(),
             spinner_tick: 0,
+            revealed_chars: 0,
         }
     }
 }
@@ -134,6 +138,27 @@ impl Default for AgentDisplayState {
 impl AgentDisplayState {
     pub fn spinner_char(&self) -> &'static str {
         SPINNER_FRAMES[self.spinner_tick % SPINNER_FRAMES.len()]
+    }
+
+    /// Advance the character reveal toward the full text length.
+    /// Called each spinner tick (80ms). During steady streaming (small deltas),
+    /// reveals instantly. During bursts, spreads the reveal over ~400ms.
+    pub fn advance_reveal(&mut self, total_chars: usize) {
+        const BURST_THRESHOLD: usize = 15;
+        const MIN_STEP: usize = 4;
+        const CATCH_UP_FRAMES: usize = 5;
+
+        let pending = total_chars.saturating_sub(self.revealed_chars);
+        if pending == 0 {
+            return;
+        }
+
+        let step = if pending <= BURST_THRESHOLD {
+            pending
+        } else {
+            (pending / CATCH_UP_FRAMES).max(MIN_STEP)
+        };
+        self.revealed_chars = (self.revealed_chars + step).min(total_chars);
     }
 }
 
@@ -323,3 +348,7 @@ pub fn restore_terminal(
 #[cfg(test)]
 #[path = "token_usage_tests.rs"]
 mod token_usage_tests;
+
+#[cfg(test)]
+#[path = "reveal_tests.rs"]
+mod reveal_tests;

@@ -136,22 +136,10 @@ impl App {
                                     self.handle_send_message(text)?;
                                 }
                             }
-                            Action::ScrollUp | Action::ScrollDown => {
-                                self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
-                                self.tui_state.scroll_offset = if matches!(action, Action::ScrollUp) {
-                                    self.tui_state.scroll_offset.saturating_sub(3)
-                                } else {
-                                    self.tui_state.scroll_offset.saturating_add(3)
-                                };
-                            }
-                            Action::PageUp | Action::PageDown => {
-                                self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
+                            Action::ScrollUp | Action::ScrollDown
+                            | Action::PageUp | Action::PageDown => {
                                 let page = terminal.size()?.height / 2;
-                                self.tui_state.scroll_offset = if matches!(action, Action::PageUp) {
-                                    self.tui_state.scroll_offset.saturating_sub(page)
-                                } else {
-                                    self.tui_state.scroll_offset.saturating_add(page)
-                                };
+                                self.handle_scroll(&action, page);
                             }
                             Action::CancelTask(id) => {
                                 self.cancel_task(id);
@@ -166,6 +154,13 @@ impl App {
                 _ = spinner_interval.tick(), if agent_active || animating => {
                     if let Some(ref mut display) = self.tui_state.agent_display {
                         display.spinner_tick = display.spinner_tick.wrapping_add(1);
+                        let total = match &display.phase {
+                            crate::tui::AgentVisualPhase::Streaming { text, .. } => {
+                                text.chars().count()
+                            }
+                            _ => 0,
+                        };
+                        display.advance_reveal(total);
                     }
                     self.tui_state.token_usage.tick();
                 }
@@ -188,6 +183,27 @@ impl App {
 
         tui::restore_terminal(terminal)?;
         Ok(())
+    }
+
+    /// Apply a scroll action, switching to manual mode and snapping the reveal
+    /// cursor when scrolling upward so the user doesn't see a trailing animation.
+    fn handle_scroll(&mut self, action: &Action, page_size: u16) {
+        self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
+        let going_up = matches!(action, Action::ScrollUp | Action::PageUp);
+        if going_up {
+            if let Some(ref mut d) = self.tui_state.agent_display {
+                d.revealed_chars = usize::MAX;
+            }
+        }
+        let delta = match action {
+            Action::ScrollUp | Action::ScrollDown => 3,
+            _ => page_size,
+        };
+        self.tui_state.scroll_offset = if going_up {
+            self.tui_state.scroll_offset.saturating_sub(delta)
+        } else {
+            self.tui_state.scroll_offset.saturating_add(delta)
+        };
     }
 
     /// Send a message: add user node to graph, spawn agent loop, return immediately.
