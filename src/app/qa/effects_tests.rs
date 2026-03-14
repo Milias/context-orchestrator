@@ -61,6 +61,7 @@ fn test_ask_with_about_creates_about_edge() {
         title: "Auth module".to_string(),
         status: crate::graph::WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 

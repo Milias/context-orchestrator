@@ -32,6 +32,7 @@ fn add_plan(graph: &mut ConversationGraph, title: &str) -> Uuid {
         title: title.to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
     id
@@ -267,6 +268,7 @@ fn test_update_work_item_changes_status() {
             id: plan_id,
             status: Some(WorkItemStatus::Active),
             description: None,
+            confidence: None,
         },
     );
 
@@ -295,6 +297,7 @@ fn test_update_work_item_changes_description() {
             id: plan_id,
             status: None,
             description: Some("Updated description".to_string()),
+            confidence: None,
         },
     );
 
@@ -328,6 +331,7 @@ fn test_update_work_item_nonexistent_returns_error() {
             id: fake_id,
             status: Some(WorkItemStatus::Done),
             description: None,
+            confidence: None,
         },
     );
 

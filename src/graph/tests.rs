@@ -86,6 +86,7 @@ fn test_add_node_without_edges() {
         kind: WorkItemKind::Task,
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     };
     let wi_id = graph.add_node(work_item);
@@ -105,6 +106,7 @@ fn test_typed_edges() {
         kind: WorkItemKind::Task,
         status: WorkItemStatus::Active,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     };
     let wi_id = graph.add_node(wi);

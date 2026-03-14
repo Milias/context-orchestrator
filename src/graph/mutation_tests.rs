@@ -170,6 +170,7 @@ fn test_propagate_status_completes_parent_when_all_children_done() {
         title: "Parent plan".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 
@@ -183,7 +184,8 @@ fn test_propagate_status_completes_parent_when_all_children_done() {
             title: title.to_string(),
             status: WorkItemStatus::Todo,
             description: None,
-            created_at: Utc::now(),
+            completion_confidence: None,
+        created_at: Utc::now(),
         });
         graph.add_edge(id, parent_id, EdgeKind::SubtaskOf).unwrap();
     }
@@ -222,6 +224,7 @@ fn test_children_of_returns_subtask_children() {
         title: "Parent".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 
@@ -232,6 +235,7 @@ fn test_children_of_returns_subtask_children() {
         title: "Child".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 
@@ -271,6 +275,7 @@ fn test_propagate_status_cascades_through_three_levels() {
         title: "Root plan".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 
@@ -282,6 +287,7 @@ fn test_propagate_status_cascades_through_three_levels() {
         title: "Task A".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
     graph
@@ -296,6 +302,7 @@ fn test_propagate_status_cascades_through_three_levels() {
         title: "Task B".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
     graph

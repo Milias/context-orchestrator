@@ -87,6 +87,7 @@ fn test_role_label_all_variants() {
                 title: String::new(),
                 status: WorkItemStatus::Todo,
                 description: None,
+                completion_confidence: None,
                 created_at: now,
             },
             "task",

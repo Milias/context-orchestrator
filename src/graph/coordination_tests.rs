@@ -14,6 +14,7 @@ fn test_try_claim_prevents_double_claim() {
         title: "task".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 
@@ -38,6 +39,7 @@ fn test_release_claim_makes_unclaimed() {
         title: "task".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 

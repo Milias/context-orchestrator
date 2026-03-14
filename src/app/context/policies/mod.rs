@@ -34,11 +34,7 @@ pub enum ContextPolicy {
 
 impl ContextPolicy {
     /// Build context from the graph using this policy's traversal strategy.
-    pub fn build_context(
-        &self,
-        graph: &ConversationGraph,
-        agent_id: Uuid,
-    ) -> ContextBuildResult {
+    pub fn build_context(&self, graph: &ConversationGraph, agent_id: Uuid) -> ContextBuildResult {
         match self {
             Self::Conversational => conversational::build_context(graph, agent_id),
             Self::TaskExecution { work_item_id } => {

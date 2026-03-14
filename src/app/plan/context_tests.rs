@@ -19,6 +19,7 @@ fn test_build_plan_section_renders_hierarchy() {
         title: "Refactor auth".to_string(),
         status: WorkItemStatus::Active,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 
@@ -35,7 +36,8 @@ fn test_build_plan_section_renders_hierarchy() {
             title: title.to_string(),
             status: WorkItemStatus::Todo,
             description: None,
-            created_at: Utc::now(),
+            completion_confidence: None,
+        created_at: Utc::now(),
         });
         graph.add_edge(id, plan_id, EdgeKind::SubtaskOf).unwrap();
     }
@@ -93,6 +95,7 @@ fn test_build_plan_section_renders_depends_on() {
         title: "Setup database".to_string(),
         status: WorkItemStatus::Active,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 
@@ -104,6 +107,7 @@ fn test_build_plan_section_renders_depends_on() {
         title: "Build API layer".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     });
 

@@ -76,6 +76,7 @@ fn test_content_entity_variants() {
         title: "plan_title".to_string(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: now,
     };
     assert_eq!(wi.content(), "plan_title");
@@ -156,6 +157,7 @@ fn test_input_tokens_none_for_non_message() {
         title: String::new(),
         status: WorkItemStatus::Todo,
         description: None,
+        completion_confidence: None,
         created_at: Utc::now(),
     };
     assert_eq!(wi.input_tokens(), None);

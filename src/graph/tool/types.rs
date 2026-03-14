@@ -152,6 +152,9 @@ pub enum ToolCallArguments {
         id: Uuid,
         status: Option<WorkItemStatus>,
         description: Option<String>,
+        /// Confidence level when proposing completion (only used when status is Done).
+        #[serde(default)]
+        confidence: Option<String>,
     },
     /// Declare a plan-to-plan dependency: `from_id` depends on `to_id`.
     AddDependency {

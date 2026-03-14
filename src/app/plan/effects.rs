@@ -46,11 +46,13 @@ pub fn apply(graph: &mut ConversationGraph, tool_call_id: Uuid) -> Option<ToolRe
             id,
             status,
             description,
+            confidence,
         } => Some(apply_update_work_item(
             graph,
             *id,
             status.as_ref(),
             description.as_deref(),
+            confidence.as_deref(),
         )),
         ToolCallArguments::AddDependency { from_id, to_id } => {
             Some(apply_add_dependency(graph, *from_id, *to_id))
@@ -73,6 +75,7 @@ fn apply_plan(
         title: title.to_string(),
         status: WorkItemStatus::Todo,
         description: description.map(String::from),
+        completion_confidence: None,
         created_at: Utc::now(),
     };
     graph.add_node(work_item);
@@ -105,6 +108,7 @@ fn apply_add_task(
         title: title.to_string(),
         status: WorkItemStatus::Todo,
         description: description.map(String::from),
+        completion_confidence: None,
         created_at: Utc::now(),
     };
     graph.add_node(task);
@@ -119,23 +123,71 @@ fn apply_add_task(
 }
 
 /// Update a `WorkItem`'s status and/or description, with upward propagation.
+/// When proposing Done with lower confidence, routes for review instead of
+/// transitioning immediately.
 fn apply_update_work_item(
     graph: &mut ConversationGraph,
     id: Uuid,
     new_status: Option<&WorkItemStatus>,
     new_description: Option<&str>,
+    confidence_str: Option<&str>,
 ) -> ToolResultContent {
+    use crate::graph::node::CompletionConfidence;
+
     if !matches!(graph.node(id), Some(Node::WorkItem { .. })) {
         return ToolResultContent::text(format!("Error: {id} is not a valid work item"));
     }
 
-    if let Some(status) = new_status {
+    // Parse confidence from string.
+    let confidence = confidence_str.and_then(|s| match s.to_lowercase().as_str() {
+        "verified" => Some(CompletionConfidence::Verified),
+        "high" => Some(CompletionConfidence::High),
+        "moderate" => Some(CompletionConfidence::Moderate),
+        "low" => Some(CompletionConfidence::Low),
+        "failed" => Some(CompletionConfidence::Failed),
+        _ => None,
+    });
+
+    // Set confidence on the node.
+    if let Some(conf) = confidence {
+        if let Some(Node::WorkItem {
+            completion_confidence,
+            ..
+        }) = graph.node_mut(id)
+        {
+            *completion_confidence = Some(conf);
+        }
+    }
+
+    // If proposing Done, check confidence for review routing.
+    let effective_confidence = confidence.unwrap_or(CompletionConfidence::Moderate);
+    if new_status == Some(&WorkItemStatus::Done) {
+        let auto_accept = matches!(
+            effective_confidence,
+            CompletionConfidence::Verified | CompletionConfidence::High
+        );
+
+        if auto_accept {
+            if let Err(e) = graph.update_work_item_status(id, WorkItemStatus::Done) {
+                return ToolResultContent::text(format!("Error updating status: {e}"));
+            }
+        } else {
+            // Keep Active, emit CompletionProposed for review routing.
+            graph.emit(GraphEvent::CompletionProposed {
+                node_id: id,
+                confidence: effective_confidence,
+            });
+            return ToolResultContent::text(format!(
+                "Proposed completion for {id} with {effective_confidence:?} confidence. Awaiting review."
+            ));
+        }
+    } else if let Some(status) = new_status {
         if let Err(e) = graph.update_work_item_status(id, *status) {
             return ToolResultContent::text(format!("Error updating status: {e}"));
         }
     }
 
-    // Update description separately (no snapshot — not worth versioning for text edits).
+    // Update description separately.
     if let Some(desc) = new_description {
         if let Some(Node::WorkItem { description, .. }) = graph.node_mut(id) {
             *description = Some(desc.to_string());

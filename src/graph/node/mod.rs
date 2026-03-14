@@ -41,6 +41,9 @@ pub enum Node {
         kind: WorkItemKind,
         status: WorkItemStatus,
         description: Option<String>,
+        /// Confidence level when proposing completion. `None` until agent proposes Done.
+        #[serde(default)]
+        completion_confidence: Option<CompletionConfidence>,
         created_at: DateTime<Utc>,
     },
     GitFile {

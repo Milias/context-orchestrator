@@ -21,10 +21,7 @@ pub fn build_messages(
 
 /// Build context for a conversational agent. Walks the active branch history,
 /// collects all contributing node IDs for provenance tracking.
-pub fn build_context(
-    graph: &ConversationGraph,
-    agent_id: Uuid,
-) -> super::ContextBuildResult {
+pub fn build_context(graph: &ConversationGraph, agent_id: Uuid) -> super::ContextBuildResult {
     let history = graph
         .get_branch_history(graph.active_branch())
         .unwrap_or_default();

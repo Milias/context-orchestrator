@@ -59,6 +59,11 @@ pub enum GraphEvent {
     BackgroundTaskChanged { node_id: Uuid, status: TaskStatus },
     /// A dependency edge was added between work items.
     DependencyAdded { from_id: Uuid, to_id: Uuid },
+    /// A task agent proposed completion with a confidence level.
+    CompletionProposed {
+        node_id: Uuid,
+        confidence: crate::graph::node::CompletionConfidence,
+    },
 
     // ── Agent lifecycle events ──────────────────────────────────────
     /// Agent loop phase changed (preparing, streaming, executing tools).

@@ -60,6 +60,23 @@ pub enum WorkItemStatus {
     Done,
 }
 
+/// Confidence level for a work item completion proposal.
+/// Determines whether the work auto-accepts or routes for review.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionConfidence {
+    /// Verified by cross-referencing files and dependencies. Auto-accept.
+    Verified,
+    /// High confidence from thorough implementation. Auto-accept.
+    High,
+    /// Completed but some aspects uncertain. Review recommended.
+    Moderate,
+    /// Partially done or agent unsure. Review required.
+    Low,
+    /// Agent could not complete the task. Review required.
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GitFileStatus {
