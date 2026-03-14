@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
-use crate::graph::{ConversationGraph, EdgeDirection, EdgeKind};
-use crate::tui::tabs::edge_inspector::EdgeInspector;
+use crate::graph::ConversationGraph;
+use crate::tui::tabs::edge_inspector::{DisplayEdge, EdgeInspector};
 use crate::tui::widgets::tool_status::truncate;
 use crate::tui::TuiState;
 
@@ -19,9 +19,9 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 /// Maximum content preview lines before truncation.
 const MAX_CONTENT_LINES: usize = 12;
 
-/// Short UUID: first 8 hex characters.
+/// Short UUID: first 8 hex characters, safe for any string length.
 fn short_uuid(id: Uuid) -> String {
-    id.to_string()[..8].to_string()
+    id.to_string().chars().take(8).collect()
 }
 
 /// Render the detail panel for a selected graph node.
@@ -73,8 +73,9 @@ pub fn render(
     // Blank separator before edges.
     lines.push(Line::raw(""));
 
-    // Edges section.
-    render_edges(graph, id, &tui_state.edge_inspector, width, &mut lines);
+    // Edges section — uses pre-populated inspector edges for consistency
+    // with the input handler's navigation.
+    render_edges(&tui_state.edge_inspector, width, &mut lines);
 
     // Truncate to available height.
     lines.truncate(max_lines);
@@ -205,20 +206,14 @@ fn render_content(content: &str, width: usize, budget_lines: usize, lines: &mut 
     }
 }
 
-/// Render edges grouped by [`EdgeGroup`].
+/// Render edges from the pre-populated [`EdgeInspector`] list.
 ///
-/// Each group header is bold cyan, followed by edges as
-/// `direction label -> target_summary (short_uuid)`.
-/// The currently selected edge (from the inspector) is highlighted.
-fn render_edges(
-    graph: &ConversationGraph,
-    node_id: Uuid,
-    inspector: &EdgeInspector,
-    width: usize,
-    lines: &mut Vec<Line<'_>>,
-) {
-    let raw_edges = graph.edges_of(node_id);
-    if raw_edges.is_empty() {
+/// Edges are grouped by [`EdgeGroup`] label for visual organization.
+/// Each group header is bold cyan, followed by edge entries showing
+/// `label -> target_summary (short_uuid)`.
+/// The currently selected edge is highlighted for keyboard navigation.
+fn render_edges(inspector: &EdgeInspector, width: usize, lines: &mut Vec<Line<'_>>) {
+    if inspector.edges.is_empty() {
         lines.push(Line::from(Span::styled(
             "(no edges)",
             Style::default().fg(Color::DarkGray),
@@ -226,17 +221,15 @@ fn render_edges(
         return;
     }
 
-    // Group edges by EdgeGroup using BTreeMap keyed on the group label
-    // for stable display ordering.
-    let mut groups: BTreeMap<&'static str, Vec<(EdgeDirection, EdgeKind, Uuid)>> = BTreeMap::new();
-    for (dir, kind, other_id) in &raw_edges {
+    // Group display edges by their group label using BTreeMap for stable ordering.
+    let mut groups: BTreeMap<&'static str, Vec<(usize, &DisplayEdge)>> = BTreeMap::new();
+    for (idx, edge) in inspector.edges.iter().enumerate() {
         groups
-            .entry(kind.group().label())
+            .entry(edge.group.label())
             .or_default()
-            .push((*dir, *kind, *other_id));
+            .push((idx, edge));
     }
 
-    let mut edge_index = 0usize;
     for (group_label, edges) in &groups {
         // Group header.
         lines.push(Line::from(Span::styled(
@@ -244,20 +237,11 @@ fn render_edges(
             Style::default().fg(Color::Cyan).bold(),
         )));
 
-        for (dir, kind, other_id) in edges {
-            let is_selected = edge_index == inspector.selected_edge;
-            let dir_arrow = match dir {
-                EdgeDirection::Outgoing => "\u{2192}", // ->
-                EdgeDirection::Incoming => "\u{2190}", // <-
-            };
-            let label = kind.display_label();
-            let target_summary = graph.node(*other_id).map_or_else(
-                || short_uuid(*other_id),
-                |n| truncate(n.content().lines().next().unwrap_or("?"), 25),
-            );
-            let target_short = short_uuid(*other_id);
+        for &(idx, edge) in edges {
+            let is_selected = idx == inspector.selected_edge;
+            let target_short = short_uuid(edge.target_id);
 
-            let edge_text = format!("{dir_arrow} {label} {target_summary} ({target_short})");
+            let edge_text = format!("{} {} ({})", edge.label, edge.target_summary, target_short);
             let line_budget = width.saturating_sub(4);
             let display_text = truncate(&edge_text, line_budget);
 
@@ -275,8 +259,6 @@ fn render_edges(
                 Span::styled(prefix, style),
                 Span::styled(display_text, style),
             ]));
-
-            edge_index += 1;
         }
     }
 }

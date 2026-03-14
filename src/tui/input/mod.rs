@@ -198,11 +198,7 @@ fn handle_system_key(_key: KeyEvent, _tui_state: &mut TuiState) -> Action {
 /// Routes character input to the search query, handles backspace/escape,
 /// and passes Ctrl+G for scope toggling. All other keys are ignored to
 /// prevent accidental tab/panel navigation while searching.
-fn handle_search_key(
-    key: KeyEvent,
-    tui_state: &mut TuiState,
-    graph: &ConversationGraph,
-) -> Action {
+fn handle_search_key(key: KeyEvent, tui_state: &mut TuiState, graph: &ConversationGraph) -> Action {
     // Ctrl+G: toggle scope (Tab vs Global).
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
         if let Some(search) = &mut tui_state.search {

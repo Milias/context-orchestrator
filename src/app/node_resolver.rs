@@ -136,9 +136,9 @@ fn collect_qa_ids(graph: &ConversationGraph, explorer: &ExplorerState) -> Vec<Uu
 fn qa_status_key(node: &Node) -> u8 {
     match node {
         Node::Question { status, .. } => match status {
-            QuestionStatus::Pending
-            | QuestionStatus::Claimed
-            | QuestionStatus::PendingApproval => 0,
+            QuestionStatus::Pending | QuestionStatus::Claimed | QuestionStatus::PendingApproval => {
+                0
+            }
             QuestionStatus::Answered => 1,
             QuestionStatus::TimedOut | QuestionStatus::Rejected => 2,
         },

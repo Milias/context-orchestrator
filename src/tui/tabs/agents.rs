@@ -5,9 +5,7 @@
 
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{BackgroundTaskKind, ConversationGraph, Node, TaskStatus};
-use crate::tui::widgets::tool_status::{
-    elapsed, format_duration, tool_call_status_icon, truncate,
-};
+use crate::tui::widgets::tool_status::{elapsed, format_duration, tool_call_status_icon, truncate};
 use crate::tui::{TuiState, SPINNER_FRAMES};
 
 use chrono::Utc;

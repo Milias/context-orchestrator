@@ -30,6 +30,9 @@ pub struct Breadcrumb {
     pub edge_index: usize,
 }
 
+/// Maximum breadcrumb depth before the oldest entries are dropped.
+const MAX_TRAIL_DEPTH: usize = 10;
+
 /// State for the edge inspector panel.
 ///
 /// Shows edges of the currently selected node, supports following
@@ -57,11 +60,17 @@ impl EdgeInspector {
     /// Follow an edge: record the current node in the breadcrumb trail
     /// so we can return to it later. The `node_id` is the node we are
     /// leaving; `selected_edge` is saved automatically.
+    ///
+    /// The trail is capped at [`MAX_TRAIL_DEPTH`] entries; the oldest
+    /// breadcrumb is dropped when the limit is exceeded.
     pub fn follow_edge(&mut self, node_id: Uuid) {
         self.trail.push(Breadcrumb {
             node_id,
             edge_index: self.selected_edge,
         });
+        if self.trail.len() > MAX_TRAIL_DEPTH {
+            self.trail.remove(0);
+        }
         self.selected_edge = 0;
     }
 

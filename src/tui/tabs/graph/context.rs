@@ -268,7 +268,7 @@ fn format_cbr_label(node: &Node) -> String {
         ContextPolicyKind::TaskExecution => "TaskExecution",
     };
     let status_str = format_build_status(*status);
-    let agent_short = &agent_id.to_string()[..8];
+    let agent_short: String = agent_id.to_string().chars().take(8).collect();
     let tok_str = token_count.map_or_else(
         || String::from("-"),
         |t| format!("{} tok", format_token_count(u64::from(t))),

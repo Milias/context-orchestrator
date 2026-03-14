@@ -21,10 +21,12 @@ pub fn handle_graph_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     match key.code {
         KeyCode::Char('[') => {
             tui_state.nav.active_graph_section = tui_state.nav.active_graph_section.prev();
+            tui_state.edge_inspector.clear();
             return Action::None;
         }
         KeyCode::Char(']') => {
             tui_state.nav.active_graph_section = tui_state.nav.active_graph_section.next();
+            tui_state.edge_inspector.clear();
             return Action::None;
         }
         _ => {}
@@ -78,7 +80,7 @@ fn handle_tree_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSectio
             return Action::CollapseNode;
         }
         KeyCode::Char('d') => {
-            explorer.focus = ExplorerFocus::Detail;
+            explorer.toggle_focus();
         }
         _ => {}
     }
@@ -125,7 +127,7 @@ fn handle_detail_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSect
         }
         KeyCode::Char('d') => {
             if let Some(explorer) = tui_state.explorer.get_mut(&section) {
-                explorer.focus = ExplorerFocus::Tree;
+                explorer.toggle_focus();
             }
         }
         _ => {}

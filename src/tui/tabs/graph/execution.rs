@@ -8,15 +8,12 @@
 use std::cmp::Reverse;
 
 use chrono::Utc;
-use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::{prelude::*, widgets::{Block, Borders, Paragraph}};
 use uuid::Uuid;
 
-use crate::graph::tool_types::ToolCallStatus;
-use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
+use crate::graph::{tool_types::ToolCallStatus, ConversationGraph, EdgeKind, Node, Role};
 use crate::tui::state::GraphSection;
-use crate::tui::tabs::explorer::ExplorerState;
-use crate::tui::tabs::graph::tree_lines::TreePrefix;
+use crate::tui::tabs::{explorer::ExplorerState, graph::tree_lines::TreePrefix};
 use crate::tui::widgets::tool_status::{
     elapsed, finished, format_duration, tool_call_status_icon, truncate, TaskDuration,
 };
@@ -30,6 +27,18 @@ struct FlatItem {
     prefix: String,
     /// The line spans to render (pre-built for each node type).
     spans: Vec<Span<'static>>,
+}
+
+/// Graceful fallback `FlatItem` for unexpected node types (avoids panicking).
+fn unexpected_item(node: &Node, prefix: &TreePrefix, is_last: bool) -> FlatItem {
+    FlatItem {
+        id: node.id(),
+        prefix: prefix.render(is_last),
+        spans: vec![Span::styled(
+            "(unexpected node)",
+            Style::default().fg(Color::DarkGray),
+        )],
+    }
 }
 
 /// Render the Execution section tree within the Graph tab.
@@ -203,7 +212,7 @@ fn build_assistant_item(
         ..
     } = node
     else {
-        unreachable!("only called with assistant messages");
+        return unexpected_item(node, prefix, is_last);
     };
 
     let prefix_str = prefix.render(is_last);
@@ -256,7 +265,7 @@ fn build_tool_call_item(
         ..
     } = node
     else {
-        unreachable!("only called with tool call nodes");
+        return unexpected_item(node, prefix, is_last);
     };
 
     let prefix_str = prefix.render(is_last);
@@ -328,7 +337,7 @@ fn build_tool_result_item(
         ..
     } = node
     else {
-        unreachable!("only called with tool result nodes");
+        return unexpected_item(node, prefix, is_last);
     };
 
     let prefix_str = prefix.render(is_last);
