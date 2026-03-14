@@ -209,9 +209,6 @@ impl App {
                 self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
                 self.tui_state.scroll_offset = u16::MAX;
             }
-            Action::CancelTask(id) => {
-                self.cancel_task(id);
-            }
             Action::None => {}
         }
         Ok(())

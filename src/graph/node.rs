@@ -82,14 +82,6 @@ pub enum BackgroundTaskKind {
     AgentPhase,
 }
 
-impl BackgroundTaskKind {
-    pub fn is_service(&self) -> bool {
-        matches!(
-            self,
-            Self::GitIndex | Self::ToolDiscovery | Self::ContextSummarize
-        )
-    }
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

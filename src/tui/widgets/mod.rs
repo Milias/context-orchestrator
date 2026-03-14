@@ -1,14 +1,11 @@
-pub mod context_panel;
 pub mod conversation;
 pub mod display_helpers;
 pub mod input_box;
 pub mod markdown;
 pub mod message_style;
 mod table;
-mod task_list;
 pub mod tool_status;
 pub mod trigger_highlight;
-pub mod work_tree;
 
 #[cfg(test)]
 #[path = "display_helpers_tests.rs"]

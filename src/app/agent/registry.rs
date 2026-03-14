@@ -99,17 +99,6 @@ impl AgentRegistry {
             .map_or_else(CancellationToken::new, |h| h.cancel_token.child_token())
     }
 
-    /// Cancel a specific tool call.
-    pub fn cancel_tool(&mut self, tool_call_id: Uuid) {
-        if let Some(agent_id) = self.tool_call_owner.get(&tool_call_id) {
-            if let Some(handle) = self.agents.get(agent_id) {
-                if let Some(token) = handle.task_tokens.get(&tool_call_id) {
-                    token.cancel();
-                }
-            }
-        }
-    }
-
     /// Cancel an entire agent and all its tool calls.
     pub fn cancel_agent(&mut self, agent_id: Uuid) {
         if let Some(handle) = self.agents.get(&agent_id) {

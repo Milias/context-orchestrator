@@ -246,11 +246,3 @@ fn test_think_block_not_in_history() {
     assert!(graph.has_think_block(asst_id));
     assert!(!graph.has_think_block(root_id));
 }
-
-#[test]
-fn test_branch_names() {
-    let graph = ConversationGraph::new("System prompt");
-    let names = graph.branch_names();
-    assert_eq!(names.len(), 1);
-    assert!(names.contains(&"main"));
-}

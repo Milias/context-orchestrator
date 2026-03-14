@@ -1,10 +1,13 @@
 use crate::tui::input::cursor_line_col;
-use crate::tui::{FocusPanel, TuiState};
+use crate::tui::state::FocusZone;
+use crate::tui::TuiState;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
+/// Render the persistent input box at the bottom of the screen.
+/// Highlights the border when the input zone has keyboard focus.
 pub fn render(frame: &mut Frame, area: Rect, frame_area: Rect, tui_state: &TuiState) {
-    let border_color = if tui_state.focus == FocusPanel::Input {
+    let border_color = if tui_state.nav.focus == FocusZone::Input {
         Color::Yellow
     } else {
         Color::DarkGray

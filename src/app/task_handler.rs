@@ -338,8 +338,4 @@ impl App {
         });
     }
 
-    /// Cancel a running task by its `tool_call_id`.
-    pub(super) fn cancel_task(&mut self, id: Uuid) {
-        self.agents.cancel_tool(id);
-    }
 }

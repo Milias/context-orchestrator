@@ -1,5 +1,5 @@
 use crate::graph::tool_types::ToolCallStatus;
-use crate::graph::{ConversationGraph, EdgeKind, Node, TaskStatus};
+use crate::graph::{ConversationGraph, EdgeKind, Node};
 use crate::tui::SPINNER_FRAMES;
 
 use chrono::{DateTime, Utc};
@@ -30,16 +30,6 @@ pub fn tool_call_status_icon(status: &ToolCallStatus) -> (&'static str, Color) {
         ToolCallStatus::Completed => ("✓", Color::Green),
         ToolCallStatus::Failed => ("✗", Color::Red),
         ToolCallStatus::Cancelled => ("⊘", Color::DarkGray),
-    }
-}
-
-pub fn bg_task_status_icon(status: TaskStatus) -> (&'static str, Color) {
-    match status {
-        TaskStatus::Pending => ("○", Color::DarkGray),
-        TaskStatus::Running => ("◉", Color::Yellow),
-        TaskStatus::Completed => ("✓", Color::Green),
-        TaskStatus::Failed => ("✗", Color::Red),
-        TaskStatus::Stopped => ("■", Color::DarkGray),
     }
 }
 

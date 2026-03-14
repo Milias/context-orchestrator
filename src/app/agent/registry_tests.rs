@@ -93,15 +93,6 @@ fn test_is_primary_false_after_remove() {
     );
 }
 
-/// Bug: `cancel_tool` panics on a non-existent `tool_call_id`.
-/// Must be a no-op for unknown IDs.
-#[test]
-fn test_cancel_tool_nonexistent_is_noop() {
-    let mut reg = AgentRegistry::new();
-    // Should not panic.
-    reg.cancel_tool(Uuid::new_v4());
-}
-
 /// Bug: `route_tool_result` for a tool call whose agent was already
 /// removed returns `true` or panics. Must return `false`.
 #[test]

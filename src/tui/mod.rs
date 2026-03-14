@@ -1,4 +1,6 @@
 pub mod input;
+pub mod state;
+pub mod tabs;
 pub mod ui;
 pub mod widgets;
 
@@ -14,73 +16,6 @@ use ratatui::prelude::*;
 use std::collections::HashMap;
 use std::io;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FocusPanel {
-    Input,
-    ContextPanel,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContextTab {
-    Outline,
-    Files,
-    Tools,
-    Tasks,
-    Work,
-}
-
-impl ContextTab {
-    pub fn all() -> &'static [ContextTab] {
-        &[
-            ContextTab::Outline,
-            ContextTab::Files,
-            ContextTab::Tools,
-            ContextTab::Tasks,
-            ContextTab::Work,
-        ]
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ContextTab::Outline => "Outline",
-            ContextTab::Files => "Files",
-            ContextTab::Tools => "Tools",
-            ContextTab::Tasks => "Tasks",
-            ContextTab::Work => "Work",
-        }
-    }
-
-    pub fn index(self) -> usize {
-        match self {
-            ContextTab::Outline => 0,
-            ContextTab::Files => 1,
-            ContextTab::Tools => 2,
-            ContextTab::Tasks => 3,
-            ContextTab::Work => 4,
-        }
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            ContextTab::Outline => ContextTab::Files,
-            ContextTab::Files => ContextTab::Tools,
-            ContextTab::Tools => ContextTab::Tasks,
-            ContextTab::Tasks => ContextTab::Work,
-            ContextTab::Work => ContextTab::Outline,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            ContextTab::Outline => ContextTab::Work,
-            ContextTab::Files => ContextTab::Outline,
-            ContextTab::Tools => ContextTab::Files,
-            ContextTab::Tasks => ContextTab::Tools,
-            ContextTab::Work => ContextTab::Tasks,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct CompletionCandidate {
@@ -251,31 +186,32 @@ impl TokenUsage {
 
 // ── TUI state ────────────────────────────────────────────────────────
 
+/// Central UI state shared across all rendering and input handling.
 #[derive(Debug)]
 pub struct TuiState {
+    /// Top-level navigation: active tab, focus zone.
+    pub nav: state::NavigationState,
+    /// Current text in the input box.
     pub input_text: String,
+    /// Character-indexed cursor position within `input_text`.
     pub input_cursor: usize,
+    /// Conversation scroll offset (lines from the top).
     pub scroll_offset: u16,
+    /// Informational status message shown in the status bar.
     pub status_message: Option<String>,
     /// Error message displayed right-aligned in red on the status bar.
     pub error_message: Option<String>,
+    /// Set to `true` to exit the TUI event loop.
     pub should_quit: bool,
-    pub focus: FocusPanel,
-    pub context_panel_visible: bool,
-    pub context_tab: ContextTab,
-    pub context_list_offset: usize,
+    /// Autoscroll vs. manual scroll state.
     pub scroll_mode: ScrollMode,
     /// Cached rendered markdown + height per message node ID.
     /// Avoids re-parsing markdown for historical messages on every frame.
     pub render_cache: HashMap<Uuid, CachedRender>,
+    /// Autocomplete popup state for `/command` completion.
     pub autocomplete: AutocompleteState,
     /// Display state for the running agent loop. `None` when idle.
     pub agent_display: Option<AgentDisplayState>,
-    /// Selected index in the Running panel of the Tasks tab. `None` when no selection.
-    pub task_selection: Option<usize>,
-    /// Node IDs of active tasks in the Running panel, updated each frame by the task list widget.
-    /// Used by the input handler to map selection index → task UUID.
-    pub active_task_ids: Vec<Uuid>,
     /// Controls whether tool call results are shown inline in the conversation.
     pub tool_display: ToolDisplayMode,
     /// Maximum scroll offset, computed each frame by the conversation widget.
@@ -284,8 +220,6 @@ pub struct TuiState {
     pub max_scroll: u16,
     /// Lifetime token usage displayed in the status bar (animated).
     pub token_usage: TokenUsage,
-    /// State for the Work tab tree widget (expand/collapse).
-    pub work_tree: widgets::work_tree::WorkTreeState,
 }
 
 #[derive(Debug)]
@@ -297,28 +231,23 @@ pub struct CachedRender {
 }
 
 impl TuiState {
+    /// Create a new TUI state with sensible defaults.
     pub fn new() -> Self {
         Self {
+            nav: state::NavigationState::new(),
             input_text: String::new(),
             input_cursor: 0,
             scroll_offset: u16::MAX,
             status_message: None,
             error_message: None,
             should_quit: false,
-            focus: FocusPanel::Input,
-            context_panel_visible: true,
-            context_tab: ContextTab::Outline,
-            context_list_offset: 0,
             scroll_mode: ScrollMode::Auto,
             render_cache: HashMap::new(),
             autocomplete: AutocompleteState::default(),
             agent_display: None,
-            task_selection: None,
-            active_task_ids: Vec::new(),
             tool_display: ToolDisplayMode::Compact,
             max_scroll: 0,
             token_usage: TokenUsage::default(),
-            work_tree: widgets::work_tree::WorkTreeState::default(),
         }
     }
 }

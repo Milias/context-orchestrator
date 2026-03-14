@@ -241,10 +241,6 @@ impl ConversationGraph {
             .ok_or_else(|| anyhow::anyhow!("No leaf node for active branch"))
     }
 
-    pub fn branch_names(&self) -> Vec<&str> {
-        self.branches.keys().map(String::as_str).collect()
-    }
-
     /// Return all nodes matching a predicate.
     pub fn nodes_by<F: Fn(&Node) -> bool>(&self, filter: F) -> Vec<&Node> {
         self.nodes.values().filter(|n| filter(n)).collect()

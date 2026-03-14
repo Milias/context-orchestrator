@@ -1,5 +1,6 @@
 use crate::graph::{ConversationGraph, Node};
-use crate::tui::{CompletionCandidate, FocusPanel, TuiState};
+use crate::tui::state::{FocusZone, TopTab};
+use crate::tui::{CompletionCandidate, TuiState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug)]
@@ -13,7 +14,6 @@ pub enum Action {
     PageDown,
     /// Jump to bottom and re-enable autoscroll.
     ScrollToBottom,
-    CancelTask(uuid::Uuid),
 }
 
 pub fn handle_key_event(
@@ -21,7 +21,7 @@ pub fn handle_key_event(
     tui_state: &mut TuiState,
     graph: &ConversationGraph,
 ) -> Action {
-    // Global keybindings
+    // ── Global keybindings (always active) ───────────────────────
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('q') => return Action::Quit,
@@ -31,9 +31,11 @@ pub fn handle_key_event(
                 return Action::None;
             }
             KeyCode::Char('b') => {
-                tui_state.context_panel_visible = !tui_state.context_panel_visible;
-                if !tui_state.context_panel_visible && tui_state.focus == FocusPanel::ContextPanel {
-                    tui_state.focus = FocusPanel::Input;
+                tui_state.nav.conversation_visible = !tui_state.nav.conversation_visible;
+                if !tui_state.nav.conversation_visible
+                    && tui_state.nav.focus == FocusZone::Conversation
+                {
+                    tui_state.nav.focus = FocusZone::Input;
                 }
                 return Action::None;
             }
@@ -41,26 +43,57 @@ pub fn handle_key_event(
         }
     }
 
+    // Number keys 1-3: switch tabs (only when not typing in input).
+    if tui_state.nav.focus != FocusZone::Input {
+        if let KeyCode::Char(c @ '1'..='3') = key.code {
+            if let Some(tab) = TopTab::from_number(c.to_digit(10).unwrap_or(0)) {
+                tui_state.nav.active_tab = tab;
+                return Action::None;
+            }
+        }
+    }
+
+    // Tab key: cycle focus zones.
     if key.code == KeyCode::Tab {
-        // Autocomplete takes priority over focus toggle
-        if tui_state.focus == FocusPanel::Input
+        // Autocomplete takes priority over focus toggle.
+        if tui_state.nav.focus == FocusZone::Input
             && tui_state.autocomplete.active
             && !tui_state.autocomplete.candidates.is_empty()
         {
             accept_completion(tui_state);
             return Action::None;
         }
-        tui_state.focus = match tui_state.focus {
-            FocusPanel::Input if tui_state.context_panel_visible => FocusPanel::ContextPanel,
-            _ => FocusPanel::Input,
-        };
+        tui_state.nav.focus = tui_state.nav.focus.next(tui_state.nav.conversation_visible);
         return Action::None;
     }
 
-    match tui_state.focus {
-        FocusPanel::Input => handle_input_key(key, tui_state, graph),
-        FocusPanel::ContextPanel => handle_context_panel_key(key, tui_state),
+    // ── Per-zone dispatch ────────────────────────────────────────
+    match tui_state.nav.focus {
+        FocusZone::Input => handle_input_key(key, tui_state, graph),
+        FocusZone::Conversation => handle_conversation_key(key),
+        FocusZone::TabContent => handle_tab_content_key(key, tui_state),
     }
+}
+
+/// Handle keys when the conversation panel is focused.
+/// Supports scrolling and the End key for autoscroll re-enable.
+fn handle_conversation_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Up => Action::ScrollUp,
+        KeyCode::Down => Action::ScrollDown,
+        KeyCode::PageUp => Action::PageUp,
+        KeyCode::PageDown => Action::PageDown,
+        KeyCode::End => Action::ScrollToBottom,
+        _ => Action::None,
+    }
+}
+
+/// Handle keys when a tab's content area is focused.
+/// Placeholder — per-tab handlers will be added in later phases.
+fn handle_tab_content_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
+    // TODO(Phase 2-4): dispatch by tui_state.nav.active_tab
+    let _ = (key, tui_state);
+    Action::None
 }
 
 /// Handle key events when autocomplete popup is active.
@@ -356,67 +389,3 @@ fn move_cursor_down(tui_state: &mut TuiState) {
     tui_state.input_cursor = start + cur_col.min(len);
 }
 
-fn handle_context_panel_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
-    let on_tasks_tab = tui_state.context_tab == crate::tui::ContextTab::Tasks;
-    let on_work_tab = tui_state.context_tab == crate::tui::ContextTab::Work;
-
-    match key.code {
-        KeyCode::Left => {
-            tui_state.context_tab = tui_state.context_tab.prev();
-            tui_state.context_list_offset = 0;
-            tui_state.task_selection = None;
-        }
-        KeyCode::Right => {
-            tui_state.context_tab = tui_state.context_tab.next();
-            tui_state.context_list_offset = 0;
-            tui_state.task_selection = None;
-        }
-        // Tasks tab navigation.
-        KeyCode::Up if on_tasks_tab && !tui_state.active_task_ids.is_empty() => {
-            let cur = tui_state.task_selection.unwrap_or(0);
-            tui_state.task_selection = Some(cur.saturating_sub(1));
-        }
-        KeyCode::Down if on_tasks_tab && !tui_state.active_task_ids.is_empty() => {
-            let max = tui_state.active_task_ids.len();
-            let cur = tui_state.task_selection.unwrap_or(0);
-            tui_state.task_selection = Some((cur + 1).min(max.saturating_sub(1)));
-        }
-        KeyCode::Char('x') if on_tasks_tab => {
-            if let Some(idx) = tui_state.task_selection {
-                if let Some(&task_id) = tui_state.active_task_ids.get(idx) {
-                    return Action::CancelTask(task_id);
-                }
-            }
-        }
-        // Work tab navigation + expand/collapse.
-        KeyCode::Up if on_work_tab && !tui_state.work_tree.visible_ids.is_empty() => {
-            let cur = tui_state.work_tree.selected.unwrap_or(0);
-            tui_state.work_tree.selected = Some(cur.saturating_sub(1));
-        }
-        KeyCode::Down if on_work_tab && !tui_state.work_tree.visible_ids.is_empty() => {
-            let max = tui_state.work_tree.visible_ids.len();
-            let cur = tui_state.work_tree.selected.unwrap_or(0);
-            tui_state.work_tree.selected = Some((cur + 1).min(max.saturating_sub(1)));
-        }
-        KeyCode::Enter if on_work_tab => {
-            if let Some(idx) = tui_state.work_tree.selected {
-                if let Some(&node_id) = tui_state.work_tree.visible_ids.get(idx) {
-                    if tui_state.work_tree.expanded.contains(&node_id) {
-                        tui_state.work_tree.expanded.remove(&node_id);
-                    } else {
-                        tui_state.work_tree.expanded.insert(node_id);
-                    }
-                }
-            }
-        }
-        // Generic scroll for other tabs.
-        KeyCode::Up => {
-            tui_state.context_list_offset = tui_state.context_list_offset.saturating_sub(1);
-        }
-        KeyCode::Down => {
-            tui_state.context_list_offset += 1;
-        }
-        _ => {}
-    }
-    Action::None
-}
