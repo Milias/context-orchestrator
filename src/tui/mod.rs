@@ -232,6 +232,10 @@ pub struct TuiState {
     pub overview_scroll: usize,
     /// Total event count in the activity stream (set each frame by the renderer).
     pub overview_total: usize,
+    /// Scroll offset for the recent completions panel.
+    pub recent_scroll: usize,
+    /// Total count for the recent completions panel (set each frame).
+    pub recent_total: usize,
     /// Text of the pending user question. Set by `QuestionRoutedToUser` event,
     /// cleared by `QuestionAnswered` or `QuestionStatusChanged(TimedOut)`.
     /// When `Some`, the input box shows answer mode.
@@ -270,6 +274,8 @@ impl TuiState {
             work_visible_count: 0,
             overview_scroll: 0,
             overview_total: 0,
+            recent_scroll: 0,
+            recent_total: 0,
             pending_question_text: None,
             panel_rects: state::PanelRects::default(),
         }

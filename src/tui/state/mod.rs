@@ -45,6 +45,8 @@ pub enum FocusZone {
 pub struct PanelRects {
     /// Activity stream area in the overview tab.
     pub activity: ratatui::prelude::Rect,
+    /// Recent completions area in the overview tab.
+    pub recent: ratatui::prelude::Rect,
     /// Conversation panel area (right side).
     pub conversation: ratatui::prelude::Rect,
     /// Work tree area in the overview tab.

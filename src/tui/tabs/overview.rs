@@ -23,9 +23,9 @@ const WORK_TREE_MAX_LINES: u16 = 8;
 ///
 /// Layout:
 /// ```text
-/// Activity (65%, flex)  | Agent card    (35%)
-///                       | Running tasks
-///                       | Stats
+/// Activity | Recent    | Agent card
+///          | tool calls| Running tasks
+///          |           | Stats
 /// Work tree (full width, capped at 8 lines)
 /// ```
 pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
@@ -37,17 +37,25 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         .constraints([Constraint::Min(5), Constraint::Length(work_h)])
         .split(area);
 
-    // Main content: activity (left 65%) | right column (35%).
-    let main_row = Layout::default()
+    // Main: 3 columns — activity (40%) | recent (30%) | right panel (30%).
+    let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+        ])
         .split(outer[0]);
 
     // Left: activity stream.
-    render_activity_stream(frame, main_row[0], graph, tui_state);
-    tui_state.panel_rects.activity = main_row[0];
+    render_activity_stream(frame, cols[0], graph, tui_state);
+    tui_state.panel_rects.activity = cols[0];
 
-    // Right column: agent card + running tasks + stats (stacked vertically).
+    // Center: recent tool call completions.
+    render_recent_completions(frame, cols[1], graph, tui_state);
+    tui_state.panel_rects.recent = cols[1];
+
+    // Right: agent card + running tasks + stats (stacked vertically).
     let right_col = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -55,7 +63,7 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
             Constraint::Length(agents::running_tasks_height(graph)),
             Constraint::Min(3),
         ])
-        .split(main_row[1]);
+        .split(cols[2]);
 
     agents::render_agent_card(frame, right_col[0], tui_state);
     agents::render_running_tasks(frame, right_col[1], graph, tui_state);
@@ -257,6 +265,57 @@ fn render_event_row(event: &EventRow, width: usize) -> Line<'static> {
         spans.push(Span::styled(dur.clone(), dim));
     }
     Line::from(spans)
+}
+
+// ── Recent completions ──────────────────────────────────────────────
+
+/// Render recently completed/failed tool calls, sorted newest first.
+fn render_recent_completions(
+    frame: &mut Frame,
+    area: Rect,
+    graph: &ConversationGraph,
+    tui_state: &mut TuiState,
+) {
+    let block = Block::default().title("Recent").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width < 8 { return; }
+
+    let now = Utc::now();
+    let w = inner.width as usize;
+    let max_rows = inner.height as usize;
+    let mut calls: Vec<&Node> = graph.nodes_by(|n| matches!(n, Node::ToolCall {
+        status: ToolCallStatus::Completed | ToolCallStatus::Failed, ..
+    }));
+    calls.sort_by_key(|n| std::cmp::Reverse(n.created_at()));
+    tui_state.recent_total = calls.len();
+    tui_state.recent_scroll = tui_state.recent_scroll.min(calls.len().saturating_sub(max_rows));
+    let calls: Vec<_> = calls.into_iter().skip(tui_state.recent_scroll).take(max_rows).collect();
+
+    let lines: Vec<Line<'_>> = calls.iter().filter_map(|n| {
+        let Node::ToolCall { status, arguments, created_at, completed_at, .. } = n else { return None };
+        let (icon, color) = tool_call_status_icon(status);
+        let dur = format_duration(&match completed_at {
+            Some(end) => finished(*end, *created_at),
+            None => elapsed(now, *created_at),
+        });
+        let fixed = 2 + 1 + dur.len();
+        let name = truncate(&arguments.display_summary(), w.saturating_sub(fixed));
+        let pad = w.saturating_sub(fixed + name.chars().count());
+        Some(Line::from(vec![
+            Span::styled(format!("{icon} "), Style::default().fg(color)),
+            Span::styled(name, Style::default().fg(Color::White)),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(dur, Style::default().fg(Color::DarkGray)),
+        ]))
+    }).collect();
+
+    if lines.is_empty() {
+        let empty = Span::styled("(no completions)", Style::default().fg(Color::DarkGray));
+        frame.render_widget(Paragraph::new(empty), inner);
+    } else {
+        frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+    }
 }
 
 // ── Work tree section ────────────────────────────────────────────────

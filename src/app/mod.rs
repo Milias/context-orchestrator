@@ -272,18 +272,25 @@ impl App {
             // Scroll activity stream.
             let max = self.tui_state.overview_total.saturating_sub(1);
             if up {
-                self.tui_state.overview_scroll =
-                    self.tui_state.overview_scroll.saturating_sub(3);
+                self.tui_state.overview_scroll = self.tui_state.overview_scroll.saturating_sub(3);
             } else if down {
-                self.tui_state.overview_scroll =
-                    (self.tui_state.overview_scroll + 3).min(max);
+                self.tui_state.overview_scroll = (self.tui_state.overview_scroll + 3).min(max);
+            }
+        } else if rects.recent.contains(pos) {
+            // Scroll recent completions.
+            let max = self.tui_state.recent_total.saturating_sub(1);
+            if up {
+                self.tui_state.recent_scroll =
+                    self.tui_state.recent_scroll.saturating_sub(3);
+            } else if down {
+                self.tui_state.recent_scroll =
+                    (self.tui_state.recent_scroll + 3).min(max);
             }
         } else if rects.conversation.contains(pos) {
             // Scroll conversation.
             self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
             if up {
-                self.tui_state.scroll_offset =
-                    self.tui_state.scroll_offset.saturating_sub(3);
+                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(3);
             } else if down {
                 self.tui_state.scroll_offset = self
                     .tui_state
@@ -300,11 +307,9 @@ impl App {
             // Scroll work tree selection.
             let max = self.tui_state.work_visible_count.saturating_sub(1);
             if up {
-                self.tui_state.work_selected =
-                    self.tui_state.work_selected.saturating_sub(1);
+                self.tui_state.work_selected = self.tui_state.work_selected.saturating_sub(1);
             } else if down {
-                self.tui_state.work_selected =
-                    (self.tui_state.work_selected + 1).min(max);
+                self.tui_state.work_selected = (self.tui_state.work_selected + 1).min(max);
             }
         }
     }
