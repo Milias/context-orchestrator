@@ -6,7 +6,7 @@ use crate::llm::{ChatContent, ChatMessage, ContentBlock, LlmProvider, RawJson, T
 /// Caller should hold a read lock on the shared graph while calling this.
 pub(super) fn extract_messages(
     graph: &ConversationGraph,
-    tools: &[ToolDefinition],
+    _tools: &[ToolDefinition],
 ) -> (Option<String>, Vec<ChatMessage>) {
     let history = graph
         .get_branch_history(graph.active_branch())
@@ -44,9 +44,11 @@ pub(super) fn extract_messages(
         }
     }
 
-    // Append tool names to system prompt so the LLM knows what's available.
-    if !tools.is_empty() {
-        // No mutation needed — tool definitions are passed separately to the API.
+    // Inject active plan context into the system prompt.
+    if let Some(plan_section) = super::plan::context::build_plan_section(graph) {
+        let prompt = system_prompt.get_or_insert_with(String::new);
+        prompt.push_str("\n\n");
+        prompt.push_str(&plan_section);
     }
 
     (system_prompt, messages)

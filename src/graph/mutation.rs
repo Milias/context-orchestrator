@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::history::NodeSnapshot;
 use super::node::Node;
 use super::tool_types::{ToolCallStatus, ToolResultContent};
-use super::{ConversationGraph, EdgeKind, TaskStatus};
+use super::{ConversationGraph, EdgeKind, TaskStatus, WorkItemStatus};
 
 impl ConversationGraph {
     /// Snapshot the current node state, then apply a mutation closure.
@@ -124,6 +124,77 @@ impl ConversationGraph {
                 }
                 Ok(())
             });
+        }
+    }
+
+    /// Update the status of a `WorkItem` node and propagate upward.
+    /// When all siblings of a parent are `Done`, the parent auto-transitions to `Done`.
+    /// When any child becomes `Active` and parent is `Todo`, parent becomes `Active`.
+    pub fn update_work_item_status(
+        &mut self,
+        id: Uuid,
+        new_status: WorkItemStatus,
+    ) -> anyhow::Result<()> {
+        self.mutate_node(id, |node| match node {
+            Node::WorkItem { status, .. } => {
+                *status = new_status;
+                Ok(())
+            }
+            _ => anyhow::bail!("Node {id} is not a WorkItem"),
+        })?;
+        self.propagate_status(id);
+        Ok(())
+    }
+
+    /// Walk `SubtaskOf` edges upward, auto-transitioning parent status:
+    /// - If all children are `Done` → parent becomes `Done`
+    /// - If any child is `Active` and parent is `Todo` → parent becomes `Active`
+    fn propagate_status(&mut self, child_id: Uuid) {
+        let Some(parent_id) = self.parent_of(child_id) else {
+            return;
+        };
+        let siblings = self.children_of(parent_id);
+        let all_done = siblings.iter().all(|&sib| {
+            matches!(
+                self.node(sib),
+                Some(Node::WorkItem {
+                    status: WorkItemStatus::Done,
+                    ..
+                })
+            )
+        });
+        let any_active = siblings.iter().any(|&sib| {
+            matches!(
+                self.node(sib),
+                Some(Node::WorkItem {
+                    status: WorkItemStatus::Active,
+                    ..
+                })
+            )
+        });
+
+        let parent_status = self.node(parent_id).and_then(|n| match n {
+            Node::WorkItem { status, .. } => Some(status.clone()),
+            _ => None,
+        });
+
+        let new_parent_status = if all_done {
+            Some(WorkItemStatus::Done)
+        } else if any_active && parent_status == Some(WorkItemStatus::Todo) {
+            Some(WorkItemStatus::Active)
+        } else {
+            None
+        };
+
+        if let Some(new_status) = new_parent_status {
+            let _ = self.mutate_node(parent_id, |node| {
+                if let Node::WorkItem { status, .. } = node {
+                    *status = new_status.clone();
+                }
+                Ok(())
+            });
+            // Continue propagating upward.
+            self.propagate_status(parent_id);
         }
     }
 

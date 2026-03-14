@@ -6,7 +6,7 @@ pub mod tool_types;
 pub use history::NodeSnapshot;
 pub use node::{
     BackgroundTaskKind, Edge, EdgeKind, GitFileStatus, Node, Role, StopReason, TaskStatus,
-    WorkItemStatus,
+    WorkItemKind, WorkItemStatus,
 };
 pub use tool_types::{parse_tool_arguments, ToolCallArguments, ToolResultContent};
 
@@ -223,6 +223,56 @@ impl ConversationGraph {
     /// Look up a node by id.
     pub fn node(&self, id: Uuid) -> Option<&Node> {
         self.nodes.get(&id)
+    }
+
+    /// Look up a node by id (mutable). Use sparingly — prefer `mutate_node`
+    /// in `mutation.rs` for changes that need version snapshots.
+    pub fn node_mut(&mut self, id: Uuid) -> Option<&mut Node> {
+        self.nodes.get_mut(&id)
+    }
+
+    /// Find all children of a node connected via `SubtaskOf` edges.
+    /// Returns child node IDs (where `child --SubtaskOf--> parent`).
+    pub fn children_of(&self, parent_id: Uuid) -> Vec<Uuid> {
+        self.sources_by_edge(parent_id, EdgeKind::SubtaskOf)
+    }
+
+    /// Find the parent of a node via a `SubtaskOf` edge, if any.
+    /// Returns the target of the first `SubtaskOf` edge from this node.
+    pub fn parent_of(&self, child_id: Uuid) -> Option<Uuid> {
+        self.edges
+            .iter()
+            .find(|e| e.from == child_id && e.kind == EdgeKind::SubtaskOf)
+            .map(|e| e.to)
+    }
+
+    /// Find all plans that `plan_id` depends on (via `DependsOn` edges).
+    /// Returns prerequisite plan IDs.
+    pub fn dependencies_of(&self, plan_id: Uuid) -> Vec<Uuid> {
+        self.edges
+            .iter()
+            .filter(|e| e.from == plan_id && e.kind == EdgeKind::DependsOn)
+            .map(|e| e.to)
+            .collect()
+    }
+
+    /// Check if there's a path from `start` to `target` following `DependsOn` edges.
+    /// Used for cycle detection before adding a new dependency.
+    pub fn has_dependency_path(&self, start: Uuid, target: Uuid) -> bool {
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![start];
+        while let Some(current) = stack.pop() {
+            if current == target {
+                return true;
+            }
+            if !visited.insert(current) {
+                continue;
+            }
+            for dep in self.dependencies_of(current) {
+                stack.push(dep);
+            }
+        }
+        false
     }
 
     /// Check if a node has an associated `ThinkBlock` linked via `ThinkingOf`.

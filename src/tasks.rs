@@ -245,7 +245,7 @@ pub fn spawn_tool_discovery(tx: mpsc::UnboundedSender<TaskMessage>) {
         let tools: Vec<ToolSnapshot> = crate::tool_executor::tool_registry()
             .iter()
             .map(|entry| ToolSnapshot {
-                name: entry.name.to_string(),
+                name: entry.name.as_str().to_string(),
                 description: entry.description.to_string(),
             })
             .collect();

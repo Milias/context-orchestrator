@@ -280,6 +280,8 @@ pub struct TuiState {
     pub tool_display: ToolDisplayMode,
     /// Lifetime token usage displayed in the status bar (animated).
     pub token_usage: TokenUsage,
+    /// State for the Work tab tree widget (expand/collapse).
+    pub work_tree: widgets::work_tree::WorkTreeState,
 }
 
 #[derive(Debug)]
@@ -311,6 +313,7 @@ impl TuiState {
             active_task_ids: Vec::new(),
             tool_display: ToolDisplayMode::Compact,
             token_usage: TokenUsage::default(),
+            work_tree: widgets::work_tree::WorkTreeState::default(),
         }
     }
 }

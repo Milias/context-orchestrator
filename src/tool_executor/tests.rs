@@ -342,9 +342,9 @@ async fn test_search_files_rejects_escape() {
         .contains("escapes working directory"));
 }
 
-/// Catches plan execution returning error instead of creating work item.
+/// Catches plan execution returning error instead of success placeholder.
 #[tokio::test]
-async fn test_execute_plan_creates_work_item() {
+async fn test_execute_plan_returns_success() {
     let args = ToolCallArguments::Plan {
         title: "fix the login".to_string(),
         description: None,
@@ -352,8 +352,8 @@ async fn test_execute_plan_creates_work_item() {
     let result = execute_tool(&args).await;
     assert!(!result.is_error);
     assert!(
-        result.content.text_content().contains("Created work item"),
-        "should contain work item confirmation: {}",
+        result.content.text_content().contains("Created plan"),
+        "should contain plan confirmation: {}",
         result.content.text_content()
     );
 }

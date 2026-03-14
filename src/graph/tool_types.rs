@@ -1,4 +1,85 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use super::WorkItemStatus;
+
+// ── ToolName ─────────────────────────────────────────────────────────
+
+/// Canonical identifier for a registered tool. Single source of truth for
+/// tool name strings and their serde tag discriminants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolName {
+    Plan,
+    AddTask,
+    UpdateWorkItem,
+    AddDependency,
+    ReadFile,
+    WriteFile,
+    ListDirectory,
+    SearchFiles,
+    WebSearch,
+    Set,
+}
+
+impl ToolName {
+    /// Wire name as it appears in the API, triggers, and registry.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::AddTask => "add_task",
+            Self::UpdateWorkItem => "update_work_item",
+            Self::AddDependency => "add_dependency",
+            Self::ReadFile => "read_file",
+            Self::WriteFile => "write_file",
+            Self::ListDirectory => "list_directory",
+            Self::SearchFiles => "search_files",
+            Self::WebSearch => "web_search",
+            Self::Set => "set",
+        }
+    }
+
+    /// Serde tag value matching the `#[serde(tag = "tool_type")]` discriminant
+    /// on `ToolCallArguments`. Used by `parse_tool_arguments` to inject the tag.
+    pub const fn serde_tag(self) -> &'static str {
+        match self {
+            Self::Plan => "Plan",
+            Self::AddTask => "AddTask",
+            Self::UpdateWorkItem => "UpdateWorkItem",
+            Self::AddDependency => "AddDependency",
+            Self::ReadFile => "ReadFile",
+            Self::WriteFile => "WriteFile",
+            Self::ListDirectory => "ListDirectory",
+            Self::SearchFiles => "SearchFiles",
+            Self::WebSearch => "WebSearch",
+            Self::Set => "Set",
+        }
+    }
+
+    /// Parse a wire name into a `ToolName`, if recognized.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "plan" => Some(Self::Plan),
+            "add_task" => Some(Self::AddTask),
+            "update_work_item" => Some(Self::UpdateWorkItem),
+            "add_dependency" => Some(Self::AddDependency),
+            "read_file" => Some(Self::ReadFile),
+            "write_file" => Some(Self::WriteFile),
+            "list_directory" => Some(Self::ListDirectory),
+            "search_files" => Some(Self::SearchFiles),
+            "web_search" => Some(Self::WebSearch),
+            "set" => Some(Self::Set),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ToolName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ── ToolCallStatus ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +116,23 @@ pub enum ToolCallArguments {
     WebSearch {
         query: String,
     },
+    /// Add a task under a plan or another task.
+    AddTask {
+        parent_id: Uuid,
+        title: String,
+        description: Option<String>,
+    },
+    /// Update a work item's status or description.
+    UpdateWorkItem {
+        id: Uuid,
+        status: Option<WorkItemStatus>,
+        description: Option<String>,
+    },
+    /// Declare a plan-to-plan dependency: `from_id` depends on `to_id`.
+    AddDependency {
+        from_id: Uuid,
+        to_id: Uuid,
+    },
     Set {
         key: String,
         value: String,
@@ -46,15 +144,20 @@ pub enum ToolCallArguments {
 }
 
 impl ToolCallArguments {
+    /// The tool's wire name. For typed variants this is derived from `ToolName`;
+    /// for `Unknown` it returns the raw string received from the LLM.
     pub fn tool_name(&self) -> &str {
         match self {
-            Self::Plan { .. } => "plan",
-            Self::ReadFile { .. } => "read_file",
-            Self::WriteFile { .. } => "write_file",
-            Self::ListDirectory { .. } => "list_directory",
-            Self::SearchFiles { .. } => "search_files",
-            Self::WebSearch { .. } => "web_search",
-            Self::Set { .. } => "set",
+            Self::Plan { .. } => ToolName::Plan.as_str(),
+            Self::AddTask { .. } => ToolName::AddTask.as_str(),
+            Self::UpdateWorkItem { .. } => ToolName::UpdateWorkItem.as_str(),
+            Self::AddDependency { .. } => ToolName::AddDependency.as_str(),
+            Self::ReadFile { .. } => ToolName::ReadFile.as_str(),
+            Self::WriteFile { .. } => ToolName::WriteFile.as_str(),
+            Self::ListDirectory { .. } => ToolName::ListDirectory.as_str(),
+            Self::SearchFiles { .. } => ToolName::SearchFiles.as_str(),
+            Self::WebSearch { .. } => ToolName::WebSearch.as_str(),
+            Self::Set { .. } => ToolName::Set.as_str(),
             Self::Unknown { tool_name, .. } => tool_name,
         }
     }
@@ -64,6 +167,18 @@ impl ToolCallArguments {
     pub fn display_summary(&self) -> String {
         match self {
             Self::Plan { title, .. } => format!("plan: {title}"),
+            Self::AddTask {
+                title, parent_id, ..
+            } => {
+                format!("add_task: {title} (under {parent_id})")
+            }
+            Self::UpdateWorkItem { id, status, .. } => match status {
+                Some(s) => format!("update_work_item: {id} → {s:?}"),
+                None => format!("update_work_item: {id}"),
+            },
+            Self::AddDependency { from_id, to_id } => {
+                format!("add_dependency: {from_id} → {to_id}")
+            }
             Self::ReadFile { path } => format!("read_file: {path}"),
             Self::WriteFile { path, .. } => format!("write_file: {path}"),
             Self::ListDirectory { path, .. } => format!("list_directory: {path}"),
@@ -214,21 +329,13 @@ impl ToolResultContent {
 /// Note: `serde_json::Value` is used transiently to inject the tag field
 /// (same pattern as `to_input_json`). It never appears in a struct field.
 pub fn parse_tool_arguments(name: &str, raw_json: &str) -> ToolCallArguments {
-    let tag = match name {
-        "plan" => "Plan",
-        "read_file" => "ReadFile",
-        "write_file" => "WriteFile",
-        "list_directory" => "ListDirectory",
-        "search_files" => "SearchFiles",
-        "web_search" => "WebSearch",
-        "set" => "Set",
-        _ => {
-            return ToolCallArguments::Unknown {
-                tool_name: name.to_string(),
-                raw_json: raw_json.to_string(),
-            }
-        }
+    let Some(tool) = ToolName::from_str(name) else {
+        return ToolCallArguments::Unknown {
+            tool_name: name.to_string(),
+            raw_json: raw_json.to_string(),
+        };
     };
+    let tag = tool.serde_tag();
     if let Ok(serde_json::Value::Object(mut map)) = serde_json::from_str(raw_json) {
         map.insert(
             "tool_type".to_string(),

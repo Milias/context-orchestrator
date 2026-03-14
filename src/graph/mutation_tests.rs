@@ -155,6 +155,106 @@ fn test_remove_nodes_cleans_history() {
     );
 }
 
+/// Bug: parent not auto-completing when all children are Done.
+/// `propagate_status` must walk `SubtaskOf` edges upward and set parent to Done
+/// when every sibling is Done.
+#[test]
+fn test_propagate_status_completes_parent_when_all_children_done() {
+    let mut graph = ConversationGraph::new("sys");
+
+    // Create a Plan parent.
+    let parent_id = Uuid::new_v4();
+    graph.add_node(Node::WorkItem {
+        id: parent_id,
+        kind: WorkItemKind::Plan,
+        title: "Parent plan".to_string(),
+        status: WorkItemStatus::Todo,
+        description: None,
+        created_at: Utc::now(),
+    });
+
+    // Create 2 Task children linked via SubtaskOf.
+    let child1_id = Uuid::new_v4();
+    let child2_id = Uuid::new_v4();
+    for (id, title) in [(child1_id, "Task 1"), (child2_id, "Task 2")] {
+        graph.add_node(Node::WorkItem {
+            id,
+            kind: WorkItemKind::Task,
+            title: title.to_string(),
+            status: WorkItemStatus::Todo,
+            description: None,
+            created_at: Utc::now(),
+        });
+        graph.add_edge(id, parent_id, EdgeKind::SubtaskOf).unwrap();
+    }
+
+    // Mark both children as Done.
+    graph
+        .update_work_item_status(child1_id, WorkItemStatus::Done)
+        .unwrap();
+    graph
+        .update_work_item_status(child2_id, WorkItemStatus::Done)
+        .unwrap();
+
+    // Parent should have auto-transitioned to Done.
+    if let Some(Node::WorkItem { status, .. }) = graph.node(parent_id) {
+        assert_eq!(
+            *status,
+            WorkItemStatus::Done,
+            "parent should auto-complete when all children are Done"
+        );
+    } else {
+        panic!("parent node should exist and be a WorkItem");
+    }
+}
+
+/// Bug: wrong `SubtaskOf` edge direction in `children_of` query.
+/// `children_of(parent)` must return children that have `child --SubtaskOf--> parent`
+/// edges, and `parent_of(child)` must return the parent.
+#[test]
+fn test_children_of_returns_subtask_children() {
+    let mut graph = ConversationGraph::new("sys");
+
+    let parent_id = Uuid::new_v4();
+    graph.add_node(Node::WorkItem {
+        id: parent_id,
+        kind: WorkItemKind::Plan,
+        title: "Parent".to_string(),
+        status: WorkItemStatus::Todo,
+        description: None,
+        created_at: Utc::now(),
+    });
+
+    let child_id = Uuid::new_v4();
+    graph.add_node(Node::WorkItem {
+        id: child_id,
+        kind: WorkItemKind::Task,
+        title: "Child".to_string(),
+        status: WorkItemStatus::Todo,
+        description: None,
+        created_at: Utc::now(),
+    });
+
+    // Edge direction: child --SubtaskOf--> parent.
+    graph
+        .add_edge(child_id, parent_id, EdgeKind::SubtaskOf)
+        .unwrap();
+
+    let children = graph.children_of(parent_id);
+    assert_eq!(
+        children,
+        vec![child_id],
+        "children_of should return the child"
+    );
+
+    let parent = graph.parent_of(child_id);
+    assert_eq!(
+        parent,
+        Some(parent_id),
+        "parent_of should return the parent"
+    );
+}
+
 /// Bug: `add_tool_call` Pending→Running must produce a Pending snapshot.
 #[test]
 fn test_add_tool_call_captures_pending_snapshot() {

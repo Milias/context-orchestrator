@@ -1,4 +1,4 @@
-use crate::graph::tool_types::ToolCallArguments;
+use crate::graph::tool_types::{ToolCallArguments, ToolName};
 
 // ── Trigger Parsing ─────────────────────────────────────────────────
 
@@ -22,13 +22,14 @@ pub fn parse_triggers(text: &str) -> Vec<ParsedTrigger> {
             continue;
         };
         for entry in registry {
-            if let Some(after) = rest.strip_prefix(entry.name) {
+            let name_str = entry.name.as_str();
+            if let Some(after) = rest.strip_prefix(name_str) {
                 // Ensure the tool name is a full token (not a prefix of a longer word)
                 if after.is_empty() || after.starts_with(' ') {
                     let args = after.trim().to_string();
                     if !args.is_empty() {
                         triggers.push(ParsedTrigger {
-                            tool_name: entry.name.to_string(),
+                            tool_name: name_str.to_string(),
                             args,
                         });
                     }
@@ -42,36 +43,50 @@ pub fn parse_triggers(text: &str) -> Vec<ParsedTrigger> {
 }
 
 /// Parse positional user trigger args into typed `ToolCallArguments`.
+/// Uses `ToolName` enum for matching; tools requiring UUID args (`add_task`,
+/// `update_work_item`, `add_dependency`) fall through to `Unknown` since
+/// positional parsing cannot produce `Uuid` fields.
 pub fn parse_user_trigger_args(tool_name: &str, args: &str) -> ToolCallArguments {
-    match tool_name {
-        "plan" => ToolCallArguments::Plan {
+    let Some(name) = ToolName::from_str(tool_name) else {
+        return ToolCallArguments::Unknown {
+            tool_name: tool_name.to_string(),
+            raw_json: args.to_string(),
+        };
+    };
+
+    match name {
+        ToolName::Plan => ToolCallArguments::Plan {
             title: args.to_string(),
             description: None,
         },
-        "set" => {
+        ToolName::Set => {
             let mut parts = args.splitn(2, ' ');
             let key = parts.next().unwrap_or("").trim().to_string();
             let value = parts.next().unwrap_or("").trim().to_string();
             ToolCallArguments::Set { key, value }
         }
-        "read_file" => ToolCallArguments::ReadFile {
+        ToolName::ReadFile => ToolCallArguments::ReadFile {
             path: args.to_string(),
         },
-        "write_file" => {
+        ToolName::WriteFile => {
             let mut parts = args.splitn(2, ' ');
             let path = parts.next().unwrap_or("").to_string();
             let content = parts.next().unwrap_or("").to_string();
             ToolCallArguments::WriteFile { path, content }
         }
-        "list_directory" => ToolCallArguments::ListDirectory {
+        ToolName::ListDirectory => ToolCallArguments::ListDirectory {
             path: args.to_string(),
             recursive: None,
         },
-        "search_files" => ToolCallArguments::SearchFiles {
+        ToolName::SearchFiles => ToolCallArguments::SearchFiles {
             pattern: args.to_string(),
             path: None,
         },
-        _ => ToolCallArguments::Unknown {
+        // Tools requiring UUID args — positional parsing cannot produce Uuid fields.
+        ToolName::AddTask
+        | ToolName::UpdateWorkItem
+        | ToolName::AddDependency
+        | ToolName::WebSearch => ToolCallArguments::Unknown {
             tool_name: tool_name.to_string(),
             raw_json: args.to_string(),
         },

@@ -1,10 +1,32 @@
+//! Tool registry, definitions, and execution spawning.
+//!
+//! The registry is the single source of truth for all tools. Discovery,
+//! LLM registration, autocomplete, and trigger parsing all derive from it.
+//! Execution logic lives in `execute.rs`; per-tool implementations in
+//! their own submodules.
+
+mod execute;
 mod list_directory;
+mod plan_tools;
 mod read_file;
 mod search_files;
 mod security;
 mod write_file;
 
-use crate::graph::tool_types::{ToolCallArguments, ToolResultContent};
+pub use execute::{apply_config_set, execute_tool, ConfigKey};
+
+use crate::graph::tool_types::{ToolCallArguments, ToolName, ToolResultContent};
+use crate::llm::tool_types::{SchemaProperty, SchemaType, ToolDefinition, ToolInputSchema};
+use crate::tasks::TaskMessage;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+/// Result of executing a tool call.
+pub struct ToolExecutionResult {
+    pub content: ToolResultContent,
+    pub is_error: bool,
+}
 
 /// Directories to skip during recursive traversal.
 const SKIP_DIRS: &[&str] = &[
@@ -18,23 +40,13 @@ const SKIP_DIRS: &[&str] = &[
     "dist",
     "build",
 ];
-use crate::llm::tool_types::{SchemaProperty, SchemaType, ToolDefinition, ToolInputSchema};
-use crate::tasks::TaskMessage;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
-
-pub struct ToolExecutionResult {
-    pub content: ToolResultContent,
-    pub is_error: bool,
-}
 
 // ── Tool Registry ───────────────────────────────────────────────────
 
 /// Metadata for a registered tool. Every tool is equally callable by users
 /// (via `/name args`) and by the LLM (via `tool_use`).
 pub struct ToolRegistryEntry {
-    pub name: &'static str,
+    pub name: ToolName,
     pub description: &'static str,
     pub input_schema: ToolInputSchema,
 }
@@ -49,46 +61,112 @@ pub fn tool_registry() -> &'static [ToolRegistryEntry] {
 
 fn build_registry() -> Vec<ToolRegistryEntry> {
     let mut tools = config_tools();
+    tools.extend(plan_tools());
     tools.extend(filesystem_tools());
     tools
 }
 
-/// Config and planning tools.
+/// Config tools.
 fn config_tools() -> Vec<ToolRegistryEntry> {
+    vec![entry(
+        ToolName::Set,
+        "Set a runtime configuration value (e.g. max_tokens, model)",
+        &[
+            prop(
+                "key",
+                SchemaType::String,
+                "Config key: max_tokens, max_context_tokens, model, max_tool_loop_iterations",
+                true,
+            ),
+            prop(
+                "value",
+                SchemaType::String,
+                "New value for the config key",
+                true,
+            ),
+        ],
+    )]
+}
+
+/// Plan and task management tools.
+fn plan_tools() -> Vec<ToolRegistryEntry> {
     vec![
         entry(
-            "set",
-            "Set a runtime configuration value (e.g. max_tokens, model)",
-            &[
-                prop(
-                    "key",
-                    SchemaType::String,
-                    "Config key: max_tokens, max_context_tokens, model, max_tool_loop_iterations",
-                    true,
-                ),
-                prop(
-                    "value",
-                    SchemaType::String,
-                    "New value for the config key",
-                    true,
-                ),
-            ],
-        ),
-        entry(
-            "plan",
-            "Create a structured work item from a description",
+            ToolName::Plan,
+            "Create a plan. Returns the plan UUID. Use add_task to decompose it into steps.",
             &[
                 prop(
                     "title",
                     SchemaType::String,
-                    "Concise title for the work item",
+                    "Concise title for the plan",
                     true,
                 ),
                 prop(
                     "description",
                     SchemaType::String,
-                    "Detailed description of the work item",
+                    "Detailed description of the plan",
                     false,
+                ),
+            ],
+        ),
+        entry(
+            ToolName::AddTask,
+            "Add a task under a plan or another task. Provide the parent's UUID.",
+            &[
+                prop(
+                    "parent_id",
+                    SchemaType::String,
+                    "UUID of the parent plan or task",
+                    true,
+                ),
+                prop("title", SchemaType::String, "Title of the task", true),
+                prop(
+                    "description",
+                    SchemaType::String,
+                    "Description of the task",
+                    false,
+                ),
+            ],
+        ),
+        entry(
+            ToolName::UpdateWorkItem,
+            "Update a work item's status (todo/active/done) or description.",
+            &[
+                prop(
+                    "id",
+                    SchemaType::String,
+                    "UUID of the work item to update",
+                    true,
+                ),
+                prop(
+                    "status",
+                    SchemaType::String,
+                    "New status: todo, active, or done",
+                    false,
+                ),
+                prop(
+                    "description",
+                    SchemaType::String,
+                    "Updated description",
+                    false,
+                ),
+            ],
+        ),
+        entry(
+            ToolName::AddDependency,
+            "Declare that one plan depends on another completing first. from_id depends on to_id.",
+            &[
+                prop(
+                    "from_id",
+                    SchemaType::String,
+                    "UUID of the plan that depends on another",
+                    true,
+                ),
+                prop(
+                    "to_id",
+                    SchemaType::String,
+                    "UUID of the prerequisite plan",
+                    true,
                 ),
             ],
         ),
@@ -99,7 +177,7 @@ fn config_tools() -> Vec<ToolRegistryEntry> {
 fn filesystem_tools() -> Vec<ToolRegistryEntry> {
     vec![
         entry(
-            "read_file",
+            ToolName::ReadFile,
             "Read the contents of a file at the given path",
             &[prop(
                 "path",
@@ -109,7 +187,7 @@ fn filesystem_tools() -> Vec<ToolRegistryEntry> {
             )],
         ),
         entry(
-            "write_file",
+            ToolName::WriteFile,
             "Write content to a file, creating parent directories if needed",
             &[
                 prop(
@@ -127,7 +205,7 @@ fn filesystem_tools() -> Vec<ToolRegistryEntry> {
             ],
         ),
         entry(
-            "list_directory",
+            ToolName::ListDirectory,
             "List files and directories at a given path",
             &[
                 prop(
@@ -145,7 +223,7 @@ fn filesystem_tools() -> Vec<ToolRegistryEntry> {
             ],
         ),
         entry(
-            "search_files",
+            ToolName::SearchFiles,
             "Search for a regex pattern across files in the project",
             &[
                 prop(
@@ -166,11 +244,7 @@ fn filesystem_tools() -> Vec<ToolRegistryEntry> {
 }
 
 /// Shorthand: build a `ToolRegistryEntry`.
-fn entry(
-    name: &'static str,
-    description: &'static str,
-    props: &[SchemaProperty],
-) -> ToolRegistryEntry {
+fn entry(name: ToolName, description: &'static str, props: &[SchemaProperty]) -> ToolRegistryEntry {
     ToolRegistryEntry {
         name,
         description,
@@ -200,182 +274,14 @@ pub fn registered_tool_definitions() -> Vec<ToolDefinition> {
     tool_registry()
         .iter()
         .map(|entry| ToolDefinition {
-            name: entry.name.to_string(),
+            name: entry.name.as_str().to_string(),
             description: entry.description.to_string(),
             input_schema: entry.input_schema.clone(),
         })
         .collect()
 }
 
-// ── ConfigKey ────────────────────────────────────────────────────────
-
-/// Typed runtime configuration keys for the `set` tool.
-/// String parsing happens at the validation boundary; downstream logic
-/// matches on enum variants with exhaustiveness checking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigKey {
-    MaxTokens,
-    MaxContextTokens,
-    Model,
-    MaxToolLoopIterations,
-}
-
-impl ConfigKey {
-    /// All valid variants. Exhaustive match in `FromStr` ensures this stays in sync.
-    const ALL: &[Self] = &[
-        Self::MaxTokens,
-        Self::MaxContextTokens,
-        Self::Model,
-        Self::MaxToolLoopIterations,
-    ];
-
-    /// All valid keys as a comma-separated string, for error messages.
-    fn all_display() -> String {
-        Self::ALL
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-}
-
-impl std::fmt::Display for ConfigKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MaxTokens => write!(f, "max_tokens"),
-            Self::MaxContextTokens => write!(f, "max_context_tokens"),
-            Self::Model => write!(f, "model"),
-            Self::MaxToolLoopIterations => write!(f, "max_tool_loop_iterations"),
-        }
-    }
-}
-
-impl std::str::FromStr for ConfigKey {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "max_tokens" => Ok(Self::MaxTokens),
-            "max_context_tokens" => Ok(Self::MaxContextTokens),
-            "model" => Ok(Self::Model),
-            "max_tool_loop_iterations" => Ok(Self::MaxToolLoopIterations),
-            _ => Err(format!(
-                "Unknown config key: {s}. Valid keys: {}",
-                Self::all_display()
-            )),
-        }
-    }
-}
-
-/// Execute a tool call and return the result.
-pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult {
-    match arguments {
-        ToolCallArguments::Set { key, value } => execute_set(key, value),
-        ToolCallArguments::Plan { title, .. } => ToolExecutionResult {
-            content: ToolResultContent::text(format!("Created work item: {title}")),
-            is_error: false,
-        },
-        ToolCallArguments::ReadFile { path } => read_file::execute(path).await,
-        ToolCallArguments::WriteFile { path, content } => write_file::execute(path, content).await,
-        ToolCallArguments::ListDirectory { path, recursive } => {
-            list_directory::execute(path, recursive.unwrap_or(false)).await
-        }
-        ToolCallArguments::SearchFiles { pattern, path } => {
-            search_files::execute(pattern, path.as_deref()).await
-        }
-        ToolCallArguments::WebSearch { query } => ToolExecutionResult {
-            content: ToolResultContent::text(format!(
-                "web_search not yet implemented (query: {query})"
-            )),
-            is_error: true,
-        },
-        ToolCallArguments::Unknown { tool_name, .. } => ToolExecutionResult {
-            content: ToolResultContent::text(format!(
-                "Unrecognized tool or invalid arguments: {tool_name}"
-            )),
-            is_error: true,
-        },
-    }
-}
-
-/// Validate a `set` command. Parses the string key into `ConfigKey` at the boundary.
-/// The actual config mutation happens in the task handler (which has `&mut AppConfig`).
-fn execute_set(key: &str, value: &str) -> ToolExecutionResult {
-    if value.is_empty() {
-        return set_err(format!("Missing value for {key}"));
-    }
-    let config_key = match key.parse::<ConfigKey>() {
-        Ok(k) => k,
-        Err(msg) => return set_err(msg),
-    };
-    if let Err(msg) = validate_set_value(config_key, value) {
-        return set_err(msg);
-    }
-    ToolExecutionResult {
-        content: ToolResultContent::text(format!("{config_key} set to {value}")),
-        is_error: false,
-    }
-}
-
-/// Validate value range for numeric config keys.
-fn validate_set_value(key: ConfigKey, value: &str) -> Result<(), String> {
-    match key {
-        ConfigKey::MaxTokens => validate_u32_range(key, value, 1, 128_000),
-        ConfigKey::MaxContextTokens => validate_u32_range(key, value, 1000, 1_000_000),
-        ConfigKey::MaxToolLoopIterations => {
-            let v = value
-                .parse::<usize>()
-                .map_err(|_| format!("Invalid value for {key}: expected a number"))?;
-            if v == 0 || v > 100 {
-                return Err(format!("{key} must be between 1 and 100"));
-            }
-            Ok(())
-        }
-        ConfigKey::Model => Ok(()), // accepts any non-empty string
-    }
-}
-
-fn validate_u32_range(key: ConfigKey, value: &str, min: u32, max: u32) -> Result<(), String> {
-    let v = value
-        .parse::<u32>()
-        .map_err(|_| format!("Invalid value for {key}: expected a number"))?;
-    if v < min || v > max {
-        return Err(format!("{key} must be between {min} and {max}"));
-    }
-    Ok(())
-}
-
-fn set_err(msg: String) -> ToolExecutionResult {
-    ToolExecutionResult {
-        content: ToolResultContent::text(msg),
-        is_error: true,
-    }
-}
-
-/// Apply a `set` config mutation. Called from the main event loop where `AppConfig` is mutable.
-/// Session-scoped — does not persist across restarts.
-pub fn apply_config_set(config: &mut crate::config::AppConfig, key: ConfigKey, value: &str) {
-    match key {
-        ConfigKey::MaxTokens => {
-            if let Ok(v) = value.parse::<u32>() {
-                config.max_tokens = v;
-            }
-        }
-        ConfigKey::MaxContextTokens => {
-            if let Ok(v) = value.parse::<u32>() {
-                config.max_context_tokens = v;
-            }
-        }
-        ConfigKey::Model => {
-            config.anthropic_model = value.to_string();
-        }
-        ConfigKey::MaxToolLoopIterations => {
-            if let Ok(v) = value.parse::<usize>() {
-                config.max_tool_loop_iterations = v;
-            }
-        }
-    }
-}
+// ── Spawn ───────────────────────────────────────────────────────────
 
 /// Spawn a tokio task that executes a tool call and sends the result back via the channel.
 /// The task is cancelled when `cancel_token` fires, sending a cancellation error.

@@ -83,6 +83,7 @@ fn test_add_node_without_edges() {
     let work_item = Node::WorkItem {
         id: Uuid::new_v4(),
         title: "Fix the bug".to_string(),
+        kind: WorkItemKind::Task,
         status: WorkItemStatus::Todo,
         description: None,
         created_at: Utc::now(),
@@ -101,6 +102,7 @@ fn test_typed_edges() {
     let wi = Node::WorkItem {
         id: Uuid::new_v4(),
         title: "Task".to_string(),
+        kind: WorkItemKind::Task,
         status: WorkItemStatus::Active,
         description: None,
         created_at: Utc::now(),

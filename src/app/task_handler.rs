@@ -1,5 +1,5 @@
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
-use crate::graph::{BackgroundTaskKind, EdgeKind, Node, StopReason, TaskStatus, WorkItemStatus};
+use crate::graph::{BackgroundTaskKind, EdgeKind, Node, StopReason, TaskStatus};
 use crate::storage::{TokenDirection, TokenEvent};
 use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
 use crate::tool_executor;
@@ -264,6 +264,7 @@ impl App {
         is_error: bool,
     ) {
         let mut g = self.graph.write();
+        let mut content = content;
 
         // Skip stale completions for tool calls already resolved (e.g. timed out).
         if let Some(Node::ToolCall { status, .. }) = g.node(tool_call_id) {
@@ -274,6 +275,7 @@ impl App {
 
         // Apply side-effects for specific tools (both user-triggered and LLM-triggered).
         if !is_error {
+            // Set: config mutation (requires dropping the graph lock).
             if let Some(Node::ToolCall {
                 arguments: ToolCallArguments::Set { key, value },
                 ..
@@ -285,9 +287,6 @@ impl App {
                     crate::tool_executor::apply_config_set(&mut self.config, config_key, &v);
                 }
                 g = self.graph.write();
-
-                // Re-check status: agent timeout could have resolved this tool
-                // while the lock was released for config mutation.
                 if let Some(Node::ToolCall { status, .. }) = g.node(tool_call_id) {
                     if *status == ToolCallStatus::Completed || *status == ToolCallStatus::Failed {
                         return;
@@ -295,26 +294,12 @@ impl App {
                 }
             }
 
-            if let Some(Node::ToolCall {
-                arguments:
-                    ToolCallArguments::Plan {
-                        title, description, ..
-                    },
-                parent_message_id,
-                ..
-            }) = g.node(tool_call_id)
-            {
-                let (t, d, pm) = (title.clone(), description.clone(), *parent_message_id);
-                let work_item = Node::WorkItem {
-                    id: Uuid::new_v4(),
-                    title: t.clone(),
-                    status: WorkItemStatus::Todo,
-                    description: d,
-                    created_at: Utc::now(),
-                };
-                let wi_id = g.add_node(work_item);
-                let _ = g.add_edge(wi_id, pm, EdgeKind::RelevantTo);
-                self.tui_state.status_message = Some(format!("Work item created: {t}"));
+            // Plan tools: create WorkItems, edges, enrich content with UUIDs.
+            if let Some(effect) = super::plan::effects::apply(&mut g, tool_call_id) {
+                content = effect.content;
+                if let Some(msg) = effect.status_message {
+                    self.tui_state.status_message = Some(msg);
+                }
             }
         }
 

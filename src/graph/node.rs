@@ -47,6 +47,15 @@ impl std::fmt::Display for Role {
     }
 }
 
+/// Whether a work item is a top-level plan or a task within a plan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemKind {
+    Plan,
+    #[default]
+    Task,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkItemStatus {
@@ -98,6 +107,8 @@ pub enum EdgeKind {
     RespondsTo,
     SubtaskOf,
     RelevantTo,
+    /// Plan-to-plan dependency: `from` depends on `to` completing first.
+    DependsOn,
     Tracks,
     Indexes,
     Provides,
@@ -141,6 +152,9 @@ pub enum Node {
     WorkItem {
         id: Uuid,
         title: String,
+        /// Plan (top-level container) or Task (actionable item within a plan).
+        #[serde(default)]
+        kind: WorkItemKind,
         status: WorkItemStatus,
         description: Option<String>,
         created_at: DateTime<Utc>,

@@ -28,6 +28,8 @@
   modules.
 - Files MUST be at most 400 lines. If a file grows beyond that, split it into
   modules.
+- Prefer nested modules over flat structure when names share a prefix (e.g.
+  `plan_effects.rs` + `plan_context.rs` → `plan/effects.rs` + `plan/context.rs`).
 - Tests MUST be in a separate file: `tests.rs` if the source is a module
   directory, or `<name>_tests.rs` if not.
 - Every test MUST answer the question "what bug does this test catch?". If you

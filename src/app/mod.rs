@@ -1,6 +1,7 @@
 mod agent_loop;
 mod agent_streaming;
 mod context;
+mod plan;
 mod task_handler;
 mod think_splitter;
 

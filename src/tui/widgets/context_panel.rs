@@ -67,7 +67,7 @@ fn render_tab_content(
         ContextTab::Files => render_node_list(frame, area, graph, tui_state, is_git_file),
         ContextTab::Tools => render_node_list(frame, area, graph, tui_state, is_tool),
         ContextTab::Tasks => super::task_list::render(frame, area, graph, tui_state),
-        ContextTab::Work => render_node_list(frame, area, graph, tui_state, is_work_item),
+        ContextTab::Work => super::work_tree::render(frame, area, graph, &tui_state.work_tree),
     }
 }
 
@@ -276,8 +276,4 @@ fn is_git_file(node: &Node) -> bool {
 
 fn is_tool(node: &Node) -> bool {
     matches!(node, Node::Tool { .. })
-}
-
-fn is_work_item(node: &Node) -> bool {
-    matches!(node, Node::WorkItem { .. })
 }

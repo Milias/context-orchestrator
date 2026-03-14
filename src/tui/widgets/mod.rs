@@ -8,6 +8,7 @@ mod table;
 mod task_list;
 pub mod tool_status;
 pub mod trigger_highlight;
+pub mod work_tree;
 
 #[cfg(test)]
 #[path = "display_helpers_tests.rs"]
