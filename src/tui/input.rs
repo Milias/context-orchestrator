@@ -30,21 +30,12 @@ pub fn handle_key_event(
                 tui_state.render_cache.clear();
                 return Action::None;
             }
-            KeyCode::Char('b') => {
-                tui_state.nav.conversation_visible = !tui_state.nav.conversation_visible;
-                if !tui_state.nav.conversation_visible
-                    && tui_state.nav.focus == FocusZone::Conversation
-                {
-                    tui_state.nav.focus = FocusZone::Input;
-                }
-                return Action::None;
-            }
             _ => {}
         }
     }
 
-    // Number keys 1-3: switch tabs (only when not typing in input).
-    if tui_state.nav.focus != FocusZone::Input {
+    // Number keys 1-3: switch tabs (only when TabContent focused).
+    if tui_state.nav.focus == FocusZone::TabContent {
         if let KeyCode::Char(c @ '1'..='3') = key.code {
             if let Some(tab) = crate::tui::state::TopTab::from_number(c.to_digit(10).unwrap_or(0)) {
                 tui_state.nav.active_tab = tab;
@@ -53,38 +44,48 @@ pub fn handle_key_event(
         }
     }
 
-    // Tab key: cycle focus zones.
+    // Tab key: toggle between TabContent and ChatPanel.
     if key.code == KeyCode::Tab {
-        // Autocomplete takes priority over focus toggle.
-        if tui_state.nav.focus == FocusZone::Input
+        // Autocomplete takes priority when chat panel is focused.
+        if tui_state.nav.focus == FocusZone::ChatPanel
             && tui_state.autocomplete.active
             && !tui_state.autocomplete.candidates.is_empty()
         {
             accept_completion(tui_state);
             return Action::None;
         }
-        tui_state.nav.focus = tui_state.nav.focus.next(tui_state.nav.conversation_visible);
+        tui_state.nav.focus = match tui_state.nav.focus {
+            FocusZone::TabContent => FocusZone::ChatPanel,
+            FocusZone::ChatPanel => FocusZone::TabContent,
+        };
         return Action::None;
     }
 
     // ── Per-zone dispatch ────────────────────────────────────────
     match tui_state.nav.focus {
-        FocusZone::Input => handle_input_key(key, tui_state, graph),
-        FocusZone::Conversation => handle_conversation_key(key),
+        FocusZone::ChatPanel => handle_chat_panel_key(key, tui_state, graph),
         FocusZone::TabContent => handle_tab_content_key(key, tui_state),
     }
 }
 
-/// Handle keys when the conversation panel is focused (scrolling).
-fn handle_conversation_key(key: KeyEvent) -> Action {
+/// Handle keys in the chat panel (right side): input + conversation scroll.
+/// Typing goes to the input box. Up/Down overflow from the cursor scrolls
+/// the conversation. PageUp/PageDown/End always scroll.
+fn handle_chat_panel_key(
+    key: KeyEvent,
+    tui_state: &mut TuiState,
+    graph: &ConversationGraph,
+) -> Action {
+    // Scroll keys that always scroll the conversation.
     match key.code {
-        KeyCode::Up => Action::ScrollUp,
-        KeyCode::Down => Action::ScrollDown,
-        KeyCode::PageUp => Action::PageUp,
-        KeyCode::PageDown => Action::PageDown,
-        KeyCode::End => Action::ScrollToBottom,
-        _ => Action::None,
+        KeyCode::PageUp => return Action::PageUp,
+        KeyCode::PageDown => return Action::PageDown,
+        KeyCode::End => return Action::ScrollToBottom,
+        _ => {}
     }
+    // Everything else goes to the input handler (which handles Up/Down
+    // overflow into scroll when the cursor is at the top/bottom of input).
+    handle_input_key(key, tui_state, graph)
 }
 
 /// Handle keys when a tab's content area is focused.

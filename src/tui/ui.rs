@@ -15,8 +15,8 @@ use ratatui::widgets::Paragraph;
 pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let area = frame.area();
 
-    // Conversation panel visible when toggled on and terminal >= 80 cols.
-    let show_conversation = tui_state.nav.conversation_visible && area.width >= 80;
+    // Conversation panel visible when ChatPanel is focused and terminal >= 80 cols.
+    let show_conversation = tui_state.nav.conversation_visible() && area.width >= 80;
 
     // Outer vertical: tab bar (1) | main content (flex) | status bar (1).
     let outer = Layout::default()
@@ -164,18 +164,13 @@ fn draw_status_bar(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
 fn build_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'static str)> {
     let mut shortcuts = vec![
         ("1-3", "view"),
-        ("Tab", "focus"),
-        ("Ctrl+B", "chat"),
+        ("Tab", "chat"),
         ("Ctrl+Q", "quit"),
     ];
 
     match tui_state.nav.focus {
-        FocusZone::Conversation => {
+        FocusZone::ChatPanel => {
             shortcuts.insert(0, ("Ctrl+E", "tools"));
-            shortcuts.insert(0, ("End", "auto-scroll"));
-            shortcuts.insert(0, ("Up/Dn", "scroll"));
-        }
-        FocusZone::Input => {
             shortcuts.insert(0, ("Enter", "send"));
         }
         FocusZone::TabContent => {

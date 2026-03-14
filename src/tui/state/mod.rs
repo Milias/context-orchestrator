@@ -1,8 +1,8 @@
 //! Navigation and view state for the tab-based TUI layout.
 //!
 //! `TopTab` controls which monitoring view fills the left content area.
-//! `FocusZone` tracks which region owns keyboard focus.
-//! The conversation panel is a persistent right-side panel, not a tab.
+//! `FocusZone` tracks which half of the screen owns keyboard focus.
+//! Tab toggles between monitoring (left) and conversation+input (right).
 
 /// Top-level tab controlling the left content area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,26 +41,15 @@ impl TopTab {
     }
 }
 
-/// Which region of the screen owns keyboard focus.
+/// Which half of the screen owns keyboard focus.
+/// Tab toggles between them; conversation panel visibility follows focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusZone {
     /// Left side — tab-specific monitoring/management panels.
     TabContent,
-    /// Right side — persistent conversation panel.
-    Conversation,
-    /// Bottom — message input box.
-    Input,
-}
-
-impl FocusZone {
-    /// Cycle to the next zone. Skips `Conversation` when the panel is hidden.
-    pub fn next(self, conversation_visible: bool) -> Self {
-        match self {
-            FocusZone::TabContent if conversation_visible => FocusZone::Conversation,
-            FocusZone::TabContent | FocusZone::Conversation => FocusZone::Input,
-            FocusZone::Input => FocusZone::TabContent,
-        }
-    }
+    /// Right side — conversation + input (combined).
+    /// Typing goes to input; Up/Down overflow scrolls conversation.
+    ChatPanel,
 }
 
 /// Top-level navigation state for the tab-based layout.
@@ -68,19 +57,23 @@ impl FocusZone {
 pub struct NavigationState {
     /// Which tab is active (controls the left content area).
     pub active_tab: TopTab,
-    /// Which screen region owns keyboard focus.
+    /// Which half of the screen owns keyboard focus.
     pub focus: FocusZone,
-    /// Whether the right conversation panel is visible.
-    pub conversation_visible: bool,
 }
 
 impl NavigationState {
     /// Create navigation state with sensible defaults.
+    /// Starts focused on the chat panel (conversation visible).
     pub fn new() -> Self {
         Self {
             active_tab: TopTab::Agents,
-            focus: FocusZone::Input,
-            conversation_visible: true,
+            focus: FocusZone::ChatPanel,
         }
+    }
+
+    /// Whether the right conversation panel should be rendered.
+    /// True when the chat panel is focused.
+    pub fn conversation_visible(&self) -> bool {
+        self.focus == FocusZone::ChatPanel
     }
 }

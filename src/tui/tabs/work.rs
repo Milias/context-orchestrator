@@ -41,7 +41,14 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         if lines.len() >= max_lines {
             break;
         }
-        render_item(&mut lines, item, 0, width, max_lines, tui_state.work_selected);
+        render_item(
+            &mut lines,
+            item,
+            0,
+            width,
+            max_lines,
+            tui_state.work_selected,
+        );
     }
 
     // Publish visible count so input handler can clamp selection.
