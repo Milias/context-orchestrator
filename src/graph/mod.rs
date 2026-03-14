@@ -35,10 +35,13 @@ pub struct ConversationGraph {
     active_branch: String,
     /// Version history: previous states of mutated nodes (oldest first per node).
     pub(super) history: HashMap<Uuid, Vec<NodeSnapshot>>,
-    /// Runtime index for fast ancestor walking. Not serialized.
+    /// Runtime index: child → parent for fast ancestor walking (from `RespondsTo` edges). Not serialized.
     #[serde(skip)]
     pub(super) responds_to: HashMap<Uuid, Uuid>,
-    /// Runtime index: `ToolCall` id -> parent message id (from `Invoked` edges). Not serialized.
+    /// Runtime index: parent → children for fast forward traversal (inverse of `responds_to`). Not serialized.
+    #[serde(skip)]
+    pub(super) reply_children: HashMap<Uuid, Vec<Uuid>>,
+    /// Runtime index: `ToolCall` id → parent message id (from `Invoked` edges). Not serialized.
     #[serde(skip)]
     pub(super) invoked_by: HashMap<Uuid, Uuid>,
     /// Event broadcast bus. Runtime-only (not serialized). `None` during tests
@@ -60,12 +63,17 @@ struct ConversationGraphRaw {
 
 impl From<ConversationGraphRaw> for ConversationGraph {
     fn from(raw: ConversationGraphRaw) -> Self {
-        let responds_to = raw
+        let responds_to: HashMap<Uuid, Uuid> = raw
             .edges
             .iter()
             .filter(|e| e.kind == EdgeKind::RespondsTo)
             .map(|e| (e.from, e.to))
             .collect();
+        // Build the forward index (parent → children) from the backward index.
+        let mut reply_children: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for (&child, &parent) in &responds_to {
+            reply_children.entry(parent).or_default().push(child);
+        }
         let invoked_by = raw
             .edges
             .iter()
@@ -79,6 +87,7 @@ impl From<ConversationGraphRaw> for ConversationGraph {
             active_branch: raw.active_branch,
             history: raw.history,
             responds_to,
+            reply_children,
             invoked_by,
             event_bus: None,
         }
@@ -118,6 +127,7 @@ impl ConversationGraph {
             active_branch: "main".to_string(),
             history: HashMap::new(),
             responds_to: HashMap::new(),
+            reply_children: HashMap::new(),
             invoked_by: HashMap::new(),
             event_bus: None,
         }
@@ -133,7 +143,7 @@ impl ConversationGraph {
     }
 
     /// Subscribe to the event bus. Returns `None` if the bus is not initialized.
-    /// Used by the agent loop to receive wake events while idle.
+    /// Used by event dispatch to receive graph mutation notifications.
     pub fn subscribe_events(&self) -> Option<tokio::sync::broadcast::Receiver<event::GraphEvent>> {
         self.event_bus.as_ref().map(event::EventBus::subscribe)
     }
@@ -145,9 +155,10 @@ impl ConversationGraph {
         }
     }
 
-    /// Add a message node as a child of `parent_id` via a `RespondsTo` edge.
-    /// Updates the active branch leaf pointer.
-    pub fn add_message(&mut self, parent_id: Uuid, node: Node) -> anyhow::Result<Uuid> {
+    /// Add a reply node linked to `parent_id` via a `RespondsTo` edge. Does NOT
+    /// update any branch leaf pointer. Use for task agent messages and
+    /// non-conversational replies that form their own `RespondsTo` chains.
+    pub fn add_reply(&mut self, parent_id: Uuid, node: Node) -> anyhow::Result<Uuid> {
         if !self.nodes.contains_key(&parent_id) {
             anyhow::bail!("Parent node {parent_id} does not exist");
         }
@@ -163,11 +174,35 @@ impl ConversationGraph {
             kind: EdgeKind::RespondsTo,
         });
         self.responds_to.insert(id, parent_id);
-        self.branches.insert(self.active_branch.clone(), id);
+        self.reply_children.entry(parent_id).or_default().push(id);
         if let Some(role) = role {
             self.emit(event::GraphEvent::MessageAdded { node_id: id, role });
         }
         Ok(id)
+    }
+
+    /// Add a message node as a child of `parent_id` via a `RespondsTo` edge.
+    /// Updates the active branch leaf pointer. Use for the conversational agent
+    /// whose messages advance the main conversation branch.
+    pub fn add_message(&mut self, parent_id: Uuid, node: Node) -> anyhow::Result<Uuid> {
+        let id = self.add_reply(parent_id, node)?;
+        self.branches.insert(self.active_branch.clone(), id);
+        Ok(id)
+    }
+
+    /// Walk forward from `root_id` through the `RespondsTo` chain to find the
+    /// leaf node (the most recent reply). Returns `root_id` if no children exist.
+    /// Uses the `reply_children` forward index for O(depth) traversal.
+    pub fn find_chain_leaf(&self, root_id: Uuid) -> Uuid {
+        let mut current = root_id;
+        while let Some(children) = self.reply_children.get(&current) {
+            if children.is_empty() {
+                break;
+            }
+            // Follow the last child (most recently added reply in the chain).
+            current = *children.last().expect("non-empty checked above");
+        }
+        current
     }
 
     /// Insert a node without any edges. Does NOT emit events — callers that
@@ -192,6 +227,7 @@ impl ConversationGraph {
         match kind {
             EdgeKind::RespondsTo => {
                 self.responds_to.insert(from, to);
+                self.reply_children.entry(to).or_default().push(from);
             }
             EdgeKind::Invoked => {
                 self.invoked_by.insert(from, to);
