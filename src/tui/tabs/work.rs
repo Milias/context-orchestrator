@@ -19,13 +19,6 @@ pub(super) struct WorkTreeItem {
     children: Vec<WorkTreeItem>,
 }
 
-impl WorkTreeItem {
-    /// Access the child items for recursive traversal.
-    pub(super) fn children(&self) -> &[WorkTreeItem] {
-        &self.children
-    }
-}
-
 /// Build the work tree from graph nodes.
 /// Plans are roots; tasks nest under their parent via `SubtaskOf`.
 pub(super) fn build_work_tree(graph: &ConversationGraph) -> Vec<WorkTreeItem> {

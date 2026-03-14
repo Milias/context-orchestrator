@@ -1,7 +1,8 @@
 //! Overview tab: unified dashboard combining agents, work, and stats.
 //!
-//! Stacks vertically: agent card, running tasks, work tree (compact),
-//! then a horizontal split of the activity event stream and stats at the bottom.
+//! Three-column layout: activity stream (left), work tree (center),
+//! and a right panel stacking agents, running tasks, recent completions,
+//! available tools, and stats.
 
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{ConversationGraph, Node, Role, TaskStatus};
@@ -16,28 +17,20 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::{agents, work};
 
-/// Maximum number of work tree lines shown in the overview.
-const WORK_TREE_MAX_LINES: u16 = 8;
-
 /// Render the Overview tab.
 ///
 /// Layout:
 /// ```text
-/// Activity | Recent    | Agent card
-///          | tool calls| Running tasks
-///          |           | Stats
-/// Work tree (full width, capped at 8 lines)
+/// Activity (40%) | Work (30%) | Agent card (30%)
+///                |            | Running
+///                |            | Recent
+///                |            | Tools
+///                |            | Stats
 /// ```
 pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
-    let work_h = work_tree_height(graph);
+    use crate::tui::widgets::{stats_panel, tools_panel};
 
-    // Top: main content (flex). Bottom: work tree (capped).
-    let outer = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(work_h)])
-        .split(area);
-
-    // Main: 3 columns — activity (40%) | recent (30%) | right panel (30%).
+    // 3 columns — activity (40%) | work (30%) | right panel (30%).
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -45,33 +38,34 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
             Constraint::Percentage(30),
             Constraint::Percentage(30),
         ])
-        .split(outer[0]);
+        .split(area);
 
     // Left: activity stream.
     render_activity_stream(frame, cols[0], graph, tui_state);
     tui_state.panel_rects.activity = cols[0];
 
-    // Center: recent tool call completions.
-    agents::render_recent_completions(frame, cols[1], graph, tui_state);
-    tui_state.panel_rects.recent = cols[1];
+    // Center: work tree (fills entire column).
+    render_work_section(frame, cols[1], graph, tui_state);
+    tui_state.panel_rects.work = cols[1];
 
-    // Right: agent card + running tasks + stats (stacked vertically).
+    // Right: agents → running → recent → tools → stats (stacked).
     let right_col = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(agents::agent_card_height(tui_state)),
             Constraint::Length(agents::running_tasks_height(graph)),
-            Constraint::Min(3),
+            Constraint::Min(5),
+            Constraint::Length(tools_panel::tools_panel_height()),
+            Constraint::Length(9),
         ])
         .split(cols[2]);
 
     agents::render_agent_card(frame, right_col[0], tui_state);
     agents::render_running_tasks(frame, right_col[1], graph, tui_state);
-    crate::tui::widgets::stats_panel::render(frame, right_col[2], graph, tui_state);
-
-    // Bottom: work tree.
-    render_work_section(frame, outer[1], graph, tui_state);
-    tui_state.panel_rects.work = outer[1];
+    agents::render_recent_completions(frame, right_col[2], graph, tui_state);
+    tui_state.panel_rects.recent = right_col[2];
+    tools_panel::render(frame, right_col[3]);
+    stats_panel::render(frame, right_col[4], graph, tui_state);
 }
 
 // ── Activity stream ──────────────────────────────────────────────────
@@ -307,28 +301,7 @@ fn render_event_row(event: &EventRow, width: usize) -> Line<'static> {
 
 // ── Work tree section ────────────────────────────────────────────────
 
-/// Compute the work tree section height: border (2) + items, capped at `WORK_TREE_MAX_LINES`.
-/// Returns 0 when there are no work items (hides the section entirely).
-fn work_tree_height(graph: &ConversationGraph) -> u16 {
-    let tree = work::build_work_tree(graph);
-    if tree.is_empty() {
-        return 0;
-    }
-    let count = count_tree_items(&tree);
-    let n: u16 = u16::try_from(count).unwrap_or(u16::MAX);
-    // border (2) + items, clamped to max lines + border.
-    n.min(WORK_TREE_MAX_LINES).saturating_add(2)
-}
-
-/// Count all items in the tree (roots + all descendants) for height calculation.
-fn count_tree_items(items: &[work::WorkTreeItem]) -> usize {
-    items
-        .iter()
-        .map(|item| 1 + count_tree_items(item.children()))
-        .sum()
-}
-
-/// Render a compact work tree section inside a bordered "Work" block.
+/// Render the work tree inside a bordered "Work" block.
 fn render_work_section(
     frame: &mut Frame,
     area: Rect,
