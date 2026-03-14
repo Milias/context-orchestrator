@@ -283,28 +283,46 @@ marked (e.g., `[compacted — use expand_context for full detail]`) so the agent
 expansion is available. Without this marker, the agent may assume it has full
 information and make decisions based on incomplete summaries.
 
-### 6.4 Compaction Triggers
+### 6.4 Compaction Triggers — Event-Driven Model
 
-**Both reactive and proactive:**
+Compaction is **mandatory**, not a fallback. When context is full, nodes must be
+compacted — we cannot simply truncate and lose information. This requires an
+event-driven architecture that avoids holding the graph lock during async LLM calls.
 
-1. **Reactive (budget pressure).** When the Budget stage determines that selected
-   nodes exceed the token budget, it downgrades the `DetailLevel` for lowest-scored
-   nodes. The Render stage then looks for existing compacted versions. If none exist,
-   Phase 1 falls back to dropping the node (like current truncation). Phase 2
-   introduces background pre-compaction so compacted versions are likely to exist.
+**The flow:**
 
-2. **Proactive (background).** The `ContextSummarize` stub gets replaced with a real
-   compaction worker. Runs on idle (no user input for N seconds). Processes nodes
-   older than a configurable age threshold that lack existing compactions. This is the
-   MergeTree pattern: write fast, compact later.
+1. **Detect:** The Budget stage (under read lock) determines that selected nodes
+   exceed the token budget and identifies which nodes need compaction.
 
-**Important design constraint:** Phase 1's reactive path does NOT issue just-in-time
-async LLM calls during the Budget stage. The context pipeline currently runs under a
-read lock on `SharedGraph` (`Arc<RwLock<ConversationGraph>>`). An async LLM call
-mid-pipeline would either block the graph lock (starving other agents) or require
-releasing and re-acquiring it (risking stale state). Instead, Phase 1 falls back to
-truncation when no compacted version exists; Phase 2's background worker ensures
-compacted versions are pre-computed.
+2. **Request:** The pipeline emits a graph event marking those nodes for compaction.
+   This is a lightweight graph mutation — adds a `BackgroundTask` node (kind:
+   `ContextSummarize`) with `DependsOn` edges to the nodes that need compacting.
+   The read lock is released.
+
+3. **Compact:** An async compaction worker (subscribed to graph events via the
+   `EventBus`) picks up the task. It acquires a write lock, reads the target nodes,
+   releases the lock, calls the LLM to generate summaries, then re-acquires the
+   write lock to insert `CompactedMessage` nodes with `CompactedFrom` edges.
+
+4. **Retry:** The agent loop retries context construction. The pipeline now finds
+   compacted versions available and renders them at the appropriate `DetailLevel`.
+
+**Two strategies for the retry:**
+
+- **Fail-and-retry:** The pipeline returns a "compaction pending" result. The agent
+  loop waits for the compaction event (via `EventBus` subscription) and re-runs
+  the pipeline. Simple, but adds latency to the first occurrence.
+
+- **Dependency-based:** The pipeline inserts a placeholder node that `DependsOn`
+  the compaction task. The scheduler (from Design 04's `ready_unclaimed_nodes()`)
+  holds the agent until all dependencies resolve. More aligned with the existing
+  graph-as-work-queue architecture.
+
+**Proactive (background):** The `ContextSummarize` stub gets replaced with a real
+compaction worker that runs proactively on idle (no user input for N seconds),
+processing nodes older than a configurable age threshold. This ensures that by the
+time context pressure occurs, most nodes already have compacted versions — the
+reactive path is the exception, not the rule.
 
 ### 6.5 Tool Call/Result Compaction
 
@@ -402,18 +420,17 @@ entirely.
 
 ## 8. Recommended Architecture
 
-### Phase 1: Reactive Compaction-Aware Rendering
+### Phase 1: Event-Driven Compaction
 
 **New types (proposed, not yet implemented):** `CompactionLevel` enum (`Summary`,
 `Aggressive`, `MetadataOnly`), `CompactedMessage` node variant,
 `EdgeKind::CompactedFrom`.
 
-**Behavior:** Budget stage downgrades `DetailLevel` for low-scored nodes. Render
-stage checks for existing compacted versions via `CompactedFrom` edges. If found,
-uses compacted content. If not, falls back to current behavior (truncation).
-
-**No JIT compaction.** Phase 1 does not issue LLM calls during the pipeline. The
-benefit comes from Phase 2's background worker pre-computing compactions.
+**Behavior:** Budget stage detects token pressure → emits compaction request as a
+graph event → async worker compacts target nodes → agent retries with compacted
+versions available. Compaction is mandatory — the pipeline never silently drops
+nodes. If no compacted version exists and budget is exceeded, the pipeline signals
+"compaction needed" and the agent loop waits for the compaction worker to complete.
 
 **Compaction prompt:** Structured — requests Summary/Key-Decisions/Resolution
 format. Size guard rejects compactions longer than 50% of originals.
@@ -506,9 +523,11 @@ Anchor -> Expand -> Score -> Budget -> Render -> Sanitize
                                  /                    \
                                Yes                     No
                                 |                       |
-                         Render(Summary)         Fall back to truncation
-                                                 (Phase 2 background worker
-                                                  will pre-compute these)
+                         Render(Summary)         Emit compaction event
+                                                  -> BackgroundTask node
+                                                  -> Async worker compacts
+                                                  -> Agent retries pipeline
+                                                  -> Finds compacted versions
 ```
 
 ### Re-expansion Flow
@@ -552,9 +571,10 @@ Agent receives compacted context (marked with [compacted] indicator)
 **Critical — JIT compaction lock contention (resolved):**
 The original design proposed just-in-time async LLM calls during the Budget stage.
 This is incompatible with the `SharedGraph` (`Arc<RwLock<ConversationGraph>>`) read
-lock held during context pipeline execution. Resolution: Phase 1 falls back to
-truncation when no compaction exists; Phase 2's background worker pre-computes
-compactions so they are available when needed.
+lock held during context pipeline execution. Resolution: event-driven model — the
+pipeline emits a compaction request as a graph event, an async worker performs the
+compaction outside any lock, and the agent retries the pipeline after compaction
+completes. Compaction is mandatory; the pipeline never silently drops nodes.
 
 **High — Compaction hallucination risk:**
 An LLM-generated compaction may introduce inaccuracies that become authoritative in
