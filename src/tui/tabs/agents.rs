@@ -43,7 +43,14 @@ fn render_standard(
 
     render_agent_card(frame, vertical[0], tui_state);
     render_running_tasks(frame, vertical[1], graph, tui_state);
-    render_recent_completions(frame, vertical[2], graph, tui_state);
+
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(vertical[2]);
+
+    render_recent_completions(frame, bottom[0], graph, tui_state);
+    crate::tui::widgets::stats_panel::render(frame, bottom[1], graph, tui_state);
 }
 
 /// Compact layout for narrow terminals: everything stacked.
