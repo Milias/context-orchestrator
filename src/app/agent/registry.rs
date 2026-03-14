@@ -19,6 +19,8 @@ pub struct AgentRegistry {
     agents: HashMap<Uuid, AgentHandle>,
     /// Reverse index: `tool_call_id` → `agent_id` for O(1) routing.
     tool_call_owner: HashMap<Uuid, Uuid>,
+    /// Reverse index: `work_item_id` → `agent_id` for preventing double-spawn.
+    work_item_agents: HashMap<Uuid, Uuid>,
 }
 
 /// Per-agent metadata held by the registry.
@@ -42,6 +44,7 @@ impl AgentRegistry {
         Self {
             agents: HashMap::new(),
             tool_call_owner: HashMap::new(),
+            work_item_agents: HashMap::new(),
         }
     }
 
@@ -71,6 +74,16 @@ impl AgentRegistry {
             },
         );
         (rx, cancel_token)
+    }
+
+    /// Check if a work item already has an assigned agent.
+    pub fn agent_for_work_item(&self, work_item_id: Uuid) -> Option<Uuid> {
+        self.work_item_agents.get(&work_item_id).copied()
+    }
+
+    /// Track the association between a work item and its agent.
+    pub fn track_work_item(&mut self, work_item_id: Uuid, agent_id: Uuid) {
+        self.work_item_agents.insert(work_item_id, agent_id);
     }
 
     /// Get the working directory for an agent's file operations.
@@ -125,8 +138,8 @@ impl AgentRegistry {
     pub fn remove(&mut self, agent_id: Uuid) -> bool {
         let existed = self.agents.remove(&agent_id).is_some();
         if existed {
-            // Clean up orphaned tool_call_owner entries for this agent.
             self.tool_call_owner.retain(|_, owner| *owner != agent_id);
+            self.work_item_agents.retain(|_, owner| *owner != agent_id);
         }
         existed
     }
@@ -159,6 +172,7 @@ impl AgentRegistry {
         }
         self.agents.clear();
         self.tool_call_owner.clear();
+        self.work_item_agents.clear();
     }
 }
 

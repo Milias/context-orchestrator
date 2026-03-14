@@ -13,6 +13,7 @@ fn test_api_key_missing_both_returns_err() {
         max_context_tokens: 0,
         system_prompt: String::new(),
         max_tool_loop_iterations: 0,
+        max_concurrent_agents: 3,
     };
     assert!(config.api_key().is_err());
 }
@@ -31,6 +32,7 @@ fn test_api_key_prefers_auth_token_over_api_key() {
         max_context_tokens: 0,
         system_prompt: String::new(),
         max_tool_loop_iterations: 0,
+        max_concurrent_agents: 3,
     };
     assert_eq!(config.api_key().unwrap(), "token-preferred");
 }
@@ -48,6 +50,7 @@ fn test_api_key_falls_back_to_api_key() {
         max_context_tokens: 0,
         system_prompt: String::new(),
         max_tool_loop_iterations: 0,
+        max_concurrent_agents: 3,
     };
     assert_eq!(config.api_key().unwrap(), "key-only");
 }

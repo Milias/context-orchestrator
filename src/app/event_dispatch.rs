@@ -12,6 +12,7 @@ use crate::storage::{TokenDirection, TokenEvent};
 use crate::tasks::{AgentPhase, TaskMessage};
 use crate::tui;
 
+use chrono::Utc;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -35,7 +36,12 @@ impl App {
             GraphEvent::WorkItemStatusChanged {
                 node_id,
                 new_status,
-            } => tracing::debug!("WorkItem {node_id} → {new_status:?}"),
+            } => {
+                tracing::debug!("WorkItem {node_id} → {new_status:?}");
+                if *new_status == crate::graph::WorkItemStatus::Active {
+                    self.spawn_task_agent(*node_id);
+                }
+            }
             GraphEvent::DependencyAdded { from_id, to_id } => {
                 tracing::debug!("Dependency: {from_id} → {to_id}");
             }
@@ -161,6 +167,103 @@ impl App {
             tools: crate::tool_executor::registered_tool_definitions(),
             agent_id,
             policy: crate::app::context::policies::ContextPolicy::Conversational,
+        };
+
+        super::agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
+    }
+
+    /// Spawn an ephemeral task agent for a work item that transitioned to Active.
+    /// Creates a git worktree for file isolation and roots the agent's message
+    /// chain at the work item node.
+    fn spawn_task_agent(&mut self, work_item_id: Uuid) {
+        // Guard: concurrency limit.
+        if self.agents.active_count() >= self.config.max_concurrent_agents {
+            tracing::warn!("Max concurrent agents reached, deferring task {work_item_id}");
+            return;
+        }
+        // Guard: only Task-kind work items (not Plans).
+        {
+            let g = self.graph.read();
+            match g.node(work_item_id) {
+                Some(Node::WorkItem {
+                    kind: crate::graph::WorkItemKind::Task,
+                    ..
+                }) => {}
+                _ => return,
+            }
+        }
+        // Guard: not already spawned.
+        if self.agents.agent_for_work_item(work_item_id).is_some() {
+            return;
+        }
+
+        let agent_id = Uuid::new_v4();
+
+        // Claim the work item to prevent double-execution.
+        {
+            let mut g = self.graph.write();
+            if !g.try_claim(work_item_id, agent_id) {
+                return;
+            }
+        }
+
+        // Create a synthetic User message rooted at the work item to start the chain.
+        let (title, description) = {
+            let g = self.graph.read();
+            match g.node(work_item_id) {
+                Some(Node::WorkItem {
+                    title, description, ..
+                }) => (title.clone(), description.clone().unwrap_or_default()),
+                _ => return,
+            }
+        };
+        let synthetic_msg = Node::Message {
+            id: Uuid::new_v4(),
+            role: crate::graph::Role::User,
+            content: format!("Execute this task: {title}\n\n{description}"),
+            created_at: Utc::now(),
+            model: None,
+            input_tokens: None,
+            output_tokens: None,
+            stop_reason: None,
+        };
+        {
+            let mut g = self.graph.write();
+            if let Err(e) = g.add_reply(work_item_id, synthetic_msg) {
+                tracing::error!("Failed to create synthetic message for task {work_item_id}: {e}");
+                return;
+            }
+        }
+
+        let (tool_rx, cancel_token) = self.agents.register(agent_id, None);
+        self.agents.track_work_item(work_item_id, agent_id);
+
+        self.graph.read().emit(GraphEvent::AgentPhaseChanged {
+            agent_id,
+            phase: AgentPhase::BuildingContext,
+        });
+
+        // Filter tools for task agents.
+        let policy = crate::app::context::policies::ContextPolicy::TaskExecution { work_item_id };
+        let all_tools = crate::tool_executor::registered_tool_definitions();
+        let tools = match policy.tool_filter() {
+            Some(allowed) => all_tools
+                .into_iter()
+                .filter(|t| allowed.contains(&t.name.as_str()))
+                .collect(),
+            None => all_tools,
+        };
+
+        let loop_config = super::agent::AgentLoopConfig {
+            graph: Arc::clone(&self.graph),
+            provider: Arc::clone(&self.provider),
+            model: self.config.anthropic_model.clone(),
+            max_tokens: self.config.max_tokens,
+            max_context_tokens: self.config.max_context_tokens,
+            max_tool_loop_iterations: self.config.max_tool_loop_iterations,
+            tools,
+            agent_id,
+            policy,
         };
 
         super::agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
