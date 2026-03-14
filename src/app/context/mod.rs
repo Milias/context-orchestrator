@@ -8,9 +8,12 @@
 //! 5. **Render** — serialization to chat messages
 //! 6. **Sanitize** — API constraint enforcement
 
+pub mod budget;
+pub mod candidates;
 pub(crate) mod error_context;
 pub mod policies;
 pub mod sanitize;
+pub mod scoring;
 
 use crate::graph::ConversationGraph;
 use crate::llm::{ChatMessage, LlmProvider, ToolDefinition};

@@ -37,7 +37,7 @@ fn test_build_plan_section_renders_hierarchy() {
             status: WorkItemStatus::Todo,
             description: None,
             completion_confidence: None,
-        created_at: Utc::now(),
+            created_at: Utc::now(),
         });
         graph.add_edge(id, plan_id, EdgeKind::SubtaskOf).unwrap();
     }

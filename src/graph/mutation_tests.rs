@@ -185,7 +185,7 @@ fn test_propagate_status_completes_parent_when_all_children_done() {
             status: WorkItemStatus::Todo,
             description: None,
             completion_confidence: None,
-        created_at: Utc::now(),
+            created_at: Utc::now(),
         });
         graph.add_edge(id, parent_id, EdgeKind::SubtaskOf).unwrap();
     }
