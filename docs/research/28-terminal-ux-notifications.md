@@ -70,9 +70,11 @@ Derived from VISION.md ("developer control" in §1, tachyonfx in §5.3, backgrou
 
 | Tier | Events | Rationale |
 |------|--------|-----------|
-| **Critical** (user action required) | `QuestionRoutedToUser`, `ErrorOccurred` (fatal class) | User must respond; ignoring blocks agent progress |
-| **Attention** (user should know) | `AgentFinished`, `WorkItemStatusChanged(Completed)`, `CompletionProposed`, `ErrorOccurred` (non-fatal) | Work completed or something went wrong; user inspects when convenient |
+| **Critical** (user action required) | `QuestionRoutedToUser`, `CompletionProposed`, `ErrorOccurred` (fatal class), `WorkItemStatusChanged(Failed)` | User must respond or acknowledge; ignoring blocks agent progress or masks failures |
+| **Attention** (user should know) | `AgentFinished`, `WorkItemStatusChanged(Completed)`, `ErrorOccurred` (non-fatal) | Work completed or something went wrong; user inspects when convenient |
 | **Informational** (passive awareness) | `AgentPhaseChanged`, `ToolCallCompleted`, `StreamDelta`, `GitFilesRefreshed`, `TokenTotalsUpdated`, everything else | Background activity; visible in TUI when user is watching |
+
+**Important nuance:** The classification function must inspect event *values*, not just variants. `WorkItemStatusChanged(Failed)` is Critical while `WorkItemStatusChanged(Completed)` is Attention. Similarly, `AgentPhaseChanged` to a blocked/waiting phase should escalate to Attention tier. The classifier takes `&GraphEvent` and pattern-matches on inner values — not just the enum discriminant.
 
 ### Channels per Tier
 
@@ -232,7 +234,7 @@ A `TerminalCapabilities` struct should be computed once at startup (alongside th
 |------------|-----------|------------------|
 | Kitty extensions | Existing crossterm detection | `supports_keyboard_enhancement()` |
 | Kitty OSC 99 | Heuristic: if Kitty keyboard works | (correlated with keyboard detection) |
-| iTerm2 | Environment variable | `$TERM_PROGRAM == "iTerm.app"` or `$LC_TERMINAL == "iTerm2"` |
+| iTerm2 | Environment variable | `$TERM_PROGRAM == "iTerm.app"` or `$ITERM_SESSION_ID` is set |
 | WezTerm | Environment variable | `$TERM_PROGRAM == "WezTerm"` |
 | Windows Terminal | Environment variable | `$WT_SESSION` is set |
 | tmux | Environment variable | `$TMUX` is set, or `$TERM` starts with "screen"/"tmux" |
@@ -240,6 +242,20 @@ A `TerminalCapabilities` struct should be computed once at startup (alongside th
 | BEL | Assume supported | Universal |
 | OSC 8 (hyperlinks) | Runtime probe or heuristic | `supports-hyperlinks` crate, or infer from terminal identity |
 | Color depth | Existing crossterm detection | `crossterm::style::available_color_count()` |
+| SSH session | Environment variable | `$SSH_CLIENT` or `$SSH_TTY` is set |
+| Docker/container | Filesystem probe | `/.dockerenv` exists, or `$container` is set |
+| VS Code terminal | Environment variable | `$TERM_PROGRAM == "vscode"` |
+
+### Environment-Aware Degradation
+
+Some environments disable entire notification categories:
+
+| Environment | Disabled channels | Rationale |
+|-------------|-------------------|-----------|
+| SSH session | Desktop notifications, window title | No local notification daemon; title doesn't propagate |
+| Container (Docker) | Desktop notifications, audio, window title | No GUI, no audio device |
+| VS Code terminal | Window title (optional) | May conflict with VS Code's own title management |
+| Headless + SSH | All except in-TUI visual | Nothing can reach the user outside the terminal buffer |
 
 ### Design Principle
 
@@ -311,6 +327,18 @@ reduced_motion = false          # Disable flash, snap animations instantly
 
 **Rationale for defaults:** Following clig.dev's "less is more" principle — fewer, more relevant notifications improve user satisfaction. Critical events (blocking agent progress) justify interruption. Attention events should not interrupt flow by default but can be opted in by users who want them.
 
+### Phase 2: Runtime Toggling & Per-Event Overrides
+
+Static config is insufficient — users need to silence notifications mid-session without restarting. Phase 2 should add:
+
+- **Keybinding toggle**: e.g., `Alt+N` to cycle notification levels (all → critical-only → silent)
+- **Per-event overrides** for power users who want fine-grained control:
+  ```toml
+  [notifications.overrides]
+  AgentFinished = { bell = true, desktop = true }
+  CompletionProposed = { flash = true }
+  ```
+
 ---
 
 ## 13. Accessibility Considerations
@@ -361,6 +389,12 @@ Critical notifications should always activate at least two channels (visual + au
 - **Unicode urgency prefixes**: `[!]` for critical, `[i]` for attention on status messages
 
 No new dependencies. No new Cargo features. Integrates through the existing `apply_event()` → rendering pipeline.
+
+**Fallback chain for critical events:**
+1. Set status bar urgency color + symbol prefix (always)
+2. Write OSC 0/2 window title with urgency prefix (if not SSH/container)
+3. Emit BEL `\x07` (if `critical_bell` enabled)
+4. All channels fire independently — no waiting, no retry
 
 ### Phase 2: Desktop Notifications & Configuration
 
@@ -422,6 +456,16 @@ No new dependencies. No new Cargo features. Integrates through the existing `app
 7. **"Why not just use Claude Code's hook system instead of building our own?"** Fair question. Claude Code hooks are external shell commands triggered by events — powerful but external. Our system is internal: urgency classification drives built-in visual treatment, not just external commands. The two are complementary, not competing. A future hook system could be layered on top of the urgency model.
 
 8. **"By the time Phase 3 ships, context windows may be 2M+ tokens and agent-blocking questions may be rare."** Possible. But the notification system addresses more than questions — it covers agent completion, errors, and general UX polish. Even with infinite context, users still need to know when their agent finished a task.
+
+9. **"SSH and container environments silently disable all useful channels."** Valid. Mitigation: Added environment-aware degradation table (§9). SSH detected via `$SSH_CLIENT`/`$SSH_TTY`, containers via `/.dockerenv`. When detected, disable out-of-TUI channels and log a startup warning so users know why notifications are limited.
+
+10. **"D-Bus notification on headless Linux (Docker, CI) will timeout and block."** Valid. Mitigation: notify-rust calls must have an explicit timeout (100ms). If D-Bus connection fails, skip silently and fall back to BEL + visual. This is why feature-gating is critical — headless builds should not enable `desktop-notifications`.
+
+11. **"Notification fatigue — user runs this alongside build watcher, test runner, editor LSP."** Valid concern. Mitigation: Defaults are conservative (attention tier = visual-only, no bells). Critical events require explicit acknowledgment (answering the question dismisses the notification). Phase 2 adds runtime toggle keybinding so users can quickly silence everything.
+
+12. **"Linux audio fragmentation (PulseAudio vs PipeWire vs ALSA) affects rodio."** Valid for Phase 3. Mitigation: rodio uses cpal which auto-detects the audio backend. Document known quirks per backend. Audio is feature-gated — users on problematic setups simply don't enable it.
+
+13. **"VS Code integrated terminal swallows OSC sequences."** Valid. Mitigation: Added `$TERM_PROGRAM == "vscode"` detection to capability table (§9). When detected, skip window title updates and rely on in-TUI visual + BEL.
 
 ---
 
