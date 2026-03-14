@@ -247,7 +247,7 @@ fn apply_iteration_to_graph(
             content: result.response.clone(),
             created_at: Utc::now(),
             model: Some(config.model.clone()),
-            input_tokens: None,
+            input_tokens: result.input_tokens,
             output_tokens: result.output_tokens,
             stop_reason: result.stop_reason,
         };

@@ -56,6 +56,7 @@ pub(in crate::app) enum StreamOutcome {
 pub(in crate::app) struct StreamResult {
     pub response: String,
     pub think_text: String,
+    pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
     pub tool_use_records: Vec<ToolUseRecord>,
     pub stop_reason: Option<StopReason>,
@@ -126,9 +127,11 @@ async fn consume_stream(
                 });
             }
             Some(Ok(StreamChunk::Done {
+                input_tokens: it,
                 output_tokens: ot,
                 stop_reason: sr,
             })) => {
+                state.input_tokens = it;
                 state.output_tokens = ot;
                 state.stop_reason = sr;
                 break;
@@ -190,6 +193,7 @@ async fn consume_stream(
 
 struct StreamState {
     think_splitter: ThinkSplitter,
+    input_tokens: Option<u32>,
     output_tokens: Option<u32>,
     tool_use_records: Vec<ToolUseRecord>,
     stop_reason: Option<StopReason>,
@@ -204,6 +208,7 @@ impl StreamState {
     fn new() -> Self {
         Self {
             think_splitter: ThinkSplitter::new(),
+            input_tokens: None,
             output_tokens: None,
             tool_use_records: Vec::new(),
             stop_reason: None,
@@ -224,6 +229,7 @@ impl StreamState {
         StreamResult {
             response,
             think_text,
+            input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
             tool_use_records: self.tool_use_records,
             stop_reason: self.stop_reason,
@@ -354,6 +360,7 @@ fn cancelled_result() -> StreamResult {
     StreamResult {
         response: String::new(),
         think_text: String::new(),
+        input_tokens: None,
         output_tokens: None,
         tool_use_records: Vec::new(),
         stop_reason: None,
@@ -367,6 +374,7 @@ fn api_error_result(message: String) -> StreamResult {
     StreamResult {
         response: String::new(),
         think_text: String::new(),
+        input_tokens: None,
         output_tokens: None,
         tool_use_records: Vec::new(),
         stop_reason: None,

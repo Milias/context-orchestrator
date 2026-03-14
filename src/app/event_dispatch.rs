@@ -7,8 +7,6 @@
 use crate::graph::event::GraphEvent;
 use crate::graph::node::{QuestionDestination, QuestionStatus};
 use crate::graph::{Node, Role};
-use crate::llm::ChatMessage;
-use crate::storage::{TokenDirection, TokenEvent};
 use crate::tasks::{AgentPhase, TaskMessage};
 use crate::tui;
 
@@ -53,7 +51,6 @@ impl App {
                 if *role == Role::User {
                     self.on_user_message(*node_id);
                 }
-                self.spawn_token_count(*node_id);
             }
             GraphEvent::ToolCallCompleted { node_id, is_error } => {
                 tracing::trace!("ToolCall {node_id} completed (error={is_error})");
@@ -324,53 +321,5 @@ impl App {
             return false;
         }
         true
-    }
-
-    /// Spawn a background task to count tokens for a message node.
-    /// Fires on `MessageAdded` — counts tokens and records to analytics.
-    fn spawn_token_count(&self, node_id: Uuid) {
-        let content = {
-            let g = self.graph.read();
-            match g.node(node_id) {
-                Some(Node::Message { content, role, .. }) => Some((content.clone(), *role)),
-                _ => None,
-            }
-        };
-        let Some((text, role)) = content else {
-            return;
-        };
-        let direction = match role {
-            Role::User => TokenDirection::Input,
-            Role::Assistant => TokenDirection::Output,
-            Role::System => return,
-        };
-        let provider = Arc::clone(&self.provider);
-        let model = self.config.anthropic_model.clone();
-        let graph = Arc::clone(&self.graph);
-        let store = self.token_store.clone();
-        let conversation_id = self.metadata.id.clone();
-        let tx = self.task_tx.clone();
-        tokio::spawn(async move {
-            let msg = vec![ChatMessage::text(role, &text)];
-            let Ok(count) = provider.count_tokens(&msg, &model, None, &[]).await else {
-                return;
-            };
-            graph.write().set_input_tokens(node_id, count);
-            if let Some(store) = store {
-                let event = TokenEvent {
-                    conversation_id,
-                    direction,
-                    tokens: count,
-                    model: Some(model),
-                };
-                if let Err(e) = store.record(&event).await {
-                    let _ = tx.send(TaskMessage::AnalyticsError(format!("{e}")));
-                    return;
-                }
-                if let Ok(totals) = store.lifetime_totals().await {
-                    let _ = tx.send(TaskMessage::TokenTotalsUpdated(totals));
-                }
-            }
-        });
     }
 }

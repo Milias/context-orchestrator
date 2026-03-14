@@ -132,19 +132,26 @@ impl App {
                 assistant_id,
                 stop_reason,
             } => {
-                // Record output tokens (graph operation, not TUI).
-                if let Some(tokens) = self
-                    .graph
-                    .read()
-                    .node(assistant_id)
-                    .and_then(Node::output_tokens)
+                // Record API-reported token usage (graph read, not TUI).
                 {
-                    self.spawn_token_record(TokenEvent {
-                        conversation_id: self.metadata.id.clone(),
-                        direction: TokenDirection::Output,
-                        tokens,
-                        model: Some(self.config.anthropic_model.clone()),
-                    });
+                    let g = self.graph.read();
+                    let node = g.node(assistant_id);
+                    if let Some(tokens) = node.and_then(Node::input_tokens) {
+                        self.spawn_token_record(TokenEvent {
+                            conversation_id: self.metadata.id.clone(),
+                            direction: TokenDirection::Input,
+                            tokens,
+                            model: Some(self.config.anthropic_model.clone()),
+                        });
+                    }
+                    if let Some(tokens) = node.and_then(Node::output_tokens) {
+                        self.spawn_token_record(TokenEvent {
+                            conversation_id: self.metadata.id.clone(),
+                            direction: TokenDirection::Output,
+                            tokens,
+                            model: Some(self.config.anthropic_model.clone()),
+                        });
+                    }
                 }
                 // TUI update flows through EventBus.
                 self.graph.read().emit(GraphEvent::AgentIterationCommitted {

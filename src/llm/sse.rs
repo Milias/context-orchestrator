@@ -17,6 +17,7 @@ use std::pin::Pin;
 struct SseState<S> {
     stream: Pin<Box<S>>,
     buffer: String,
+    input_tokens: Option<u32>,
     output_tokens: Option<u32>,
     stop_reason: Option<StopReason>,
     /// Pending `tool_use` block being accumulated across SSE events.
@@ -39,6 +40,7 @@ pub(crate) fn sse_to_stream_chunks(
         SseState {
             stream: Box::pin(byte_stream),
             buffer: String::new(),
+            input_tokens: None,
             output_tokens: None,
             stop_reason: None,
             pending_tool_use: None,
@@ -52,6 +54,7 @@ pub(crate) fn sse_to_stream_chunks(
 
                     if let Some(chunk) = parse_sse_event(
                         &event_text,
+                        &mut state.input_tokens,
                         &mut state.output_tokens,
                         &mut state.stop_reason,
                         &mut state.pending_tool_use,
@@ -85,6 +88,7 @@ pub(crate) fn sse_to_stream_chunks(
 
 /// SSE event types from the Anthropic streaming API.
 enum SseEventType {
+    MessageStart,
     ContentBlockStart,
     ContentBlockDelta,
     ContentBlockStop,
@@ -97,6 +101,7 @@ enum SseEventType {
 impl SseEventType {
     fn from_api(s: &str) -> Self {
         match s {
+            "message_start" => Self::MessageStart,
             "content_block_start" => Self::ContentBlockStart,
             "content_block_delta" => Self::ContentBlockDelta,
             "content_block_stop" => Self::ContentBlockStop,
@@ -162,6 +167,22 @@ struct DeltaPayload {
 }
 
 #[derive(Deserialize)]
+struct MessageStartEvent {
+    message: Option<MessageStartPayload>,
+}
+
+#[derive(Deserialize)]
+struct MessageStartPayload {
+    usage: Option<MessageStartUsage>,
+}
+
+/// Usage from `message_start` carries `input_tokens` (the full context window cost).
+#[derive(Deserialize)]
+struct MessageStartUsage {
+    input_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
 struct MessageDeltaEvent {
     usage: Option<UsagePayload>,
     delta: Option<MessageDeltaPayload>,
@@ -189,10 +210,60 @@ struct ErrorPayload {
 
 // ── Event parser ────────────────────────────────────────────────────
 
+/// Parse a `content_block_delta` event. Accumulates tool input JSON or yields text.
+fn handle_content_block_delta(
+    data: &str,
+    pending_tool_use: &mut Option<PendingToolUse>,
+) -> Option<anyhow::Result<StreamChunk>> {
+    let event: ContentBlockDeltaEvent = match serde_json::from_str(data) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e.into())),
+    };
+    let delta = event.delta?;
+    match delta.delta_type {
+        Some(DeltaType::InputJsonDelta) => {
+            if let Some(ref mut pending) = pending_tool_use {
+                if let Some(partial) = delta.partial_json {
+                    pending.input_json.push_str(&partial);
+                }
+            }
+            None
+        }
+        Some(DeltaType::TextDelta | DeltaType::Unknown) | None => {
+            delta.text.map(|text| Ok(StreamChunk::TextDelta(text)))
+        }
+        Some(DeltaType::ThinkingDelta) => None,
+    }
+}
+
+/// Parse a `message_delta` event. Captures output tokens and stop reason.
+fn handle_message_delta(
+    data: &str,
+    output_tokens: &mut Option<u32>,
+    stop_reason: &mut Option<StopReason>,
+) -> Option<anyhow::Result<StreamChunk>> {
+    let event: MessageDeltaEvent = match serde_json::from_str(data) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e.into())),
+    };
+    if let Some(tokens) = event.usage.and_then(|u| u.output_tokens) {
+        *output_tokens = Some(tokens);
+    }
+    if let Some(reason) = event
+        .delta
+        .and_then(|d| d.stop_reason)
+        .and_then(|s| StopReason::from_api(&s))
+    {
+        *stop_reason = Some(reason);
+    }
+    None
+}
+
 /// Parse a single SSE event text into a `StreamChunk`, if applicable.
 /// Mutates accumulated state for multi-event constructs (tool use, message delta).
 pub(super) fn parse_sse_event(
     event_text: &str,
+    input_tokens: &mut Option<u32>,
     output_tokens: &mut Option<u32>,
     stop_reason: &mut Option<StopReason>,
     pending_tool_use: &mut Option<PendingToolUse>,
@@ -213,6 +284,20 @@ pub(super) fn parse_sse_event(
     }
 
     match SseEventType::from_api(event_type) {
+        SseEventType::MessageStart => {
+            let event: MessageStartEvent = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.into())),
+            };
+            if let Some(tokens) = event
+                .message
+                .and_then(|m| m.usage)
+                .and_then(|u| u.input_tokens)
+            {
+                *input_tokens = Some(tokens);
+            }
+            None
+        }
         SseEventType::ContentBlockStart => {
             let event: ContentBlockStartEvent = match serde_json::from_str(data) {
                 Ok(v) => v,
@@ -229,59 +314,17 @@ pub(super) fn parse_sse_event(
             }
             None
         }
-        SseEventType::ContentBlockDelta => {
-            let event: ContentBlockDeltaEvent = match serde_json::from_str(data) {
-                Ok(v) => v,
-                Err(e) => return Some(Err(e.into())),
-            };
-            if let Some(delta) = event.delta {
-                match delta.delta_type {
-                    Some(DeltaType::InputJsonDelta) => {
-                        if let Some(ref mut pending) = pending_tool_use {
-                            if let Some(partial) = delta.partial_json {
-                                pending.input_json.push_str(&partial);
-                            }
-                        }
-                        None
-                    }
-                    Some(DeltaType::TextDelta | DeltaType::Unknown) | None => {
-                        delta.text.map(|text| Ok(StreamChunk::TextDelta(text)))
-                    }
-                    Some(DeltaType::ThinkingDelta) => None,
-                }
-            } else {
-                None
-            }
-        }
-        SseEventType::ContentBlockStop => {
-            if let Some(pending) = pending_tool_use.take() {
-                Some(Ok(StreamChunk::ToolUse {
-                    id: pending.id,
-                    name: pending.name,
-                    input: pending.input_json,
-                }))
-            } else {
-                None
-            }
-        }
-        SseEventType::MessageDelta => {
-            let event: MessageDeltaEvent = match serde_json::from_str(data) {
-                Ok(v) => v,
-                Err(e) => return Some(Err(e.into())),
-            };
-            if let Some(tokens) = event.usage.and_then(|u| u.output_tokens) {
-                *output_tokens = Some(tokens);
-            }
-            if let Some(reason) = event
-                .delta
-                .and_then(|d| d.stop_reason)
-                .and_then(|s| StopReason::from_api(&s))
-            {
-                *stop_reason = Some(reason);
-            }
-            None
-        }
+        SseEventType::ContentBlockDelta => handle_content_block_delta(data, pending_tool_use),
+        SseEventType::ContentBlockStop => pending_tool_use.take().map(|pending| {
+            Ok(StreamChunk::ToolUse {
+                id: pending.id,
+                name: pending.name,
+                input: pending.input_json,
+            })
+        }),
+        SseEventType::MessageDelta => handle_message_delta(data, output_tokens, stop_reason),
         SseEventType::MessageStop => Some(Ok(StreamChunk::Done {
+            input_tokens: *input_tokens,
             output_tokens: *output_tokens,
             stop_reason: stop_reason.take(),
         })),

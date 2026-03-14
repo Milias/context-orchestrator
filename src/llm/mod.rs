@@ -46,6 +46,7 @@ pub enum StreamChunk {
         input: String,
     },
     Done {
+        input_tokens: Option<u32>,
         output_tokens: Option<u32>,
         stop_reason: Option<StopReason>,
     },

@@ -10,6 +10,7 @@ async fn test_mock_provider_streams_configured_chunks() {
     let provider = MockLlmProvider::with_token_count(100).with_chunks(vec![
         StreamChunk::TextDelta("Hello".to_string()),
         StreamChunk::Done {
+            input_tokens: None,
             output_tokens: Some(5),
             stop_reason: Some(StopReason::EndTurn),
         },
