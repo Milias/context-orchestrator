@@ -12,17 +12,13 @@ use crate::tui::TuiState;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-/// Minimum terminal width for the conversation panel to be visible by default.
-const WIDE_THRESHOLD: u16 = 120;
-
 pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let area = frame.area();
 
-    // Auto-hide conversation on narrow terminals.
-    let show_conversation = tui_state.nav.conversation_visible && area.width >= WIDE_THRESHOLD || {
-        // User can force-toggle even on narrow terminals.
-        tui_state.nav.conversation_visible && area.width >= 80
-    };
+    // Conversation panel is visible when:
+    // - User has toggled it on (Ctrl+B), AND
+    // - Terminal is at least 80 columns wide (below that, no room).
+    let show_conversation = tui_state.nav.conversation_visible && area.width >= 80;
 
     // Vertical split: tab bar (1) | content (flex) | status bar (1) | input (3).
     let vertical = Layout::default()
@@ -134,47 +130,63 @@ fn draw_tab_status_bar(
     frame.render_widget(Paragraph::new(line).style(bg), area);
 }
 
-/// Minimal status bar showing focus zone, status message, and errors.
+/// Status bar with context-aware shortcuts and errors.
 fn draw_status_bar(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
     let bg = Style::default().bg(Color::Rgb(20, 20, 50));
+    let dim = bg.fg(Color::DarkGray);
+    let key_style = bg.fg(Color::Cyan);
 
-    let focus_label = match tui_state.nav.focus {
-        FocusZone::TabContent => tui_state.nav.active_tab.label(),
-        FocusZone::Conversation => "Chat",
-        FocusZone::Input => "Input",
-    };
+    // Left: context-aware shortcuts.
+    let shortcuts = build_shortcuts(tui_state);
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, (key, desc)) in shortcuts.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("  ", dim));
+        }
+        spans.push(Span::styled(*key, key_style));
+        spans.push(Span::styled(format!(":{desc}"), dim));
+    }
 
-    let left = tui_state
-        .status_message
-        .as_deref()
-        .unwrap_or(focus_label)
-        .to_string();
-
+    // Right: error text.
     let error_text = tui_state
         .error_message
         .as_ref()
         .map_or(String::new(), Clone::clone);
 
+    let left_width: usize = spans.iter().map(Span::width).sum();
     let width = area.width as usize;
-    let max_left = width.saturating_sub(error_text.len() + 1);
-    let left_display: String = if left.len() > max_left && max_left > 1 {
-        let truncated: String = left.chars().take(max_left - 1).collect();
-        format!("{truncated}…")
-    } else {
-        left
-    };
-
-    let pad = width.saturating_sub(left_display.len() + error_text.len());
-    let mut spans = vec![
-        Span::styled(left_display, bg.fg(Color::White)),
-        Span::styled(" ".repeat(pad), bg),
-    ];
+    let pad = width.saturating_sub(left_width + error_text.len());
+    spans.push(Span::styled(" ".repeat(pad), bg));
     if !error_text.is_empty() {
         spans.push(Span::styled(error_text, bg.fg(Color::Red)));
     }
 
     let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line).style(bg), area);
+}
+
+/// Build context-aware shortcut hints based on the current focus zone.
+fn build_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'static str)> {
+    let mut shortcuts = vec![
+        ("1-3", "view"),
+        ("Tab", "focus"),
+        ("Ctrl+B", "chat"),
+        ("Ctrl+Q", "quit"),
+    ];
+
+    match tui_state.nav.focus {
+        FocusZone::Conversation => {
+            shortcuts.insert(0, ("End", "auto-scroll"));
+            shortcuts.insert(0, ("Up/Dn", "scroll"));
+        }
+        FocusZone::Input => {
+            shortcuts.insert(0, ("Enter", "send"));
+        }
+        FocusZone::TabContent => {
+            shortcuts.insert(0, ("j/k", "nav"));
+        }
+    }
+    shortcuts
 }
 
 /// Format a token count for compact display in the status bar.
