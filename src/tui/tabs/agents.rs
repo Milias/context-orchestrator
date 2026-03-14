@@ -354,4 +354,3 @@ fn render_recent_completions(
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
-

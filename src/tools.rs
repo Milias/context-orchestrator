@@ -96,6 +96,12 @@ pub fn parse_user_trigger_args(tool_name: &str, args: &str) -> ToolCallArguments
                 },
                 None => (QuestionDestination::Llm, args.to_string()),
             };
+            if question.trim().is_empty() {
+                return ToolCallArguments::Unknown {
+                    tool_name: tool_name.to_string(),
+                    raw_json: args.to_string(),
+                };
+            }
             ToolCallArguments::Ask {
                 question,
                 destination,

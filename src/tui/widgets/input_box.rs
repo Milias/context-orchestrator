@@ -8,9 +8,11 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 /// Shows answer mode (cyan border, question text) when a user question is pending.
 pub fn render(frame: &mut Frame, area: Rect, frame_area: Rect, tui_state: &TuiState) {
     let (title, border_color) = if let Some(ref q) = tui_state.pending_question_text {
-        let max_len = 60;
-        let truncated = if q.len() > max_len {
-            format!("{}...", &q[..max_len - 3])
+        let max_chars = 60;
+        let char_count = q.chars().count();
+        let truncated = if char_count > max_chars {
+            let taken: String = q.chars().take(max_chars - 3).collect();
+            format!("{taken}...")
         } else {
             q.clone()
         };

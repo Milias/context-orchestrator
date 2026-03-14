@@ -9,7 +9,7 @@ use crate::graph::event::GraphEvent;
 use crate::graph::tool::result::ToolResultContent;
 use crate::graph::tool::types::ToolCallStatus;
 use crate::graph::{parse_tool_arguments, EdgeKind, Node, Role, StopReason};
-use crate::llm::{ChatConfig, ChatMessage, LlmProvider, ToolDefinition};
+use crate::llm::{ChatConfig, LlmProvider, ToolDefinition};
 use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult};
 
 use super::streaming::{self as agent_streaming, AgentContext, StreamResult};
@@ -33,8 +33,6 @@ pub(in crate::app) struct AgentLoopConfig {
     pub max_context_tokens: u32,
     pub max_tool_loop_iterations: usize,
     pub tools: Vec<ToolDefinition>,
-    /// The anchor node ID (user message that triggered the first activation).
-    pub anchor_id: Uuid,
     pub agent_id: Uuid,
 }
 
@@ -50,18 +48,9 @@ pub(in crate::app) fn spawn_agent_loop(
     let ctx = AgentContext { agent_id, task_tx };
     let graph = Arc::clone(&config.graph);
     let provider = Arc::clone(&config.provider);
-    let anchor_id = config.anchor_id;
     tokio::spawn(async move {
-        let result = run_agent_loop(
-            &graph,
-            provider,
-            config,
-            anchor_id,
-            &ctx,
-            tool_result_rx,
-            cancel_token,
-        )
-        .await;
+        let result =
+            run_agent_loop(&graph, provider, config, &ctx, tool_result_rx, cancel_token).await;
         if let Err(e) = &result {
             ctx.send(AgentEvent::Error(e.to_string()));
         }
@@ -92,7 +81,6 @@ async fn run_agent_loop(
     graph: &SharedGraph,
     provider: Arc<dyn LlmProvider>,
     config: AgentLoopConfig,
-    user_msg_id: Uuid,
     ctx: &AgentContext,
     mut tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
     cancel_token: CancellationToken,
@@ -102,15 +90,6 @@ async fn run_agent_loop(
         .read()
         .subscribe_events()
         .unwrap_or_else(|| broadcast::channel(1).1);
-
-    // Fire-and-forget: token counting is independent of context building.
-    spawn_count_user_tokens(
-        Arc::clone(graph),
-        Arc::clone(&provider),
-        config.model.clone(),
-        user_msg_id,
-        ctx,
-    );
 
     let chat_config = ChatConfig {
         model: config.model.clone(),
@@ -146,7 +125,10 @@ async fn run_agent_loop(
                     match result {
                         Ok(ref event) if is_wake_event(event, config.agent_id) => break,
                         Err(broadcast::error::RecvError::Closed) => return Ok(()),
-                        _ => {} // ignore irrelevant events or lagged
+                        // Lagged = missed events. Wake unconditionally — context
+                        // rebuild will see current graph state.
+                        Err(broadcast::error::RecvError::Lagged(_)) => break,
+                        _ => {} // ignore irrelevant events
                     }
                 }
                 () = cancel_token.cancelled() => return Ok(()),
@@ -258,47 +240,6 @@ async fn run_activation(
     }
 
     Ok(ActivationResult::Completed)
-}
-
-/// Spawn token counting as a fire-and-forget task.
-fn spawn_count_user_tokens(
-    graph: SharedGraph,
-    provider: Arc<dyn LlmProvider>,
-    model: String,
-    user_msg_id: Uuid,
-    ctx: &AgentContext,
-) {
-    let ctx_tx = ctx.task_tx.clone();
-    let ctx_id = ctx.agent_id;
-    tokio::spawn(async move {
-        let fire_ctx = AgentContext {
-            agent_id: ctx_id,
-            task_tx: ctx_tx,
-        };
-        let phase_id = Uuid::new_v4();
-        fire_ctx.send(AgentEvent::Progress {
-            phase_id,
-            phase: AgentPhase::CountingTokens,
-        });
-        let content = {
-            let g = graph.read();
-            if let Some(Node::Message { content, .. }) = g.node(user_msg_id) {
-                Some(content.clone())
-            } else {
-                None
-            }
-        };
-        if let Some(content) = content {
-            let msg = vec![ChatMessage::text(Role::User, &content)];
-            if let Ok(count) = provider.count_tokens(&msg, &model, None, &[]).await {
-                fire_ctx.send(AgentEvent::UserTokensCounted {
-                    node_id: user_msg_id,
-                    count,
-                });
-            }
-        }
-        fire_ctx.send(AgentEvent::PhaseCompleted { phase_id });
-    });
 }
 
 /// Add the assistant response and think block to the shared graph.

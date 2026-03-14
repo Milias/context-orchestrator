@@ -66,10 +66,6 @@ pub enum AgentEvent {
     PhaseCompleted {
         phase_id: Uuid,
     },
-    UserTokensCounted {
-        node_id: Uuid,
-        count: u32,
-    },
     StreamDelta {
         text: String,
         is_thinking: bool,

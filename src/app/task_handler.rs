@@ -117,15 +117,6 @@ impl App {
                 self.agents.complete_phase(agent_id, &phase_id);
                 self.complete_phase(phase_id);
             }
-            AgentEvent::UserTokensCounted { node_id, count } => {
-                self.graph.write().set_input_tokens(node_id, count);
-                self.spawn_token_record(TokenEvent {
-                    conversation_id: self.metadata.id.clone(),
-                    direction: TokenDirection::Input,
-                    tokens: count,
-                    model: None,
-                });
-            }
             AgentEvent::StreamDelta { text, is_thinking } => {
                 // TUI update flows through EventBus.
                 self.graph.read().emit(GraphEvent::StreamDelta {

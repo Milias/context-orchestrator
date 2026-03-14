@@ -302,7 +302,6 @@ impl App {
                 max_context_tokens: self.config.max_context_tokens,
                 max_tool_loop_iterations: self.config.max_tool_loop_iterations,
                 tools: crate::tool_executor::registered_tool_definitions(),
-                anchor_id: user_msg_id,
                 agent_id,
             };
 
