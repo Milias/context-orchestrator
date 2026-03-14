@@ -42,13 +42,27 @@ impl AgentContext {
 
 // ── StreamResult ────────────────────────────────────────────────────
 
+/// Outcome of an LLM streaming call.
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::app) enum StreamOutcome {
+    /// Normal completion with content.
+    Success,
+    /// User or system cancellation.
+    Cancelled,
+    /// API returned a non-retryable error. Agent should retry with rebuilt context.
+    ApiError,
+}
+
 pub(in crate::app) struct StreamResult {
     pub response: String,
     pub think_text: String,
     pub output_tokens: Option<u32>,
     pub tool_use_records: Vec<ToolUseRecord>,
     pub stop_reason: Option<StopReason>,
-    pub cancelled: bool,
+    pub outcome: StreamOutcome,
+    /// Error message when `outcome` is `ApiError`. Used by the agent loop to
+    /// record the error node synchronously before retrying.
+    pub error_message: Option<String>,
     /// Phase ID for the Receiving phase, created during connection.
     /// Caller must send `PhaseCompleted` for this ID when streaming ends.
     pub recv_phase_id: Option<Uuid>,
@@ -63,22 +77,22 @@ pub(in crate::app) async fn stream_llm_response(
     ctx: &AgentContext,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<StreamResult> {
-    let Some((stream, recv_phase_id)) =
-        try_connect_chat(provider, &messages, config, ctx, cancel_token, "Connecting").await?
-    else {
-        return Ok(cancelled_result());
-    };
-
-    consume_stream(
-        stream,
-        recv_phase_id,
-        provider,
-        &messages,
-        config,
-        ctx,
-        cancel_token,
-    )
-    .await
+    match try_connect_chat(provider, &messages, config, ctx, cancel_token, "Connecting").await? {
+        ConnectOutcome::Connected(stream, recv_phase_id) => {
+            consume_stream(
+                stream,
+                recv_phase_id,
+                provider,
+                &messages,
+                config,
+                ctx,
+                cancel_token,
+            )
+            .await
+        }
+        ConnectOutcome::ApiError(msg) => Ok(api_error_result(msg)),
+        ConnectOutcome::Cancelled => Ok(cancelled_result()),
+    }
 }
 
 // ── Stream consumption ──────────────────────────────────────────────
@@ -137,9 +151,7 @@ async fn consume_stream(
                     state.think_splitter = ThinkSplitter::new();
                     continue;
                 }
-                if state.retries > MAX_STREAM_RETRIES {
-                    ctx.send(AgentEvent::Error(format!("Stream error: {e}")));
-                }
+                state.error_message = Some(format!("Stream error: {e}"));
                 break;
             }
             Some(Err(e)) => {
@@ -165,7 +177,7 @@ async fn consume_stream(
                         continue;
                     }
                 }
-                ctx.send(AgentEvent::Error(format_error(&e)));
+                state.error_message = Some(format_error(&e));
                 break;
             }
             None => break,
@@ -184,6 +196,8 @@ struct StreamState {
     retries: u32,
     last_send: Instant,
     send_budget: Duration,
+    /// Set when the stream broke due to an error (reconnection exhausted).
+    error_message: Option<String>,
 }
 
 impl StreamState {
@@ -196,18 +210,25 @@ impl StreamState {
             retries: 0,
             last_send: Instant::now(),
             send_budget: Duration::from_millis(16),
+            error_message: None,
         }
     }
 
     fn into_result(self, recv_phase_id: Uuid) -> StreamResult {
         let (response, think_text) = self.think_splitter.finish();
+        let (outcome, error_message) = if let Some(msg) = self.error_message {
+            (StreamOutcome::ApiError, Some(msg))
+        } else {
+            (StreamOutcome::Success, None)
+        };
         StreamResult {
             response,
             think_text,
             output_tokens: self.output_tokens,
             tool_use_records: self.tool_use_records,
             stop_reason: self.stop_reason,
-            cancelled: false,
+            outcome,
+            error_message,
             recv_phase_id: Some(recv_phase_id),
         }
     }
@@ -216,6 +237,14 @@ impl StreamState {
 type ChatStream = Pin<Box<dyn futures::Stream<Item = anyhow::Result<StreamChunk>> + Send>>;
 
 // ── Connection helpers ──────────────────────────────────────────────
+
+/// Outcome of a connection attempt.
+enum ConnectOutcome {
+    Connected(ChatStream, Uuid),
+    /// Non-retryable API error with the formatted message.
+    ApiError(String),
+    Cancelled,
+}
 
 /// Attempt a stream reconnection if retries remain. Returns `None` when exhausted or cancelled.
 async fn try_reconnect(
@@ -230,7 +259,7 @@ async fn try_reconnect(
         return Ok(None);
     }
     *retries += 1;
-    try_connect_chat(
+    match try_connect_chat(
         provider,
         messages,
         config,
@@ -238,11 +267,17 @@ async fn try_reconnect(
         cancel_token,
         "Reconnecting",
     )
-    .await
+    .await?
+    {
+        ConnectOutcome::Connected(stream, phase_id) => Ok(Some((stream, phase_id))),
+        ConnectOutcome::ApiError(_) | ConnectOutcome::Cancelled => Ok(None),
+    }
 }
 
 /// Try to establish a chat stream with retry and cancellation.
-/// On success returns `(stream, recv_phase_id)` — the Receiving phase is left Running.
+/// On success returns `Connected(stream, recv_phase_id)`.
+/// On non-retryable API error returns `ApiError` (after sending `AgentEvent::ApiError`).
+/// On cancellation returns `Cancelled`.
 async fn try_connect_chat(
     provider: &Arc<dyn LlmProvider>,
     messages: &[ChatMessage],
@@ -250,7 +285,7 @@ async fn try_connect_chat(
     ctx: &AgentContext,
     cancel_token: &CancellationToken,
     context_label: &str,
-) -> anyhow::Result<Option<(ChatStream, Uuid)>> {
+) -> anyhow::Result<ConnectOutcome> {
     let retry_config = RetryConfig::default();
 
     for attempt in 1..=retry_config.max_attempts {
@@ -273,7 +308,7 @@ async fn try_connect_chat(
                     phase_id: recv_phase,
                     phase: AgentPhase::Receiving,
                 });
-                return Ok(Some((s, recv_phase)));
+                return Ok(ConnectOutcome::Connected(s, recv_phase));
             }
             Err(e) => {
                 let retryable = e
@@ -281,18 +316,19 @@ async fn try_connect_chat(
                     .is_some_and(ApiError::is_retryable);
 
                 if !retryable || attempt == retry_config.max_attempts {
-                    ctx.send(AgentEvent::PhaseCompleted {
+                    let msg = format_error(&e);
+                    ctx.send(AgentEvent::ApiError {
                         phase_id: connect_phase,
+                        message: msg.clone(),
                     });
-                    ctx.send(AgentEvent::Error(format_error(&e)));
-                    return Ok(None);
+                    return Ok(ConnectOutcome::ApiError(msg));
                 }
                 ctx.send(AgentEvent::PhaseCompleted {
                     phase_id: connect_phase,
                 });
 
                 let delay = retry_config.delay_for(attempt - 1, e.downcast_ref::<ApiError>());
-                ctx.send(AgentEvent::Error(format!(
+                ctx.send(AgentEvent::StatusMessage(format!(
                     "{context_label} ({attempt}/{})... {}",
                     retry_config.max_attempts,
                     format_error(&e)
@@ -303,13 +339,13 @@ async fn try_connect_chat(
                     () = cancel_token.cancelled() => true,
                 };
                 if cancelled {
-                    return Ok(None);
+                    return Ok(ConnectOutcome::Cancelled);
                 }
             }
         }
     }
 
-    Ok(None)
+    Ok(ConnectOutcome::Cancelled)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -321,7 +357,21 @@ fn cancelled_result() -> StreamResult {
         output_tokens: None,
         tool_use_records: Vec::new(),
         stop_reason: None,
-        cancelled: true,
+        outcome: StreamOutcome::Cancelled,
+        error_message: None,
+        recv_phase_id: None,
+    }
+}
+
+fn api_error_result(message: String) -> StreamResult {
+    StreamResult {
+        response: String::new(),
+        think_text: String::new(),
+        output_tokens: None,
+        tool_use_records: Vec::new(),
+        stop_reason: None,
+        outcome: StreamOutcome::ApiError,
+        error_message: Some(message),
         recv_phase_id: None,
     }
 }

@@ -116,13 +116,19 @@ pub(super) fn render_item(
     let title_budget = width.saturating_sub(indent.len() + 4 + kind_prefix.len());
     let title = truncate(&item.title, title_budget);
 
+    let base_color = match item.kind {
+        WorkItemKind::Plan => Color::Yellow,
+        WorkItemKind::Task => Color::White,
+    };
     let title_style = if is_selected {
         Style::default()
-            .fg(Color::White)
+            .fg(base_color)
             .bg(Color::Rgb(40, 40, 60))
             .add_modifier(Modifier::BOLD)
+    } else if matches!(item.kind, WorkItemKind::Plan) {
+        Style::default().fg(base_color).bold()
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(base_color)
     };
 
     let mut spans = vec![
@@ -144,9 +150,14 @@ pub(super) fn render_item(
             .collect::<Vec<_>>()
             .join(", ");
         spans.push(Span::styled(
-            format!("  (depends on: {dep_names})"),
+            "  (depends on: ",
             Style::default().fg(Color::DarkGray),
         ));
+        spans.push(Span::styled(
+            dep_names,
+            Style::default().fg(Color::Magenta),
+        ));
+        spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
     }
 
     lines.push(Line::from(spans));

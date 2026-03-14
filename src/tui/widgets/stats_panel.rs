@@ -26,7 +26,6 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
     let tool_count = graph.nodes_by(|n| matches!(n, Node::ToolCall { .. })).len();
 
     let dim = Style::default().fg(Color::DarkGray);
-    let val = Style::default().fg(Color::White);
 
     let mut lines = vec![
         Line::from(vec![
@@ -37,16 +36,16 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
                     format_token_count(input_tok),
                     format_token_count(output_tok)
                 ),
-                val,
+                Style::default().fg(Color::Cyan),
             ),
         ]),
         Line::from(vec![
             Span::styled("Messages: ", dim),
-            Span::styled(msg_count.to_string(), val),
+            Span::styled(msg_count.to_string(), Style::default().fg(Color::Green)),
         ]),
         Line::from(vec![
             Span::styled("Tools: ", dim),
-            Span::styled(tool_count.to_string(), val),
+            Span::styled(tool_count.to_string(), Style::default().fg(Color::Magenta)),
         ]),
     ];
 
@@ -73,7 +72,7 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(label, dim),
+                Span::styled(label, Style::default().fg(Color::White)),
             ]));
         }
     }

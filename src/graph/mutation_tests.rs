@@ -370,3 +370,23 @@ fn test_add_tool_call_captures_pending_snapshot() {
         panic!("snapshot should be a ToolCall");
     }
 }
+
+/// Bug: `record_api_error` fails to create the `OccurredDuring` edge, so
+/// the error node floats disconnected and cannot be traced to the conversation.
+#[test]
+fn test_record_api_error_creates_node_and_edge() {
+    let mut graph = ConversationGraph::new("sys");
+    let leaf = graph.branch_leaf("main").unwrap();
+    let error_id = graph.record_api_error(leaf, "Bad request (400): test".into());
+
+    // Verify node exists with correct content.
+    let node = graph.node(error_id).expect("error node should exist");
+    assert!(matches!(node, Node::ApiError { message, .. } if message == "Bad request (400): test"));
+
+    // Verify OccurredDuring edge links error to the branch leaf.
+    let has_edge = graph
+        .edges
+        .iter()
+        .any(|e| e.from == error_id && e.to == leaf && e.kind == EdgeKind::OccurredDuring);
+    assert!(has_edge, "should have OccurredDuring edge to branch leaf");
+}

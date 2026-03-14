@@ -4,6 +4,8 @@
 //! context truncation: no orphaned tool results, no leading assistant
 //! messages, no trailing tool-use without results.
 
+use std::collections::HashSet;
+
 use crate::graph::Role;
 use crate::llm::{ChatContent, ChatMessage, ContentBlock, LlmProvider, ToolDefinition};
 
@@ -26,6 +28,9 @@ pub async fn finalize_context(
         truncate_messages(&mut messages, max_context_tokens, token_count);
     }
 
+    sanitize_message_boundaries(&mut messages);
+    sanitize_tool_pairing(&mut messages);
+    // Tool pairing can drop empty messages, creating new boundary violations.
     sanitize_message_boundaries(&mut messages);
 
     Ok((system_prompt, messages))
@@ -61,39 +66,105 @@ pub(crate) fn truncate_messages(
 }
 
 /// Fix structural violations after truncation.
-/// - Drop orphaned tool result user messages at the front
-/// - Drop leading assistant messages (API requires user first)
-/// - Drop trailing assistant messages with uncompleted tool uses
+///
+/// Runs three passes in a loop until stable:
+/// 1. Drop orphaned `tool_result` user messages at the front
+/// 2. Drop leading assistant messages (API requires user first)
+/// 3. Drop trailing assistant messages with uncompleted tool uses
+///
+/// The loop is necessary because Pass 2 can expose new orphaned `tool_result`
+/// messages at position 0 that Pass 1 already checked.
 pub(crate) fn sanitize_message_boundaries(messages: &mut Vec<ChatMessage>) {
-    // Drop orphaned tool_result user messages at the front after truncation.
-    while messages.len() > 1 && messages[0].role == Role::User {
-        let all_results = matches!(&messages[0].content,
-            ChatContent::Blocks(b) if b.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. })));
-        if all_results {
+    loop {
+        let len_before = messages.len();
+
+        // Pass 1: Drop orphaned tool_result user messages at the front.
+        while messages.len() > 1 && messages[0].role == Role::User {
+            let all_results = matches!(&messages[0].content,
+                ChatContent::Blocks(b) if b.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. })));
+            if all_results {
+                messages.remove(0);
+            } else {
+                break;
+            }
+        }
+
+        // Pass 2: Drop leading assistant messages — API requires user first.
+        while messages.len() > 1 && messages[0].role == Role::Assistant {
             messages.remove(0);
-        } else {
+        }
+
+        // Pass 3: Drop trailing assistant messages with tool_use blocks lacking a result.
+        while messages.len() > 1 {
+            let dominated = messages.last().is_some_and(|last| {
+                last.role == Role::Assistant
+                    && matches!(&last.content,
+                        ChatContent::Blocks(b) if b.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })))
+            });
+            if dominated {
+                messages.pop();
+            } else {
+                break;
+            }
+        }
+
+        if messages.len() == len_before {
             break;
         }
     }
+}
 
-    // Drop leading assistant messages — API requires conversation start with user.
-    while messages.len() > 1 && messages[0].role == Role::Assistant {
-        messages.remove(0);
-    }
+/// Remove mid-conversation `tool_use` and `tool_result` blocks whose pair is missing.
+///
+/// After truncation, a `tool_use` block can exist without a matching `tool_result`
+/// (or vice versa) anywhere in the conversation. The Anthropic API rejects these
+/// orphaned blocks. This function removes them and drops any messages that become
+/// empty as a result.
+pub(crate) fn sanitize_tool_pairing(messages: &mut Vec<ChatMessage>) {
+    let mut tool_use_ids: HashSet<String> = HashSet::new();
+    let mut tool_result_ids: HashSet<String> = HashSet::new();
 
-    // Drop trailing assistant messages with tool_use blocks that lack a following tool_result.
-    while messages.len() > 1 {
-        let dominated = messages.last().is_some_and(|last| {
-            last.role == Role::Assistant
-                && matches!(&last.content,
-                    ChatContent::Blocks(b) if b.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })))
-        });
-        if dominated {
-            messages.pop();
-        } else {
-            break;
+    for msg in messages.iter() {
+        if let ChatContent::Blocks(blocks) = &msg.content {
+            for block in blocks {
+                match block {
+                    ContentBlock::ToolUse { id, .. } => {
+                        tool_use_ids.insert(id.clone());
+                    }
+                    ContentBlock::ToolResult { tool_use_id, .. } => {
+                        tool_result_ids.insert(tool_use_id.clone());
+                    }
+                    ContentBlock::Text { .. } => {}
+                }
+            }
         }
     }
+
+    // IDs that appear in both sets are valid pairs.
+    let orphaned_results: HashSet<&String> = tool_result_ids.difference(&tool_use_ids).collect();
+    let orphaned_uses: HashSet<&String> = tool_use_ids.difference(&tool_result_ids).collect();
+
+    if orphaned_results.is_empty() && orphaned_uses.is_empty() {
+        return;
+    }
+
+    // Strip orphaned blocks from messages; drop messages that become empty.
+    for msg in messages.iter_mut() {
+        if let ChatContent::Blocks(blocks) = &mut msg.content {
+            blocks.retain(|block| match block {
+                ContentBlock::ToolResult { tool_use_id, .. } => {
+                    !orphaned_results.contains(tool_use_id)
+                }
+                ContentBlock::ToolUse { id, .. } => !orphaned_uses.contains(id),
+                ContentBlock::Text { .. } => true,
+            });
+        }
+    }
+
+    messages.retain(|msg| match &msg.content {
+        ChatContent::Text(t) => !t.is_empty(),
+        ChatContent::Blocks(b) => !b.is_empty(),
+    });
 }
 
 #[cfg(test)]

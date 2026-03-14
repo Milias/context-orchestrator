@@ -174,20 +174,37 @@ impl App {
                     self.complete_phase(pid);
                 }
                 self.agents.remove(agent_id);
-                // Release claims held by this agent.
-                self.graph
-                    .write()
-                    .edges
-                    .retain(|e| !(e.kind == EdgeKind::ClaimedBy && e.to == agent_id));
+                {
+                    let mut g = self.graph.write();
+                    // Release claims held by this agent.
+                    g.edges
+                        .retain(|e| !(e.kind == EdgeKind::ClaimedBy && e.to == agent_id));
+                    // Safety net: clean up any stale ApiError nodes.
+                    g.remove_nodes_by(|n| matches!(n, Node::ApiError { .. }));
+                }
                 let _ = self.save();
                 // TUI update flows through EventBus.
                 self.graph
                     .read()
                     .emit(GraphEvent::AgentFinished { agent_id });
             }
+            AgentEvent::ApiError { phase_id, message } => {
+                // Record phase failure — do NOT cancel the agent.
+                // Error node is recorded synchronously in the agent loop (no race).
+                self.fail_phase(phase_id, &message);
+                self.graph
+                    .read()
+                    .emit(GraphEvent::ErrorOccurred { message });
+            }
+            AgentEvent::StatusMessage(msg) => {
+                // TUI display only — do NOT cancel the agent.
+                self.graph
+                    .read()
+                    .emit(GraphEvent::ErrorOccurred { message: msg });
+            }
             AgentEvent::Error(msg) => {
+                // Fatal error — cancel the agent.
                 self.agents.cancel_agent(agent_id);
-                // TUI update flows through EventBus.
                 self.graph
                     .read()
                     .emit(GraphEvent::ErrorOccurred { message: msg });
@@ -205,6 +222,17 @@ impl App {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         });
+    }
+
+    /// Mark a phase as Failed in the graph with an error description.
+    fn fail_phase(&mut self, phase_id: Uuid, error_msg: &str) {
+        let mut g = self.graph.write();
+        if let Some(Node::BackgroundTask { status, .. }) = g.node(phase_id) {
+            if *status == TaskStatus::Running {
+                let desc = format!("API Error: {error_msg}");
+                let _ = g.update_background_task_status(phase_id, TaskStatus::Failed, desc);
+            }
+        }
     }
 
     /// Mark a phase as Completed in the graph.

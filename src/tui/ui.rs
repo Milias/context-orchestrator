@@ -114,7 +114,7 @@ fn draw_tab_status_bar(
     let left_width: usize = spans.iter().map(Span::width).sum();
     let pad = (area.width as usize).saturating_sub(left_width + right.len());
     spans.push(Span::styled(" ".repeat(pad), bg));
-    spans.push(Span::styled(right, bg.fg(Color::DarkGray)));
+    spans.push(Span::styled(right, bg.fg(Color::White)));
 
     let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line).style(bg), area);

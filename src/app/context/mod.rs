@@ -8,6 +8,7 @@
 //! 5. **Render** — serialization to chat messages
 //! 6. **Sanitize** — API constraint enforcement
 
+pub(crate) mod error_context;
 pub mod policies;
 pub mod sanitize;
 

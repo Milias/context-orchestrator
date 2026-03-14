@@ -127,14 +127,14 @@ fn zero_starts_at_origin() {
     assert!(!s.is_animating());
 }
 
-/// Catches a wrong easing divisor. With 50% easing, one tick from 0→20
-/// must advance current to 10 (half the remaining gap).
+/// Catches a wrong easing fraction. With 75% easing, one tick from 0→20
+/// must advance current to 15 (three-quarters of the remaining gap).
 #[test]
-fn half_step_easing() {
+fn three_quarter_step_easing() {
     let mut s = AnimatedScroll::zero();
     s.scroll_by(20, 100);
     s.tick();
-    assert_eq!(s.position(), 10);
+    assert_eq!(s.position(), 15);
 }
 
 /// Catches the existing `u16::MAX` sentinel bug where `handle_scroll`

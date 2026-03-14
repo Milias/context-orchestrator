@@ -1,18 +1,16 @@
-//! Continuous agent loop: context building → LLM streaming → tool dispatch → idle → repeat.
+//! Agent loop: context → LLM stream → tool dispatch → idle → repeat.
 //!
-//! The agent loop runs as a persistent tokio task that stays alive for the
-//! entire conversation. After completing an activation (`EndTurn` or max
-//! iterations), it enters idle state and waits for wake events (new user
-//! messages or claimed work). It only exits on cancellation or shutdown.
+//! Runs as a persistent tokio task. Between activations, idles waiting for
+//! wake events. Exits only on cancellation or shutdown.
 
 use crate::graph::event::GraphEvent;
 use crate::graph::tool::result::ToolResultContent;
 use crate::graph::tool::types::ToolCallStatus;
 use crate::graph::{parse_tool_arguments, EdgeKind, Node, Role, StopReason};
 use crate::llm::{ChatConfig, LlmProvider, ToolDefinition};
-use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult};
+use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
 
-use super::streaming::{self as agent_streaming, AgentContext, StreamResult};
+use super::streaming::{self as agent_streaming, AgentContext, StreamOutcome, StreamResult};
 use crate::app::context;
 use crate::app::SharedGraph;
 
@@ -37,7 +35,6 @@ pub(in crate::app) struct AgentLoopConfig {
 }
 
 /// Spawn the agent loop as a persistent background task.
-/// The loop stays alive between activations, waiting for wake events.
 pub(in crate::app) fn spawn_agent_loop(
     config: AgentLoopConfig,
     task_tx: mpsc::UnboundedSender<TaskMessage>,
@@ -61,7 +58,8 @@ pub(in crate::app) fn spawn_agent_loop(
 /// Max times we auto-continue when the LLM hits `max_tokens`.
 const MAX_CONTINUATIONS: u32 = 3;
 
-use crate::tasks::TaskMessage;
+/// Max consecutive API error retries before giving up.
+const MAX_API_ERROR_RETRIES: u32 = 2;
 
 /// Check whether a graph event should wake the agent from idle.
 fn is_wake_event(event: &GraphEvent, agent_id: Uuid) -> bool {
@@ -98,8 +96,6 @@ async fn run_agent_loop(
         tools: config.tools.clone(),
     };
 
-    // Outer loop: activations. Each activation processes work until EndTurn.
-    // Between activations, the agent idles waiting for wake events.
     loop {
         let activation_result = run_activation(
             graph,
@@ -116,17 +112,13 @@ async fn run_agent_loop(
             return Ok(());
         }
 
-        // Enter idle: notify TUI, then wait for wake events.
         ctx.send(AgentEvent::Idle);
-
         loop {
             tokio::select! {
                 result = event_rx.recv() => {
                     match result {
                         Ok(ref event) if is_wake_event(event, config.agent_id) => break,
                         Err(broadcast::error::RecvError::Closed) => return Ok(()),
-                        // Lagged = missed events. Wake unconditionally — context
-                        // rebuild will see current graph state.
                         Err(broadcast::error::RecvError::Lagged(_)) => break,
                         _ => {} // ignore irrelevant events
                     }
@@ -157,6 +149,7 @@ async fn run_activation(
     chat_config: &ChatConfig,
 ) -> anyhow::Result<ActivationResult> {
     let mut continuation_count: u32 = 0;
+    let mut api_error_count: u32 = 0;
 
     for _ in 0..config.max_tool_loop_iterations {
         let ctx_phase = Uuid::new_v4();
@@ -201,8 +194,35 @@ async fn run_activation(
             ctx.send(AgentEvent::PhaseCompleted { phase_id: recv_id });
         }
 
-        if result.cancelled || (result.response.is_empty() && result.tool_use_records.is_empty()) {
+        match result.outcome {
+            StreamOutcome::Cancelled => return Ok(ActivationResult::Cancelled),
+            StreamOutcome::ApiError => {
+                // Record synchronously so `build_error_section` sees it on retry.
+                if let Some(msg) = &result.error_message {
+                    let mut g = graph.write();
+                    if let Ok(leaf) = g.active_leaf() {
+                        g.record_api_error(leaf, msg.clone());
+                    }
+                }
+                api_error_count += 1;
+                if api_error_count > MAX_API_ERROR_RETRIES {
+                    cleanup_api_errors(graph);
+                    ctx.send(AgentEvent::Error("Max API error retries reached".into()));
+                    return Ok(ActivationResult::Completed);
+                }
+                continue;
+            }
+            StreamOutcome::Success => {}
+        }
+
+        if result.response.is_empty() && result.tool_use_records.is_empty() {
             return Ok(ActivationResult::Cancelled);
+        }
+
+        // Successful LLM response — reset error count and clean up stale error nodes.
+        if api_error_count > 0 {
+            api_error_count = 0;
+            cleanup_api_errors(graph);
         }
 
         let assistant_id = apply_iteration_to_graph(graph, &result, &loop_config, ctx)?;
@@ -352,6 +372,13 @@ async fn wait_for_tool_results(
     }
 
     false
+}
+
+/// Remove all `ApiError` nodes from the graph. Called on both success and circuit breaker.
+fn cleanup_api_errors(graph: &SharedGraph) {
+    graph
+        .write()
+        .remove_nodes_by(|n| matches!(n, Node::ApiError { .. }));
 }
 
 /// Write timeout results to the shared graph for tools that didn't complete in time.

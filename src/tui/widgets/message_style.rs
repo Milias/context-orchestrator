@@ -21,6 +21,7 @@ pub fn role_label(node: &Node) -> &'static str {
         Node::ThinkBlock { .. } => "think",
         Node::Question { .. } => "question",
         Node::Answer { .. } => "answer",
+        Node::ApiError { .. } => "error",
     }
 }
 
@@ -37,6 +38,7 @@ pub fn role_color(node: &Node) -> Color {
         Node::ToolResult { .. } => Color::Cyan,
         Node::Answer { .. } => Color::Green,
         // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
+        Node::ApiError { .. } => Color::Red,
         Node::SystemDirective { .. } | Node::BackgroundTask { .. } | Node::ThinkBlock { .. } => {
             Color::DarkGray
         }

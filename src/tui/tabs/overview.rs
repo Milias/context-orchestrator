@@ -88,6 +88,8 @@ struct EventRow {
     icon_color: Color,
     /// Human-readable name or summary.
     name: String,
+    /// Color for the name span (varies by event type).
+    name_color: Color,
     /// Formatted duration string (empty for events without duration).
     duration: String,
 }
@@ -169,6 +171,7 @@ fn collect_tool_calls(graph: &ConversationGraph, now: DateTime<Utc>, events: &mu
                 icon,
                 icon_color,
                 name: arguments.display_summary(),
+                name_color: Color::Magenta,
                 duration,
             });
         }
@@ -185,10 +188,10 @@ fn collect_messages(graph: &ConversationGraph, events: &mut Vec<EventRow>) {
             ..
         } = node
         {
-            let (icon, icon_color) = match role {
-                Role::User => ("U", Color::Cyan),
-                Role::Assistant => ("A", Color::Green),
-                Role::System => ("S", Color::DarkGray),
+            let (icon, icon_color, name_color) = match role {
+                Role::User => ("U", Color::Cyan, Color::Cyan),
+                Role::Assistant => ("A", Color::Green, Color::Green),
+                Role::System => ("S", Color::DarkGray, Color::DarkGray),
             };
             let preview = content.lines().next().unwrap_or("(empty)");
             events.push(EventRow {
@@ -197,6 +200,7 @@ fn collect_messages(graph: &ConversationGraph, events: &mut Vec<EventRow>) {
                 icon,
                 icon_color,
                 name: format!("[{role:?}] {preview}"),
+                name_color,
                 duration: String::new(),
             });
         }
@@ -234,6 +238,7 @@ fn collect_background_tasks(
                 icon,
                 icon_color,
                 name: description.clone(),
+                name_color: Color::Blue,
                 duration,
             });
         }
@@ -253,6 +258,12 @@ fn render_event_row(event: &EventRow, width: usize) -> Line<'static> {
 
     let dim = Style::default().fg(Color::DarkGray);
 
+    let name_style = if event.name_color == Color::Magenta {
+        Style::default().fg(Color::Magenta).bold()
+    } else {
+        Style::default().fg(event.name_color)
+    };
+
     let mut spans = vec![
         Span::styled(time, dim),
         Span::raw(" "),
@@ -261,11 +272,16 @@ fn render_event_row(event: &EventRow, width: usize) -> Line<'static> {
             format!("{} ", event.icon),
             Style::default().fg(event.icon_color),
         ),
-        Span::styled(name, Style::default().fg(Color::White)),
+        Span::styled(name, name_style),
         Span::raw(" ".repeat(padding)),
     ];
     if !dur.is_empty() {
-        spans.push(Span::styled(dur.clone(), dim));
+        let dur_color = if event.icon_color == Color::Yellow {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
+        spans.push(Span::styled(dur.clone(), Style::default().fg(dur_color)));
     }
     Line::from(spans)
 }

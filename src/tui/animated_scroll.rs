@@ -18,8 +18,12 @@ pub struct AnimatedScroll {
 }
 
 impl AnimatedScroll {
-    /// Fraction of the remaining gap closed per tick. `2` = 50%.
-    const EASE_DIVISOR: u16 = 2;
+    /// Numerator of the fraction of the remaining gap closed per tick.
+    /// `3` out of 4 = 75%. Arrow-key scrolls (3 lines) settle in ~2 ticks
+    /// (160ms); page scrolls (~25 lines) settle in ~3 ticks (240ms).
+    const EASE_NUMER: u16 = 3;
+    /// Denominator of the easing fraction.
+    const EASE_DENOM: u16 = 4;
 
     /// Create a scroll pinned to the bottom via the `u16::MAX` sentinel.
     /// The sentinel is resolved to a real offset on the first `apply_max` call.
@@ -78,16 +82,18 @@ impl AnimatedScroll {
         self.current = self.current.min(max);
     }
 
-    /// Advance one animation step. Closes 50% of the gap (min 1 line).
+    /// Advance one animation step. Closes 75% of the gap (min 1 line).
     pub fn tick(&mut self) {
         if self.current == self.target {
             return;
         }
         if self.current < self.target {
-            let step = ((self.target - self.current) / Self::EASE_DIVISOR).max(1);
+            let remaining = self.target - self.current;
+            let step = (remaining * Self::EASE_NUMER / Self::EASE_DENOM).max(1);
             self.current = (self.current + step).min(self.target);
         } else {
-            let step = ((self.current - self.target) / Self::EASE_DIVISOR).max(1);
+            let remaining = self.current - self.target;
+            let step = (remaining * Self::EASE_NUMER / Self::EASE_DENOM).max(1);
             self.current = self.current.saturating_sub(step).max(self.target);
         }
     }

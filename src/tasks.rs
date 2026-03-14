@@ -82,9 +82,19 @@ pub enum AgentEvent {
         tool_call_id: Uuid,
         arguments: ToolCallArguments,
     },
+    /// API returned a non-retryable error. Record in graph, do NOT cancel agent.
+    /// The agent loop will retry with rebuilt context.
+    ApiError {
+        phase_id: Uuid,
+        message: String,
+    },
+    /// Non-fatal status message for TUI display (e.g., retry progress).
+    /// Do NOT cancel agent.
+    StatusMessage(String),
     /// Agent entered idle state — waiting for new work events.
     Idle,
     Finished,
+    /// Fatal error — agent cannot recover. Triggers cancellation.
     Error(String),
 }
 

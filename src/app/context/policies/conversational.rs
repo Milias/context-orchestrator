@@ -49,7 +49,8 @@ pub fn build_messages(
             | Node::ToolCall { .. }
             | Node::ToolResult { .. }
             | Node::Question { .. }
-            | Node::Answer { .. } => {}
+            | Node::Answer { .. }
+            | Node::ApiError { .. } => {}
         }
     }
 
@@ -67,6 +68,13 @@ pub fn build_messages(
             prompt.push_str("\n\n");
             prompt.push_str(&qa_section);
         }
+    }
+
+    // Inject API error context so the LLM can adapt on retry.
+    if let Some(error_section) = crate::app::context::error_context::build_error_section(graph) {
+        let prompt = system_prompt.get_or_insert_with(String::new);
+        prompt.push_str("\n\n");
+        prompt.push_str(&error_section);
     }
 
     (system_prompt, messages)

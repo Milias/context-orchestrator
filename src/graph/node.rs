@@ -158,6 +158,8 @@ pub enum EdgeKind {
     Supersedes,
     /// Any node → agent UUID: coordination lock preventing double-execution.
     ClaimedBy,
+    /// `ApiError` → branch leaf: records when the error occurred in the conversation.
+    OccurredDuring,
 }
 
 // ── Edge ─────────────────────────────────────────────────────────────
@@ -263,6 +265,14 @@ pub enum Node {
         question_id: Uuid,
         created_at: DateTime<Utc>,
     },
+    /// A non-retryable API error recorded in the graph for system prompt injection.
+    /// Linked to the branch leaf at time of failure via `OccurredDuring` edge.
+    /// Not part of the conversation branch (`RespondsTo`) — surfaced via system prompt.
+    ApiError {
+        id: Uuid,
+        message: String,
+        created_at: DateTime<Utc>,
+    },
 }
 
 impl Node {
@@ -278,7 +288,8 @@ impl Node {
             | Node::ToolCall { id, .. }
             | Node::ToolResult { id, .. }
             | Node::Question { id, .. }
-            | Node::Answer { id, .. } => *id,
+            | Node::Answer { id, .. }
+            | Node::ApiError { id, .. } => *id,
         }
     }
 
@@ -289,6 +300,7 @@ impl Node {
             | Node::ThinkBlock { content, .. }
             | Node::Question { content, .. }
             | Node::Answer { content, .. } => content,
+            Node::ApiError { message, .. } => message,
             Node::ToolResult { content, .. } => content.text_content(),
             Node::WorkItem { title, .. } => title,
             Node::GitFile { path, .. } => path,
@@ -322,7 +334,8 @@ impl Node {
             | Node::WorkItem { created_at, .. }
             | Node::BackgroundTask { created_at, .. }
             | Node::Question { created_at, .. }
-            | Node::Answer { created_at, .. } => *created_at,
+            | Node::Answer { created_at, .. }
+            | Node::ApiError { created_at, .. } => *created_at,
             Node::GitFile { updated_at, .. } | Node::Tool { updated_at, .. } => *updated_at,
         }
     }

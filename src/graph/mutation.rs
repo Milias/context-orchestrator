@@ -353,6 +353,21 @@ impl ConversationGraph {
         Ok(answer_id)
     }
 
+    /// Record a non-retryable API error in the graph.
+    /// Linked to `parent_id` (typically the branch leaf) via `OccurredDuring` edge.
+    /// These nodes are queried by `build_error_section()` for system prompt injection.
+    pub fn record_api_error(&mut self, parent_id: Uuid, message: String) -> Uuid {
+        let id = Uuid::new_v4();
+        let node = Node::ApiError {
+            id,
+            message,
+            created_at: Utc::now(),
+        };
+        self.add_node(node);
+        let _ = self.add_edge(id, parent_id, super::EdgeKind::OccurredDuring);
+        id
+    }
+
     /// Add a `ToolResult` node linked to its tool call via `Produced` edge.
     pub fn add_tool_result(
         &mut self,

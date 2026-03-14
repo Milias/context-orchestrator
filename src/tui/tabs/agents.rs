@@ -45,7 +45,7 @@ pub(super) fn render_agent_card(frame: &mut Frame, area: Rect, tui_state: &TuiSt
     let phase_text = tui_state.status_message.as_deref().unwrap_or("Working...");
     lines.push(Line::from(vec![
         Span::styled(format!("{spinner} "), Style::default().fg(Color::Yellow)),
-        Span::styled("Agent #1", Style::default().fg(Color::White).bold()),
+        Span::styled("Agent #1", Style::default().fg(Color::Cyan).bold()),
         Span::styled(
             format!("  {phase_text}"),
             Style::default().fg(Color::DarkGray),
@@ -170,7 +170,7 @@ pub(super) fn render_running_tasks(
             let pad = width.saturating_sub(2 + name.chars().count() + 1 + dur.len());
             lines.push(Line::from(vec![
                 Span::styled(format!("{spinner} "), Style::default().fg(Color::Cyan)),
-                Span::styled(name, Style::default().fg(Color::White)),
+                Span::styled(name, Style::default().fg(Color::Blue)),
                 Span::raw(" ".repeat(pad)),
                 Span::styled(dur, Style::default().fg(Color::DarkGray)),
             ]));
@@ -275,7 +275,7 @@ pub(super) fn render_recent_completions(
             let pad = w.saturating_sub(fixed + name.chars().count());
             Some(Line::from(vec![
                 Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(name, Style::default().fg(Color::White)),
+                Span::styled(name, Style::default().fg(Color::Magenta).bold()),
                 Span::raw(" ".repeat(pad)),
                 Span::styled(dur, Style::default().fg(Color::DarkGray)),
             ]))
