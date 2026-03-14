@@ -95,6 +95,14 @@ pub enum BackgroundTaskKind {
     AgentPhase,
 }
 
+impl BackgroundTaskKind {
+    /// Whether this task kind represents an always-running daemon process.
+    /// Daemons have no expected completion — they run for the app's lifetime.
+    pub fn is_daemon(&self) -> bool {
+        matches!(self, Self::GitIndex)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {

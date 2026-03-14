@@ -176,6 +176,8 @@ pub(super) fn render_running_tasks(
     let mut lines: Vec<Line<'_>> = Vec::new();
 
     // Background tasks (non-AgentPhase, Running).
+    // Daemons (always-running) get a steady icon + "active" label;
+    // bounded tasks get a spinner + elapsed time.
     for node in graph.nodes_by(|n| {
         matches!(
             n,
@@ -189,18 +191,31 @@ pub(super) fn render_running_tasks(
         if let Node::BackgroundTask {
             description,
             created_at,
+            kind,
             ..
         } = node
         {
-            let dur = format_duration(&elapsed(now, *created_at));
-            let name = truncate(description, width.saturating_sub(4 + dur.len()));
-            let pad = width.saturating_sub(2 + name.chars().count() + 1 + dur.len());
-            lines.push(Line::from(vec![
-                Span::styled(format!("{spinner} "), Style::default().fg(Color::Cyan)),
-                Span::styled(name, Style::default().fg(Color::Blue)),
-                Span::raw(" ".repeat(pad)),
-                Span::styled(dur, Style::default().fg(Color::DarkGray)),
-            ]));
+            if kind.is_daemon() {
+                let label = "active";
+                let name = truncate(description, width.saturating_sub(4 + label.len()));
+                let pad = width.saturating_sub(2 + name.chars().count() + 1 + label.len());
+                lines.push(Line::from(vec![
+                    Span::styled("● ", Style::default().fg(Color::Blue)),
+                    Span::styled(name, Style::default().fg(Color::Blue)),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(label, Style::default().fg(Color::Blue)),
+                ]));
+            } else {
+                let dur = format_duration(&elapsed(now, *created_at));
+                let name = truncate(description, width.saturating_sub(4 + dur.len()));
+                let pad = width.saturating_sub(2 + name.chars().count() + 1 + dur.len());
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{spinner} "), Style::default().fg(Color::Cyan)),
+                    Span::styled(name, Style::default().fg(Color::Blue)),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(dur, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
         }
     }
 

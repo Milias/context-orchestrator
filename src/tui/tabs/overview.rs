@@ -220,18 +220,30 @@ fn collect_background_tasks(
             description,
             created_at,
             updated_at,
+            kind,
             ..
         } = node
         {
-            let (icon, icon_color) = match status {
-                TaskStatus::Running => ("\u{27f3}", Color::Cyan),
-                TaskStatus::Completed => ("\u{2713}", Color::Green),
-                TaskStatus::Failed => ("\u{2717}", Color::Red),
-                _ => ("\u{25cb}", Color::DarkGray),
+            // Daemons that are still running get a steady icon + "active" label
+            // instead of an elapsed timer (the timer would count forever).
+            let is_running_daemon = kind.is_daemon() && *status == TaskStatus::Running;
+            let (icon, icon_color) = if is_running_daemon {
+                ("●", Color::Blue)
+            } else {
+                match status {
+                    TaskStatus::Running => ("\u{27f3}", Color::Cyan),
+                    TaskStatus::Completed => ("\u{2713}", Color::Green),
+                    TaskStatus::Failed => ("\u{2717}", Color::Red),
+                    _ => ("\u{25cb}", Color::DarkGray),
+                }
             };
-            let duration = match status {
-                TaskStatus::Running => format_duration(&elapsed(now, *created_at)),
-                _ => format_duration(&finished(*updated_at, *created_at)),
+            let duration = if is_running_daemon {
+                "active".to_string()
+            } else {
+                match status {
+                    TaskStatus::Running => format_duration(&elapsed(now, *created_at)),
+                    _ => format_duration(&finished(*updated_at, *created_at)),
+                }
             };
             events.push(EventRow {
                 timestamp: *created_at,
