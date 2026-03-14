@@ -3,6 +3,7 @@ mod context;
 mod event_dispatch;
 mod plan;
 mod qa;
+mod review;
 mod task_handler;
 mod think_splitter;
 

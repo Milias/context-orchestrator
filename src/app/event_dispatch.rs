@@ -5,8 +5,8 @@
 //! updates.
 
 use crate::graph::event::GraphEvent;
-use crate::graph::node::{CompletionConfidence, QuestionDestination, QuestionStatus};
-use crate::graph::{EdgeKind, Node, Role};
+use crate::graph::node::{QuestionDestination, QuestionStatus};
+use crate::graph::{Node, Role};
 use crate::llm::ChatMessage;
 use crate::storage::{TokenDirection, TokenEvent};
 use crate::tasks::{AgentPhase, TaskMessage};
@@ -66,6 +66,13 @@ impl App {
             }
             GraphEvent::BackgroundTaskChanged { node_id, status } => {
                 tracing::trace!("BackgroundTask {node_id} → {status:?}");
+            }
+            GraphEvent::QuestionAnswered {
+                question_id,
+                answer_id,
+            } => {
+                tracing::debug!("Question {question_id} answered by {answer_id}");
+                self.handle_review_answer(*question_id);
             }
             GraphEvent::CompletionProposed {
                 node_id,
@@ -130,34 +137,7 @@ impl App {
         }
     }
 
-    /// Handle a task agent proposing completion. Creates a review `Question` for
-    /// the user to accept or reject. The question is linked to the work item via
-    /// an `About` edge and routed through the standard `QuestionAdded` pipeline.
-    fn handle_completion_proposed(&mut self, work_item_id: Uuid, confidence: CompletionConfidence) {
-        let title = {
-            let g = self.graph.read();
-            g.node(work_item_id)
-                .map_or_else(|| "(unknown task)".to_string(), |n| n.content().to_string())
-        };
-        let question_content =
-            format!("Task '{title}' completed with {confidence:?} confidence. Accept?");
-        let question_id = Uuid::new_v4();
-        let question_node = Node::Question {
-            id: question_id,
-            content: question_content,
-            destination: QuestionDestination::User,
-            status: QuestionStatus::Pending,
-            requires_approval: true,
-            created_at: Utc::now(),
-        };
-        let mut g = self.graph.write();
-        g.add_node(question_node);
-        let _ = g.add_edge(question_id, work_item_id, EdgeKind::About);
-        g.emit(GraphEvent::QuestionAdded {
-            node_id: question_id,
-            destination: QuestionDestination::User,
-        });
-    }
+    // Completion review handlers extracted to `src/app/review.rs`.
 
     /// React to a new user message: dispatch `/command` triggers and spawn
     /// an ephemeral conversational agent.
