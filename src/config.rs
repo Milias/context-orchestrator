@@ -48,17 +48,28 @@ pub struct AppConfig {
     /// Maximum number of concurrent ephemeral agents.
     #[serde(default = "default_max_concurrent_agents")]
     pub max_concurrent_agents: usize,
-    /// Context selection mode: "heuristic" (default, zero API cost) or
-    /// "llm_guided" (adds a meta-LLM call to refine candidate selection).
-    #[serde(default = "default_context_selection")]
-    pub context_selection: String,
+    /// Context selection mode: deterministic scoring only, or with LLM refinement.
+    #[serde(default)]
+    pub context_selection: ContextSelectionMode,
     /// Model for the LLM refinement layer in context selection.
     /// Defaults to the main model. Can use a cheaper model (e.g., Haiku).
     pub context_selector_model: Option<String>,
 }
 
-fn default_context_selection() -> String {
-    "heuristic".to_string()
+/// How context candidates are selected for agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextSelectionMode {
+    /// Deterministic edge-weighted scoring only. Zero API cost.
+    Heuristic,
+    /// Deterministic scoring + LLM refinement call to re-rank candidates.
+    LlmGuided,
+}
+
+impl Default for ContextSelectionMode {
+    fn default() -> Self {
+        Self::Heuristic
+    }
 }
 
 impl AppConfig {

@@ -14,6 +14,7 @@ pub(crate) mod error_context;
 pub mod policies;
 pub mod sanitize;
 pub mod scoring;
+pub mod selector;
 
 use crate::graph::ConversationGraph;
 use crate::llm::{ChatMessage, LlmProvider, ToolDefinition};
