@@ -26,7 +26,6 @@ impl TopTab {
             TopTab::Overview => "Overview",
         }
     }
-
 }
 
 /// Which half of the screen owns keyboard focus.

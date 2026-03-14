@@ -13,7 +13,6 @@ use crate::graph::{ConversationGraph, Node, Role};
 use crate::llm::LlmProvider;
 use crate::persistence::{self, ConversationMetadata};
 use crate::storage::TokenStore;
-use crate::tasks::AgentPhase;
 use crate::tasks::{self, TaskMessage};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
@@ -252,72 +251,24 @@ impl App {
         }
     }
 
-    /// Send a message: add user node to graph, spawn or wake agent loop.
-    ///
-    /// If a continuous agent is already running (idle or active), the `MessageAdded`
-    /// event from `add_message()` wakes it. If no agent exists, spawn one.
-    /// TUI feedback flows through the `EventBus`.
+    /// Add a user message to the graph. The emitted `MessageAdded` event
+    /// triggers downstream reactions (triggers, agent spawn, scroll) via
+    /// the event subscribers in `event_dispatch` and `tui::event_handler`.
     fn handle_send_message(&mut self, text: String) -> anyhow::Result<()> {
-        let trigger_text = text.clone();
-        let user_msg_id = {
-            let mut g = self.graph.write();
-            let parent_id = g.active_leaf()?;
-            let user_node = Node::Message {
-                id: Uuid::new_v4(),
-                role: Role::User,
-                content: text,
-                created_at: Utc::now(),
-                model: None,
-                input_tokens: None,
-                output_tokens: None,
-                stop_reason: None,
-            };
-            g.add_message(parent_id, user_node)?
+        let mut g = self.graph.write();
+        let parent_id = g.active_leaf()?;
+        let user_node = Node::Message {
+            id: Uuid::new_v4(),
+            role: Role::User,
+            content: text,
+            created_at: Utc::now(),
+            model: None,
+            input_tokens: None,
+            output_tokens: None,
+            stop_reason: None,
         };
-
-        self.dispatch_user_triggers(&trigger_text, user_msg_id);
-
-        // UI-only state: scroll to follow the response.
-        self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
-        self.tui_state.scroll_offset = u16::MAX;
-
-        // Spawn agent only if none is running. Existing agents wake from
-        // the `MessageAdded` event emitted by `add_message()` above.
-        if self.agents.primary_agent_id.is_none() {
-            let agent_id = Uuid::new_v4();
-            let (tool_rx, cancel_token) = self.agents.register(agent_id);
-            self.agents.primary_agent_id = Some(agent_id);
-
-            // Emit an initial phase event for immediate TUI feedback.
-            self.graph.read().emit(GraphEvent::AgentPhaseChanged {
-                agent_id,
-                phase: AgentPhase::CountingTokens,
-            });
-
-            let loop_config = agent::AgentLoopConfig {
-                graph: Arc::clone(&self.graph),
-                provider: Arc::clone(&self.provider),
-                model: self.config.anthropic_model.clone(),
-                max_tokens: self.config.max_tokens,
-                max_context_tokens: self.config.max_context_tokens,
-                max_tool_loop_iterations: self.config.max_tool_loop_iterations,
-                tools: crate::tool_executor::registered_tool_definitions(),
-                agent_id,
-            };
-
-            agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
-        }
-
+        g.add_message(parent_id, user_node)?;
         Ok(())
-    }
-
-    /// Dispatch user triggers through the same pipeline as LLM tool calls.
-    fn dispatch_user_triggers(&mut self, text: &str, user_msg_id: Uuid) {
-        for trigger in crate::tools::parse_triggers(text) {
-            let args = crate::tools::parse_user_trigger_args(&trigger.tool_name, &trigger.args);
-            let tool_call_id = Uuid::new_v4();
-            self.handle_tool_call_dispatched(tool_call_id, user_msg_id, args, None);
-        }
     }
 
     /// Seed the status-bar token counters from the analytics DB.

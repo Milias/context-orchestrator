@@ -9,7 +9,7 @@ use crate::graph::node::{QuestionDestination, QuestionStatus};
 use crate::graph::{Node, Role};
 use crate::llm::ChatMessage;
 use crate::storage::{TokenDirection, TokenEvent};
-use crate::tasks::TaskMessage;
+use crate::tasks::{AgentPhase, TaskMessage};
 use crate::tui;
 
 use std::sync::Arc;
@@ -44,6 +44,9 @@ impl App {
             }
             GraphEvent::MessageAdded { node_id, role } => {
                 tracing::trace!("Message {node_id} ({role:?})");
+                if *role == Role::User {
+                    self.on_user_message(*node_id);
+                }
                 self.spawn_token_count(*node_id);
             }
             GraphEvent::ToolCallCompleted { node_id, is_error } => {
@@ -117,6 +120,57 @@ impl App {
             }
             QuestionDestination::Auto => unreachable!("resolved above"),
         }
+    }
+
+    /// React to a new user message: dispatch `/command` triggers and spawn
+    /// the primary agent if none is running. Existing agents wake from the
+    /// `MessageAdded` event directly (handled in the agent loop).
+    fn on_user_message(&mut self, node_id: Uuid) {
+        let content = {
+            let g = self.graph.read();
+            g.node(node_id).map_or("", Node::content).to_string()
+        };
+        self.dispatch_user_triggers(&content, node_id);
+        self.spawn_primary_agent();
+    }
+
+    /// Parse `/command` triggers from message text and dispatch each through
+    /// the tool-call pipeline.
+    fn dispatch_user_triggers(&mut self, text: &str, user_msg_id: Uuid) {
+        for trigger in crate::tools::parse_triggers(text) {
+            let args = crate::tools::parse_user_trigger_args(&trigger.tool_name, &trigger.args);
+            let tool_call_id = Uuid::new_v4();
+            self.handle_tool_call_dispatched(tool_call_id, user_msg_id, args, None);
+        }
+    }
+
+    /// Register and spawn the primary agent if none is currently active.
+    fn spawn_primary_agent(&mut self) {
+        if self.agents.primary_agent_id.is_some() {
+            return;
+        }
+        let agent_id = Uuid::new_v4();
+        let (tool_rx, cancel_token) = self.agents.register(agent_id);
+        self.agents.primary_agent_id = Some(agent_id);
+
+        // Emit an initial phase event for immediate TUI feedback.
+        self.graph.read().emit(GraphEvent::AgentPhaseChanged {
+            agent_id,
+            phase: AgentPhase::CountingTokens,
+        });
+
+        let loop_config = super::agent::AgentLoopConfig {
+            graph: Arc::clone(&self.graph),
+            provider: Arc::clone(&self.provider),
+            model: self.config.anthropic_model.clone(),
+            max_tokens: self.config.max_tokens,
+            max_context_tokens: self.config.max_context_tokens,
+            max_tool_loop_iterations: self.config.max_tool_loop_iterations,
+            tools: crate::tool_executor::registered_tool_definitions(),
+            agent_id,
+        };
+
+        super::agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
     }
 
     /// Spawn a background task to count tokens for a message node.

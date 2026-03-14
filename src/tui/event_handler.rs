@@ -6,7 +6,7 @@
 
 use crate::graph::event::GraphEvent;
 use crate::graph::node::QuestionStatus;
-use crate::graph::StopReason;
+use crate::graph::{Role, StopReason};
 use crate::tasks::AgentPhase;
 
 use super::{AgentDisplayState, AgentVisualPhase, ScrollMode, TuiState};
@@ -71,6 +71,12 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent, is_primary: impl Fn
                 state.agent_display = None;
                 state.status_message = None;
             }
+        }
+
+        // ── User message ────────────────────────────────────────
+        GraphEvent::MessageAdded { role, .. } if *role == Role::User => {
+            state.scroll_mode = ScrollMode::Auto;
+            state.scroll_offset = u16::MAX;
         }
 
         // ── Question lifecycle ───────────────────────────────────

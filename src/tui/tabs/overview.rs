@@ -15,12 +15,7 @@ use super::{agents, work};
 const WORK_TREE_MAX_LINES: u16 = 8;
 
 /// Render the Overview tab: agent card + running tasks + work tree + bottom split.
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &mut TuiState,
-) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let running_h = agents::running_tasks_height(graph);
     let work_h = work_tree_height(graph);
 
