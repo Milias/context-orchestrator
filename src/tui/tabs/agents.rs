@@ -1,14 +1,11 @@
 //! Agent widget library: reusable rendering functions for agent status.
 //!
-//! Provides building blocks for the overview tab: agent card, running tasks,
-//! and recent completions. No top-level render function; the overview tab
-//! composes these widgets directly.
+//! Provides building blocks for the overview tab: agent card and running tasks.
+//! No top-level render function; the overview tab composes these widgets directly.
 
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{BackgroundTaskKind, ConversationGraph, Node, TaskStatus};
-use crate::tui::widgets::tool_status::{
-    elapsed, finished, format_duration, tool_call_status_icon, truncate,
-};
+use crate::tui::widgets::tool_status::{elapsed, format_duration, tool_call_status_icon, truncate};
 use crate::tui::{TuiState, SPINNER_FRAMES};
 
 use chrono::Utc;
@@ -215,89 +212,5 @@ pub(super) fn render_running_tasks(
 
     let max_rows = inner.height as usize;
     lines.truncate(max_rows);
-    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
-}
-
-/// Render a list of recent tool call completions from the graph.
-pub(super) fn render_recent_completions(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &mut TuiState,
-) {
-    let block = Block::default().title("Recent").borders(Borders::ALL);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 || inner.width < 8 {
-        return;
-    }
-
-    let now = Utc::now();
-    let width = inner.width as usize;
-    let max_items = inner.height as usize;
-
-    // Collect recent tool calls (completed/failed), sorted newest first.
-    let mut tool_calls: Vec<&Node> = graph.nodes_by(|n| {
-        matches!(
-            n,
-            Node::ToolCall {
-                status: ToolCallStatus::Completed | ToolCallStatus::Failed,
-                ..
-            }
-        )
-    });
-    tool_calls.sort_by_key(|n| std::cmp::Reverse(n.created_at()));
-
-    // Publish total and clamp scroll.
-    tui_state.agents_total = tool_calls.len();
-    let max_offset = tool_calls.len().saturating_sub(max_items);
-    tui_state.agents_scroll = tui_state.agents_scroll.min(max_offset);
-
-    // Apply scroll window.
-    let tool_calls: Vec<_> = tool_calls
-        .into_iter()
-        .skip(tui_state.agents_scroll)
-        .take(max_items)
-        .collect();
-
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    for node in tool_calls {
-        if let Node::ToolCall {
-            status,
-            arguments,
-            created_at,
-            completed_at,
-            ..
-        } = node
-        {
-            let (icon, color) = tool_call_status_icon(status);
-            let duration = match completed_at {
-                Some(end) => finished(*end, *created_at),
-                None => elapsed(now, *created_at),
-            };
-            let dur_str = format_duration(&duration);
-            let name = arguments.display_summary();
-            let fixed = 2 + 1 + dur_str.len(); // icon + space + padding + duration
-            let name_budget = width.saturating_sub(fixed);
-            let name = truncate(&name, name_budget);
-            let padding = name_budget.saturating_sub(name.chars().count());
-
-            lines.push(Line::from(vec![
-                Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(name, Style::default().fg(Color::White)),
-                Span::raw(" ".repeat(padding)),
-                Span::styled(dur_str, Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-    }
-
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "(no recent activity)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
