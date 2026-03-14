@@ -200,12 +200,19 @@ pub(super) fn render_running_tasks(
                 tool_call_status_icon(status)
             };
             let dur = format_duration(&elapsed(now, *created_at));
-            let summary = arguments.display_summary();
-            let name = truncate(&summary, width.saturating_sub(4 + dur.len()));
-            let pad = width.saturating_sub(2 + name.chars().count() + 1 + dur.len());
+            let (tool_name, tool_args) = arguments.display_parts();
+            let budget = width.saturating_sub(4 + dur.len());
+            let full = format!("{tool_name} {tool_args}");
+            let truncated = truncate(&full, budget);
+            // Color: tool name in Magenta+bold, args in White.
+            let name_len = tool_name.len().min(truncated.chars().count());
+            let pad = budget.saturating_sub(truncated.chars().count());
+            let name_part: String = truncated.chars().take(name_len).collect();
+            let args_part: String = truncated.chars().skip(name_len).collect();
             lines.push(Line::from(vec![
                 Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(name, Style::default().fg(Color::Magenta)),
+                Span::styled(name_part, Style::default().fg(Color::Magenta).bold()),
+                Span::styled(args_part, Style::default().fg(Color::White)),
                 Span::raw(" ".repeat(pad)),
                 Span::styled(dur, Style::default().fg(Color::DarkGray)),
             ]));
@@ -271,11 +278,18 @@ pub(super) fn render_recent_completions(
                 None => elapsed(now, *created_at),
             });
             let fixed = 2 + 1 + dur.len();
-            let name = truncate(&arguments.display_summary(), w.saturating_sub(fixed));
-            let pad = w.saturating_sub(fixed + name.chars().count());
+            let (tool_name, tool_args) = arguments.display_parts();
+            let budget = w.saturating_sub(fixed);
+            let full = format!("{tool_name} {tool_args}");
+            let trunc = truncate(&full, budget);
+            let nl = tool_name.len().min(trunc.chars().count());
+            let np: String = trunc.chars().take(nl).collect();
+            let ap: String = trunc.chars().skip(nl).collect();
+            let pad = budget.saturating_sub(trunc.chars().count());
             Some(Line::from(vec![
                 Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(name, Style::default().fg(Color::Magenta).bold()),
+                Span::styled(np, Style::default().fg(Color::Magenta).bold()),
+                Span::styled(ap, Style::default().fg(Color::White)),
                 Span::raw(" ".repeat(pad)),
                 Span::styled(dur, Style::default().fg(Color::DarkGray)),
             ]))

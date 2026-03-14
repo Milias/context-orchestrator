@@ -80,16 +80,18 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
 struct EventRow {
     /// Timestamp used for sorting (newest first).
     timestamp: DateTime<Utc>,
-    /// Short category label (e.g. "`ToolCall`", "Message", "Task").
-    kind: &'static str,
     /// Status icon character.
     icon: &'static str,
     /// Color for the icon.
     icon_color: Color,
-    /// Human-readable name or summary.
+    /// Primary label (tool name, role, task kind).
     name: String,
     /// Color for the name span (varies by event type).
     name_color: Color,
+    /// Secondary label (arguments, message preview, description).
+    args: String,
+    /// Color for the args span.
+    args_color: Color,
     /// Formatted duration string (empty for events without duration).
     duration: String,
 }
@@ -165,13 +167,16 @@ fn collect_tool_calls(graph: &ConversationGraph, now: DateTime<Utc>, events: &mu
                 (_, Some(end)) => format_duration(&finished(*end, *created_at)),
                 (_, None) => format_duration(&finished(now, *created_at)),
             };
+            let (tool_name, tool_args) = arguments.display_parts();
             events.push(EventRow {
                 timestamp: *created_at,
-                kind: "ToolCall",
+
                 icon,
                 icon_color,
-                name: arguments.display_summary(),
+                name: tool_name.to_string(),
                 name_color: Color::Magenta,
+                args: tool_args,
+                args_color: Color::White,
                 duration,
             });
         }
@@ -193,14 +198,16 @@ fn collect_messages(graph: &ConversationGraph, events: &mut Vec<EventRow>) {
                 Role::Assistant => ("A", Color::Green, Color::Green),
                 Role::System => ("S", Color::DarkGray, Color::DarkGray),
             };
-            let preview = content.lines().next().unwrap_or("(empty)");
+            let preview = content.lines().next().unwrap_or("(empty)").to_string();
             events.push(EventRow {
                 timestamp: *created_at,
-                kind: "Message",
+
                 icon,
                 icon_color,
-                name: format!("[{role:?}] {preview}"),
+                name: format!("[{role:?}]"),
                 name_color,
+                args: preview,
+                args_color: Color::White,
                 duration: String::new(),
             });
         }
@@ -234,10 +241,12 @@ fn collect_background_tasks(
             };
             events.push(EventRow {
                 timestamp: *created_at,
-                kind: "Task",
+
                 icon,
                 icon_color,
                 name: description.clone(),
+                args: String::new(),
+                args_color: Color::DarkGray,
                 name_color: Color::Blue,
                 duration,
             });
@@ -246,17 +255,14 @@ fn collect_background_tasks(
 }
 
 /// Render a single event row as a ratatui `Line`.
+/// Name and args are separate spans with distinct colors.
 fn render_event_row(event: &EventRow, width: usize) -> Line<'static> {
     let time = event.timestamp.format("%H:%M:%S").to_string();
     let dur = &event.duration;
 
-    // Layout: "HH:MM:SS KIND  ICON NAME          DURATION"
-    let fixed = time.len() + 1 + event.kind.len() + 2 + 2 + dur.len() + 1;
-    let name_budget = width.saturating_sub(fixed);
-    let name = truncate(&event.name, name_budget);
-    let padding = name_budget.saturating_sub(name.chars().count());
-
-    let dim = Style::default().fg(Color::DarkGray);
+    // Fixed-width: "HH:MM:SS ICON " + duration.
+    let fixed = time.len() + 1 + 2 + dur.len() + 1;
+    let content_budget = width.saturating_sub(fixed);
 
     let name_style = if event.name_color == Color::Magenta {
         Style::default().fg(Color::Magenta).bold()
@@ -264,17 +270,30 @@ fn render_event_row(event: &EventRow, width: usize) -> Line<'static> {
         Style::default().fg(event.name_color)
     };
 
+    // Split budget: name gets its natural width, args gets the rest.
+    let name = &event.name;
+    let sep = if event.args.is_empty() { "" } else { " " };
+    let args_budget = content_budget.saturating_sub(name.chars().count() + sep.len());
+    let args = truncate(&event.args, args_budget);
+    let padding = content_budget
+        .saturating_sub(name.chars().count() + sep.len() + args.chars().count());
+
+    let dim = Style::default().fg(Color::DarkGray);
+
     let mut spans = vec![
         Span::styled(time, dim),
         Span::raw(" "),
-        Span::styled(format!("{:<8}", event.kind), dim),
         Span::styled(
             format!("{} ", event.icon),
             Style::default().fg(event.icon_color),
         ),
-        Span::styled(name, name_style),
-        Span::raw(" ".repeat(padding)),
+        Span::styled(name.clone(), name_style),
     ];
+    if !event.args.is_empty() {
+        spans.push(Span::styled(sep, dim));
+        spans.push(Span::styled(args, Style::default().fg(event.args_color)));
+    }
+    spans.push(Span::raw(" ".repeat(padding)));
     if !dur.is_empty() {
         let dur_color = if event.icon_color == Color::Yellow {
             Color::Yellow

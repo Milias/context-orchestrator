@@ -133,15 +133,17 @@ pub fn build_tool_lines(
         let size_str = result
             .as_ref()
             .map(|r| format!("→ {}", format_result_size(r.char_len)));
-        lines.push(format_tool_line(
+        let (tool_name, tool_args) = arguments.display_parts();
+        lines.push(format_tool_line(&ToolLineParams {
             icon,
             icon_color,
-            &arguments.display_summary(),
-            size_str.as_deref().unwrap_or(""),
-            &duration,
+            tool_name,
+            tool_args: &tool_args,
+            size_str: size_str.as_deref().unwrap_or(""),
+            duration: &duration,
             is_active,
             width,
-        ));
+        }));
 
         if expanded {
             if let Some(ref info) = result {
@@ -226,39 +228,43 @@ fn append_result_content(lines: &mut Vec<Line<'static>>, text: &str, is_error: b
     )));
 }
 
-fn format_tool_line(
-    icon: &str,
+/// Parameters for rendering a single tool status line.
+struct ToolLineParams<'a> {
+    icon: &'a str,
     icon_color: Color,
-    name: &str,
-    size_str: &str,
-    duration: &TaskDuration,
+    tool_name: &'a str,
+    tool_args: &'a str,
+    size_str: &'a str,
+    duration: &'a TaskDuration,
     is_active: bool,
     width: usize,
-) -> Line<'static> {
-    let dur = format_duration(duration);
-    let dur_color = if is_active {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
-    let size_width = if size_str.is_empty() {
-        0
-    } else {
-        size_str.len() + 1
-    };
-    let fixed = 2 + 1 + size_width + dur.len();
-    let name_budget = width.saturating_sub(fixed);
-    let name = truncate(name, name_budget);
-    let padding = name_budget.saturating_sub(visible_width(&name));
+}
+
+/// Render a tool status line: icon + name (Magenta) + args (White) + size + duration.
+fn format_tool_line(p: &ToolLineParams<'_>) -> Line<'static> {
+    let dur = format_duration(p.duration);
+    let dur_color = if p.is_active { Color::Yellow } else { Color::DarkGray };
+    let size_w = if p.size_str.is_empty() { 0 } else { p.size_str.len() + 1 };
+    let fixed = 2 + 1 + size_w + dur.len();
+    let budget = p.width.saturating_sub(fixed);
+    let sep = if p.tool_args.is_empty() { "" } else { " " };
+    let args_budget = budget.saturating_sub(p.tool_name.len() + sep.len());
+    let args = truncate(p.tool_args, args_budget);
+    let used = p.tool_name.len() + sep.len() + visible_width(&args);
+    let padding = budget.saturating_sub(used);
 
     let mut spans = vec![
-        Span::styled(format!("{icon} "), Style::default().fg(icon_color)),
-        Span::styled(name, Style::default().fg(Color::Magenta).bold()),
-        Span::raw(" ".repeat(padding)),
+        Span::styled(format!("{} ", p.icon), Style::default().fg(p.icon_color)),
+        Span::styled(p.tool_name.to_string(), Style::default().fg(Color::Magenta).bold()),
     ];
-    if !size_str.is_empty() {
+    if !p.tool_args.is_empty() {
+        spans.push(Span::styled(sep, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(args, Style::default().fg(Color::White)));
+    }
+    spans.push(Span::raw(" ".repeat(padding)));
+    if !p.size_str.is_empty() {
         spans.push(Span::styled(
-            format!("{size_str} "),
+            format!("{} ", p.size_str),
             Style::default().fg(Color::DarkGray),
         ));
     }

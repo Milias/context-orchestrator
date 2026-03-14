@@ -153,10 +153,7 @@ pub(super) fn render_item(
             "  (depends on: ",
             Style::default().fg(Color::DarkGray),
         ));
-        spans.push(Span::styled(
-            dep_names,
-            Style::default().fg(Color::Magenta),
-        ));
+        spans.push(Span::styled(dep_names, Style::default().fg(Color::Magenta)));
         spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
     }
 

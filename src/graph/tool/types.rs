@@ -201,6 +201,43 @@ impl ToolCallArguments {
         }
     }
 
+    /// Split summary into `(tool_name, arguments)` for colorized rendering.
+    /// E.g. `("read_file", "src/main.rs")`.
+    pub fn display_parts(&self) -> (&str, String) {
+        let name = self.tool_name();
+        let args = match self {
+            Self::Plan { title, .. } => title.clone(),
+            Self::AddTask {
+                title, parent_id, ..
+            } => format!("{title} (under {parent_id})"),
+            Self::UpdateWorkItem { id, status, .. } => match status {
+                Some(s) => format!("{id} → {s:?}"),
+                None => id.to_string(),
+            },
+            Self::AddDependency { from_id, to_id } => format!("{from_id} → {to_id}"),
+            Self::ReadFile { path }
+            | Self::WriteFile { path, .. }
+            | Self::ListDirectory { path, .. } => path.clone(),
+            Self::SearchFiles { pattern, path } => match path {
+                Some(p) => format!("{pattern} in {p}"),
+                None => pattern.clone(),
+            },
+            Self::WebSearch { query } => query.clone(),
+            Self::Set { key, value } => format!("{key}={value}"),
+            Self::Ask {
+                question,
+                destination,
+                ..
+            } => format!("({destination:?}): {question}"),
+            Self::Answer { question_id, .. } => question_id.to_string(),
+            Self::Unknown { raw_json, .. } => {
+                let t: String = raw_json.chars().take(80).collect();
+                if raw_json.len() > 80 { format!("{t}...") } else { t }
+            }
+        };
+        (name, args)
+    }
+
     /// One-line summary for display in the conversation view,
     /// e.g. `"read_file: src/main.rs"`.
     pub fn display_summary(&self) -> String {
