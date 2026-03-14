@@ -19,29 +19,39 @@ use super::{agents, work};
 /// Maximum number of work tree lines shown in the overview.
 const WORK_TREE_MAX_LINES: u16 = 8;
 
-/// Render the Overview tab: agent card + running tasks + work tree + bottom split.
+/// Render the Overview tab: stats, agents+running (horizontal), work tree, activity.
 pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
+    let agent_h = agents::agent_card_height(tui_state);
     let running_h = agents::running_tasks_height(graph);
+    let row2_h = agent_h.max(running_h);
     let work_h = work_tree_height(graph);
 
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(agents::agent_card_height(tui_state)),
-            Constraint::Length(running_h),
+            Constraint::Length(row2_h),
             Constraint::Length(work_h),
             Constraint::Min(3),
         ])
         .split(area);
 
-    agents::render_agent_card(frame, vertical[0], tui_state);
-    agents::render_running_tasks(frame, vertical[1], graph, tui_state);
-    render_work_section(frame, vertical[2], graph, tui_state);
+    // Row 1: Agent card (left) + Running tasks (right), side by side.
+    let row1 = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(vertical[0]);
 
+    agents::render_agent_card(frame, row1[0], tui_state);
+    agents::render_running_tasks(frame, row1[1], graph, tui_state);
+
+    // Row 2: Work tree (compact).
+    render_work_section(frame, vertical[1], graph, tui_state);
+
+    // Row 3: Activity stream (left) + Stats (right).
     let bottom = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(vertical[3]);
+        .split(vertical[2]);
 
     render_activity_stream(frame, bottom[0], graph, tui_state);
     crate::tui::widgets::stats_panel::render(frame, bottom[1], graph, tui_state);
