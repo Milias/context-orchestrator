@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::graph::node::{ContextBuildStatus, ContextPolicyKind};
 use crate::graph::{ConversationGraph, EdgeKind, Node};
-use crate::tui::state::GraphSection;
+use crate::tui::state::{ExplorerFocus, GraphSection};
 use crate::tui::tabs::explorer::ExplorerState;
 use crate::tui::tabs::graph::tree_lines::TreePrefix;
 use crate::tui::ui::format_token_count;
@@ -68,7 +68,19 @@ pub fn render(
     graph: &ConversationGraph,
     tui_state: &mut TuiState,
 ) -> Option<Uuid> {
-    let block = Block::default().title("Context").borders(Borders::ALL);
+    let focused = tui_state
+        .explorer
+        .get(&GraphSection::Context)
+        .is_none_or(|e| e.focus == ExplorerFocus::Tree);
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .title("Context")
+        .borders(Borders::ALL)
+        .border_style(border_style);
     let inner = block.inner(tree_area);
     frame.render_widget(block, tree_area);
 

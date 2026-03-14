@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use crate::graph::{ConversationGraph, EdgeDirection};
+use crate::tui::state::ExplorerFocus;
 use crate::tui::tabs::edge_inspector::{DisplayEdge, EdgeInspector};
 use crate::tui::widgets::tool_status::truncate;
 use crate::tui::TuiState;
@@ -36,7 +37,20 @@ pub fn render(
     node_id: Option<Uuid>,
     tui_state: &TuiState,
 ) {
-    let block = Block::default().title("Detail").borders(Borders::ALL);
+    let section = tui_state.nav.active_graph_section;
+    let focused = tui_state
+        .explorer
+        .get(&section)
+        .is_some_and(|e| e.focus == ExplorerFocus::Detail);
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .title("Detail")
+        .borders(Borders::ALL)
+        .border_style(border_style);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

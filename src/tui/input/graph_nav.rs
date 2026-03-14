@@ -52,8 +52,8 @@ pub fn handle_graph_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
 /// - `Up`/`k`: move selection up
 /// - `Down`/`j`: move selection down
 /// - `Space`: toggle collapse/expand on current node
-/// - `Enter`/`l`/`Right`: expand collapsed node or switch focus to detail
-/// - `h`/`Left`: collapse expanded node or move to parent (no-op at root)
+/// - `Enter`: expand collapsed node or switch focus to detail
+/// - `Esc`: collapse expanded node
 fn handle_tree_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSection) -> Action {
     let Some(explorer) = tui_state.explorer.get_mut(&section) else {
         return Action::None;
@@ -70,11 +70,11 @@ fn handle_tree_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSectio
             // Deferred to caller — needs graph access to resolve selected UUID.
             return Action::ToggleCollapse;
         }
-        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+        KeyCode::Enter => {
             // Deferred to caller — needs graph access to resolve selected UUID.
             return Action::ExpandOrFocusDetail;
         }
-        KeyCode::Char('h') | KeyCode::Left => {
+        KeyCode::Esc => {
             // Deferred to caller — needs graph access to resolve selected UUID.
             return Action::CollapseNode;
         }
@@ -93,8 +93,8 @@ fn handle_tree_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSectio
 /// Supports edge navigation and breadcrumb backtracking:
 /// - `Up`/`k`: select previous edge
 /// - `Down`/`j`: select next edge
-/// - `Enter`/`l`/`Right`: follow the selected edge
-/// - `Esc`/`h`/`Left`: return focus to tree (or pop breadcrumb)
+/// - `Enter`: follow the selected edge
+/// - `Esc`: return focus to tree (or pop breadcrumb)
 fn handle_detail_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSection) -> Action {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
@@ -111,10 +111,10 @@ fn handle_detail_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSect
                 *sel = (*sel + 1).min(edge_count - 1);
             }
         }
-        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+        KeyCode::Enter => {
             return Action::FollowEdge;
         }
-        KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
+        KeyCode::Esc => {
             // If there is a breadcrumb trail, pop it. Otherwise return to tree.
             if tui_state.edge_inspector.trail.is_empty() {
                 if let Some(explorer) = tui_state.explorer.get_mut(&section) {

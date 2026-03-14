@@ -15,7 +15,7 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::graph::{tool_types::ToolCallStatus, ConversationGraph, EdgeKind, Node, Role};
-use crate::tui::state::GraphSection;
+use crate::tui::state::{ExplorerFocus, GraphSection};
 use crate::tui::tabs::{explorer::ExplorerState, graph::tree_lines::TreePrefix};
 use crate::tui::widgets::tool_status::{
     elapsed, finished, format_duration, tool_call_status_icon, truncate, TaskDuration,
@@ -56,7 +56,19 @@ pub fn render(
     graph: &ConversationGraph,
     tui_state: &mut TuiState,
 ) -> Option<Uuid> {
-    let block = Block::default().title("Execution").borders(Borders::ALL);
+    let focused = tui_state
+        .explorer
+        .get(&GraphSection::Execution)
+        .is_none_or(|e| e.focus == ExplorerFocus::Tree);
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .title("Execution")
+        .borders(Borders::ALL)
+        .border_style(border_style);
     let inner = block.inner(tree_area);
     frame.render_widget(block, tree_area);
 
