@@ -161,11 +161,22 @@ fn file_read_extension(graph: &ConversationGraph, tool_call_id: uuid::Uuid) -> O
     }
 }
 
-pub fn format_scroll_indicator(offset: u16, max: u16) -> String {
-    match () {
-        () if max == 0 => String::new(),
-        () if offset >= max => " [END] ".to_string(),
-        () => format!(" [{}%] ", (u32::from(offset) * 100) / u32::from(max)),
+/// Format the scroll indicator shown in the conversation panel border.
+///
+/// - `[AUTO]` when autoscroll is active (content follows new messages).
+/// - `[END]` when manually scrolled to the bottom.
+/// - `[42%]` when manually scrolled to a specific position.
+pub fn format_scroll_indicator(offset: u16, max: u16, mode: crate::tui::ScrollMode) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if mode == crate::tui::ScrollMode::Auto {
+        return " [AUTO] ".to_string();
+    }
+    if offset >= max {
+        " [END] ".to_string()
+    } else {
+        format!(" [{}%] ", (u32::from(offset) * 100) / u32::from(max))
     }
 }
 

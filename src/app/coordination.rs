@@ -2,10 +2,13 @@
 //!
 //! All cross-component communication flows through graph events. Effects
 //! only mutate the graph; subscribers here react to those mutations.
+//! Agent/system events also flow through the same bus for TUI updates.
 
 use crate::graph::event::GraphEvent;
 use crate::graph::node::{QuestionDestination, QuestionStatus};
 use crate::graph::Node;
+use crate::tasks::AgentPhase;
+use crate::tui::{AgentDisplayState, AgentVisualPhase};
 
 use uuid::Uuid;
 
@@ -82,6 +85,108 @@ impl App {
             }
             GraphEvent::BackgroundTaskChanged { node_id, status } => {
                 tracing::trace!("BackgroundTask {node_id} → {status:?}");
+            }
+
+            // Agent lifecycle and system events → TUI state.
+            _ => self.handle_tui_event(event),
+        }
+    }
+
+    /// Process agent lifecycle and system events that update TUI state.
+    /// Extracted from `handle_graph_event` to keep each method focused.
+    fn handle_tui_event(&mut self, event: &GraphEvent) {
+        match event {
+            GraphEvent::AgentPhaseChanged { agent_id, phase } => {
+                if !self.agents.is_primary(*agent_id) {
+                    return;
+                }
+                self.tui_state.status_message = Some(phase.to_string());
+                if self.tui_state.agent_display.is_none() {
+                    self.tui_state.agent_display = Some(AgentDisplayState::default());
+                }
+                self.update_visual_phase(phase);
+            }
+            GraphEvent::StreamDelta {
+                agent_id,
+                text,
+                is_thinking,
+            } => {
+                if !self.agents.is_primary(*agent_id) {
+                    return;
+                }
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    d.phase = AgentVisualPhase::Streaming {
+                        text: text.clone(),
+                        is_thinking: *is_thinking,
+                    };
+                }
+                if self.tui_state.scroll_mode == crate::tui::ScrollMode::Auto {
+                    self.tui_state.scroll_offset = u16::MAX;
+                }
+            }
+            GraphEvent::AgentIterationCommitted {
+                agent_id,
+                assistant_id,
+                stop_reason,
+            } => {
+                if !self.agents.is_primary(*agent_id) {
+                    return;
+                }
+                if *stop_reason == Some(crate::graph::StopReason::MaxTokens) {
+                    self.tui_state.error_message =
+                        Some("Response truncated — continuing automatically".to_string());
+                }
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    d.revealed_chars = usize::MAX;
+                    d.iteration_node_ids.push(*assistant_id);
+                    if *stop_reason == Some(crate::graph::StopReason::ToolUse) {
+                        d.phase = AgentVisualPhase::ExecutingTools;
+                    }
+                }
+            }
+            GraphEvent::AgentFinished { agent_id } => {
+                if self.agents.is_primary(*agent_id) {
+                    self.tui_state.agent_display = None;
+                    self.tui_state.status_message = None;
+                }
+            }
+            GraphEvent::ErrorOccurred { message } => {
+                self.tui_state.error_message = Some(message.clone());
+            }
+            GraphEvent::TokenTotalsUpdated { input, output } => {
+                self.tui_state.token_usage.input.target = *input;
+                self.tui_state.token_usage.output.target = *output;
+            }
+            // Graph-mutation events are handled in handle_graph_event; not here.
+            _ => {}
+        }
+    }
+
+    /// Update the TUI visual phase indicator for the primary agent.
+    fn update_visual_phase(&mut self, phase: &AgentPhase) {
+        match phase {
+            AgentPhase::Receiving => {
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    d.phase = AgentVisualPhase::Streaming {
+                        text: String::new(),
+                        is_thinking: false,
+                    };
+                    d.revealed_chars = 0;
+                }
+            }
+            AgentPhase::ExecutingTools { .. } => {
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    d.phase = AgentVisualPhase::ExecutingTools;
+                }
+            }
+            AgentPhase::CountingTokens
+            | AgentPhase::BuildingContext
+            | AgentPhase::Connecting { .. } => {
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    if !matches!(d.phase, AgentVisualPhase::Streaming { .. }) {
+                        d.phase = AgentVisualPhase::Preparing;
+                    }
+                }
             }
         }
     }

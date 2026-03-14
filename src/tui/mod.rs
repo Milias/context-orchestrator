@@ -278,6 +278,10 @@ pub struct TuiState {
     pub active_task_ids: Vec<Uuid>,
     /// Controls whether tool call results are shown inline in the conversation.
     pub tool_display: ToolDisplayMode,
+    /// Maximum scroll offset, computed each frame by the conversation widget.
+    /// Used by `handle_scroll` to clamp immediately (prevents over-scroll
+    /// accumulation when the user scrolls rapidly past the content end).
+    pub max_scroll: u16,
     /// Lifetime token usage displayed in the status bar (animated).
     pub token_usage: TokenUsage,
     /// State for the Work tab tree widget (expand/collapse).
@@ -312,6 +316,7 @@ impl TuiState {
             task_selection: None,
             active_task_ids: Vec::new(),
             tool_display: ToolDisplayMode::Compact,
+            max_scroll: 0,
             token_usage: TokenUsage::default(),
             work_tree: widgets::work_tree::WorkTreeState::default(),
         }

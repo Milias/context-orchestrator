@@ -1,9 +1,9 @@
+use crate::graph::event::GraphEvent;
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
-use crate::graph::{BackgroundTaskKind, EdgeKind, Node, StopReason, TaskStatus};
+use crate::graph::{BackgroundTaskKind, EdgeKind, Node, TaskStatus};
 use crate::storage::{TokenDirection, TokenEvent};
 use crate::tasks::{AgentEvent, AgentPhase, TaskMessage};
 use crate::tool_executor;
-use crate::tui::{AgentDisplayState, AgentVisualPhase};
 
 use chrono::Utc;
 use tokio_util::sync::CancellationToken;
@@ -31,7 +31,7 @@ impl App {
                         let _ = g.add_edge(node_id, root, EdgeKind::Indexes);
                     }
                 }
-                g.emit(crate::graph::event::GraphEvent::GitFilesRefreshed { count });
+                g.emit(GraphEvent::GitFilesRefreshed { count });
             }
             TaskMessage::ToolsDiscovered(tools) => {
                 let mut g = self.graph.write();
@@ -50,7 +50,7 @@ impl App {
                         let _ = g.add_edge(node_id, root, EdgeKind::Provides);
                     }
                 }
-                g.emit(crate::graph::event::GraphEvent::ToolsRefreshed { count });
+                g.emit(GraphEvent::ToolsRefreshed { count });
             }
             TaskMessage::TaskStatusChanged {
                 task_id,
@@ -71,7 +71,7 @@ impl App {
                         updated_at: Utc::now(),
                     });
                 }
-                g.emit(crate::graph::event::GraphEvent::BackgroundTaskChanged {
+                g.emit(GraphEvent::BackgroundTaskChanged {
                     node_id: task_id,
                     status,
                 });
@@ -88,27 +88,30 @@ impl App {
             TaskMessage::Agent { agent_id, event } => {
                 self.handle_agent_event(agent_id, event);
             }
+            // Analytics events flow through the EventBus — no direct TUI mutations.
             TaskMessage::TokenTotalsUpdated(totals) => {
-                self.tui_state.token_usage.input.target = totals.input;
-                self.tui_state.token_usage.output.target = totals.output;
+                self.graph.read().emit(GraphEvent::TokenTotalsUpdated {
+                    input: totals.input,
+                    output: totals.output,
+                });
             }
             TaskMessage::AnalyticsError(msg) => {
-                self.tui_state.error_message = Some(format!("Analytics: {msg}"));
+                self.graph.read().emit(GraphEvent::ErrorOccurred {
+                    message: format!("Analytics: {msg}"),
+                });
             }
         }
     }
 
     fn handle_agent_event(&mut self, agent_id: Uuid, event: AgentEvent) {
-        let is_primary = self.agents.is_primary(agent_id);
         match event {
             AgentEvent::Progress { phase_id, phase } => {
                 self.agents.track_phase(agent_id, phase_id);
                 self.track_phase_node(phase_id, &phase);
-                if is_primary {
-                    self.tui_state.status_message = Some(phase.to_string());
-                    self.ensure_agent_display();
-                    self.update_visual_phase(&phase);
-                }
+                // TUI update flows through EventBus.
+                self.graph
+                    .read()
+                    .emit(GraphEvent::AgentPhaseChanged { agent_id, phase });
             }
             AgentEvent::PhaseCompleted { phase_id } => {
                 self.agents.complete_phase(agent_id, &phase_id);
@@ -124,22 +127,37 @@ impl App {
                 });
             }
             AgentEvent::StreamDelta { text, is_thinking } => {
-                if is_primary {
-                    if let Some(ref mut d) = self.tui_state.agent_display {
-                        d.phase = AgentVisualPhase::Streaming { text, is_thinking };
-                    }
-                    if self.tui_state.scroll_mode == crate::tui::ScrollMode::Auto {
-                        self.tui_state.scroll_offset = u16::MAX;
-                    }
-                }
+                // TUI update flows through EventBus.
+                self.graph.read().emit(GraphEvent::StreamDelta {
+                    agent_id,
+                    text,
+                    is_thinking,
+                });
             }
             AgentEvent::IterationCommitted {
                 assistant_id,
                 stop_reason,
             } => {
-                if is_primary {
-                    self.handle_iteration_committed(assistant_id, stop_reason);
+                // Record output tokens (graph operation, not TUI).
+                if let Some(tokens) = self
+                    .graph
+                    .read()
+                    .node(assistant_id)
+                    .and_then(Node::output_tokens)
+                {
+                    self.spawn_token_record(TokenEvent {
+                        conversation_id: self.metadata.id.clone(),
+                        direction: TokenDirection::Output,
+                        tokens,
+                        model: Some(self.config.anthropic_model.clone()),
+                    });
                 }
+                // TUI update flows through EventBus.
+                self.graph.read().emit(GraphEvent::AgentIterationCommitted {
+                    agent_id,
+                    assistant_id,
+                    stop_reason,
+                });
             }
             AgentEvent::ToolCallDispatched {
                 tool_call_id,
@@ -161,53 +179,24 @@ impl App {
                     self.complete_phase(pid);
                 }
                 self.agents.remove(agent_id);
-                if is_primary {
-                    self.tui_state.agent_display = None;
-                    self.tui_state.status_message = None;
-                }
-                // Release claims held by this agent (identified by ClaimedBy edge target).
+                // Release claims held by this agent.
                 self.graph
                     .write()
                     .edges
-                    .retain(|e| !(e.kind == crate::graph::EdgeKind::ClaimedBy && e.to == agent_id));
+                    .retain(|e| !(e.kind == EdgeKind::ClaimedBy && e.to == agent_id));
                 let _ = self.save();
                 self.check_ready_work();
+                // TUI update flows through EventBus.
+                self.graph
+                    .read()
+                    .emit(GraphEvent::AgentFinished { agent_id });
             }
             AgentEvent::Error(msg) => {
-                // On error, cancel the agent's remaining work.
                 self.agents.cancel_agent(agent_id);
-                if is_primary {
-                    self.tui_state.error_message = Some(msg);
-                }
-            }
-        }
-    }
-
-    /// Update the TUI visual phase indicator for the primary agent.
-    fn update_visual_phase(&mut self, phase: &AgentPhase) {
-        match phase {
-            AgentPhase::Receiving => {
-                if let Some(ref mut d) = self.tui_state.agent_display {
-                    d.phase = AgentVisualPhase::Streaming {
-                        text: String::new(),
-                        is_thinking: false,
-                    };
-                    d.revealed_chars = 0;
-                }
-            }
-            AgentPhase::ExecutingTools { .. } => {
-                if let Some(ref mut d) = self.tui_state.agent_display {
-                    d.phase = AgentVisualPhase::ExecutingTools;
-                }
-            }
-            AgentPhase::CountingTokens
-            | AgentPhase::BuildingContext
-            | AgentPhase::Connecting { .. } => {
-                if let Some(ref mut d) = self.tui_state.agent_display {
-                    if !matches!(d.phase, AgentVisualPhase::Streaming { .. }) {
-                        d.phase = AgentVisualPhase::Preparing;
-                    }
-                }
+                // TUI update flows through EventBus.
+                self.graph
+                    .read()
+                    .emit(GraphEvent::ErrorOccurred { message: msg });
             }
         }
     }
@@ -237,13 +226,6 @@ impl App {
                 let desc = description.clone();
                 let _ = g.update_background_task_status(phase_id, TaskStatus::Completed, desc);
             }
-        }
-    }
-
-    /// Ensure `agent_display` exists (create with Preparing phase if missing).
-    fn ensure_agent_display(&mut self) {
-        if self.tui_state.agent_display.is_none() {
-            self.tui_state.agent_display = Some(AgentDisplayState::default());
         }
     }
 
@@ -329,41 +311,11 @@ impl App {
         drop(g);
     }
 
-    /// Process an assistant iteration committed by the agent loop.
-    fn handle_iteration_committed(&mut self, assistant_id: Uuid, stop_reason: Option<StopReason>) {
-        if stop_reason == Some(StopReason::MaxTokens) {
-            self.tui_state.error_message =
-                Some("Response truncated — continuing automatically".to_string());
-        }
-        if let Some(ref mut d) = self.tui_state.agent_display {
-            // Snap reveal to full before committing — no trailing animation
-            d.revealed_chars = usize::MAX;
-            d.iteration_node_ids.push(assistant_id);
-            if stop_reason == Some(StopReason::ToolUse) {
-                d.phase = AgentVisualPhase::ExecutingTools;
-            }
-        }
-        // Record output tokens from the assistant message the agent just committed.
-        if let Some(tokens) = self
-            .graph
-            .read()
-            .node(assistant_id)
-            .and_then(Node::output_tokens)
-        {
-            self.spawn_token_record(TokenEvent {
-                conversation_id: self.metadata.id.clone(),
-                direction: TokenDirection::Output,
-                tokens,
-                model: Some(self.config.anthropic_model.clone()),
-            });
-        }
-    }
-
     /// Spawn a background task to record a token event and refresh lifetime totals.
     ///
     /// The write + query runs on the `tokio_rusqlite` background thread.
     /// Fresh totals are sent back via [`TaskMessage::TokenTotalsUpdated`],
-    /// which triggers the animated counter update in the status bar.
+    /// which triggers the animated counter update via the `EventBus`.
     fn spawn_token_record(&self, event: TokenEvent) {
         let Some(store) = self.token_store.clone() else {
             return;

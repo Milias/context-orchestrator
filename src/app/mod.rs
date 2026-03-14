@@ -12,10 +12,11 @@ use crate::graph::{ConversationGraph, Node, Role};
 use crate::llm::LlmProvider;
 use crate::persistence::{self, ConversationMetadata};
 use crate::storage::TokenStore;
+use crate::tasks::AgentPhase;
 use crate::tasks::{self, TaskMessage};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
-use crate::tui::{self, AgentDisplayState, AnimatedCounter, TuiState};
+use crate::tui::{self, AnimatedCounter, TuiState};
 
 use chrono::Utc;
 use crossterm::event::{Event, EventStream, KeyEventKind};
@@ -164,6 +165,9 @@ impl App {
                 }
             }
 
+            // Process any graph events queued during this iteration before drawing.
+            self.drain_pending_events();
+
             {
                 let g = self.graph.read();
                 terminal.draw(|frame| ui::draw(frame, &g, &mut self.tui_state))?;
@@ -201,6 +205,10 @@ impl App {
             Action::ScrollUp | Action::ScrollDown | Action::PageUp | Action::PageDown => {
                 self.handle_scroll(&action, page_size);
             }
+            Action::ScrollToBottom => {
+                self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
+                self.tui_state.scroll_offset = u16::MAX;
+            }
             Action::CancelTask(id) => {
                 self.cancel_task(id);
             }
@@ -209,7 +217,8 @@ impl App {
         Ok(())
     }
 
-    /// Apply a scroll action.
+    /// Apply a scroll action, clamping immediately to prevent over-scroll
+    /// accumulation. Re-enables autoscroll when the user scrolls to the bottom.
     fn handle_scroll(&mut self, action: &Action, page_size: u16) {
         self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
         let going_up = matches!(action, Action::ScrollUp | Action::PageUp);
@@ -222,17 +231,26 @@ impl App {
             Action::ScrollUp | Action::ScrollDown => 3,
             _ => page_size,
         };
-        self.tui_state.scroll_offset = if going_up {
+        let new_offset = if going_up {
             self.tui_state.scroll_offset.saturating_sub(delta)
         } else {
-            self.tui_state.scroll_offset.saturating_add(delta)
+            self.tui_state
+                .scroll_offset
+                .saturating_add(delta)
+                .min(self.tui_state.max_scroll)
         };
+        self.tui_state.scroll_offset = new_offset;
+        // Re-enable autoscroll when the user scrolls to the bottom.
+        if new_offset >= self.tui_state.max_scroll && self.tui_state.max_scroll > 0 {
+            self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
+        }
     }
 
     /// Send a message: add user node to graph, spawn agent loop, return immediately.
+    /// TUI feedback (agent display, scroll) flows through the `EventBus` — the
+    /// emitted `AgentPhaseChanged` event will create the display on the next
+    /// `drain_pending_events` pass before the frame is drawn.
     fn handle_send_message(&mut self, text: String) -> anyhow::Result<()> {
-        self.tui_state.error_message = None;
-
         let trigger_text = text.clone();
         let user_msg_id = {
             let mut g = self.graph.write();
@@ -252,14 +270,20 @@ impl App {
 
         self.dispatch_user_triggers(&trigger_text, user_msg_id);
 
-        self.tui_state.agent_display = Some(AgentDisplayState::default());
-        self.tui_state.status_message = Some("Counting tokens...".to_string());
+        // UI-only state: scroll to follow the response.
         self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
         self.tui_state.scroll_offset = u16::MAX;
 
         let agent_id = Uuid::new_v4();
         let (tool_rx, cancel_token) = self.agents.register(agent_id);
         self.agents.primary_agent_id = Some(agent_id);
+
+        // Emit an initial phase event for immediate TUI feedback.
+        // Processed by `drain_pending_events` before the next frame.
+        self.graph.read().emit(GraphEvent::AgentPhaseChanged {
+            agent_id,
+            phase: AgentPhase::CountingTokens,
+        });
 
         let loop_config = agent::AgentLoopConfig {
             graph: Arc::clone(&self.graph),
@@ -301,6 +325,19 @@ impl App {
             current: totals.output,
             target: totals.output,
         };
+    }
+
+    /// Drain all pending graph events before rendering. Events emitted within
+    /// the current `tokio::select!` iteration (e.g., by `handle_task_message`)
+    /// are processed here so TUI state is up-to-date before the frame is drawn.
+    fn drain_pending_events(&mut self) {
+        let Some(mut rx) = self.event_rx.take() else {
+            return;
+        };
+        while let Ok(event) = rx.try_recv() {
+            self.handle_graph_event(&event);
+        }
+        self.event_rx = Some(rx);
     }
 
     pub(super) fn save(&self) -> anyhow::Result<()> {

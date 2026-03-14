@@ -11,6 +11,8 @@ pub enum Action {
     ScrollDown,
     PageUp,
     PageDown,
+    /// Jump to bottom and re-enable autoscroll.
+    ScrollToBottom,
     CancelTask(uuid::Uuid),
 }
 
@@ -171,6 +173,7 @@ fn handle_input_key(key: KeyEvent, tui_state: &mut TuiState, graph: &Conversatio
         }
         KeyCode::PageUp => Action::PageUp,
         KeyCode::PageDown => Action::PageDown,
+        KeyCode::End => Action::ScrollToBottom,
         _ => Action::None,
     };
 
