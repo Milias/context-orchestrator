@@ -73,3 +73,24 @@ fn is_thinking_state() {
     s.push("</think>done");
     assert!(!s.is_thinking());
 }
+
+/// Catches leading `\n` after `</think>` leaking into the visible output,
+/// which renders as a blank line at the start of assistant messages in the TUI.
+#[test]
+fn leading_newline_after_think_block_stripped() {
+    let mut s = ThinkSplitter::new();
+    s.push("<think>reasoning</think>\nSure! Here is the answer.");
+    let (visible, think) = s.finish();
+    assert_eq!(visible, "Sure! Here is the answer.");
+    assert_eq!(think, "reasoning");
+}
+
+/// Catches leading whitespace from the raw API response (no think blocks)
+/// rendering as a blank line in the TUI conversation panel.
+#[test]
+fn leading_whitespace_without_think_block_stripped() {
+    let mut s = ThinkSplitter::new();
+    s.push("\n\nHello world");
+    let (visible, _) = s.finish();
+    assert_eq!(visible, "Hello world");
+}

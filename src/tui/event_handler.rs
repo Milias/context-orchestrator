@@ -79,6 +79,8 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent) {
             tracing::debug!("Question {question_id} routed to user");
             state.pending_question_text = Some(content.clone());
             state.status_message = Some(format!("Question: {content}"));
+            // Auto-focus ChatPanel so the user can immediately type an answer.
+            state.nav.focus = super::state::FocusZone::ChatPanel;
         }
         GraphEvent::QuestionAnswered {
             question_id,

@@ -60,6 +60,8 @@ impl ThinkSplitter {
     }
 
     /// Finalize: flush remaining buffer and return (visible, `think_content`).
+    /// Leading whitespace is trimmed from visible output — it is an API
+    /// formatting artifact (e.g. `\n` after `</think>` blocks), not content.
     pub fn finish(mut self) -> (String, String) {
         if self.in_think {
             // Unclosed think block — treat remaining buffer as think content
@@ -68,7 +70,8 @@ impl ThinkSplitter {
             self.visible.push_str(&self.buffer);
         }
         let think = self.think_blocks.join("\n");
-        (self.visible, think)
+        let visible = self.visible.trim_start().to_string();
+        (visible, think)
     }
 }
 
