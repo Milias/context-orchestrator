@@ -67,6 +67,12 @@ impl App {
             GraphEvent::BackgroundTaskChanged { node_id, status } => {
                 tracing::trace!("BackgroundTask {node_id} → {status:?}");
             }
+            GraphEvent::CompletionProposed {
+                node_id,
+                confidence,
+            } => {
+                tracing::debug!("CompletionProposed {node_id} ({confidence:?})");
+            }
             _ => {}
         }
         // TUI state — every event passes through the TUI handler.

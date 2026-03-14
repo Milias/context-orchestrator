@@ -184,21 +184,6 @@ impl ConversationGraph {
         Ok(id)
     }
 
-    /// Walk forward from `root_id` through the `RespondsTo` chain to find the
-    /// leaf node (the most recent reply). Returns `root_id` if no children exist.
-    /// Uses the `reply_children` forward index for O(depth) traversal.
-    pub fn find_chain_leaf(&self, root_id: Uuid) -> Uuid {
-        let mut current = root_id;
-        while let Some(children) = self.reply_children.get(&current) {
-            if children.is_empty() {
-                break;
-            }
-            // Follow the last child (most recently added reply in the chain).
-            current = *children.last().expect("non-empty checked above");
-        }
-        current
-    }
-
     /// Insert a node without any edges. Does NOT emit events — callers that
     /// create domain-significant nodes (`Question`, `WorkItem`) must emit the
     /// appropriate `GraphEvent` themselves after calling this.

@@ -7,7 +7,6 @@ use crate::graph::{ConversationGraph, EdgeKind};
 
 use super::candidates::Candidate;
 use chrono::Utc;
-use uuid::Uuid;
 
 /// Selection tier based on score. Determines detail level and budget allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -36,9 +35,16 @@ fn edge_weight(kind: EdgeKind) -> f64 {
         EdgeKind::SubtaskOf => 0.8,
         EdgeKind::RelevantTo => 0.7,
         EdgeKind::Asks | EdgeKind::Answers | EdgeKind::About => 0.6,
-        // EdgeKind::Touches (git, from doc 05) will be 0.5 when implemented.
+        EdgeKind::DependsOn
+        | EdgeKind::Tracks
+        | EdgeKind::Indexes
+        | EdgeKind::Provides
+        | EdgeKind::ThinkingOf
+        | EdgeKind::Triggers
+        | EdgeKind::Supersedes
+        | EdgeKind::ClaimedBy
+        | EdgeKind::OccurredDuring => 0.4,
         EdgeKind::SelectedFor | EdgeKind::ConsumedBy => 0.3,
-        _ => 0.3,
     }
 }
 
@@ -69,9 +75,6 @@ pub fn score_candidates(
     anchor_id: Uuid,
     candidates: &[Candidate],
 ) -> Vec<ScoredCandidate> {
-    let candidate_set: std::collections::HashSet<Uuid> =
-        candidates.iter().map(|c| c.node_id).collect();
-
     // BFS from anchor, accumulating best scores.
     let mut best_score: std::collections::HashMap<Uuid, f64> = std::collections::HashMap::new();
     best_score.insert(anchor_id, 1.0);
@@ -109,6 +112,9 @@ pub fn score_candidates(
         .iter()
         .filter_map(|c| {
             let base_score = best_score.get(&c.node_id).copied().unwrap_or(0.0);
+            // Precision loss is acceptable: age in minutes never exceeds ~2.6M
+            // for a 5-year conversation, well within f64 mantissa range.
+            #[allow(clippy::cast_precision_loss)]
             let age_minutes = (now - c.created_at).num_minutes().max(1) as f64;
             let recency_boost = 1.0 / (1.0 + age_minutes.ln());
             let final_score = base_score * recency_boost;

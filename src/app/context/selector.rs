@@ -141,6 +141,16 @@ fn render_summaries(
     (lines.join("\n"), id_map)
 }
 
+/// Typed response from the meta-LLM selection call.
+/// `reasoning` is deserialized but not used — it's included for structured logging
+/// and debugging meta-LLM responses.
+#[derive(serde::Deserialize)]
+struct SelectionResponse {
+    selected: Vec<String>,
+    #[allow(dead_code)] // Deserialized for structured logging, not consumed in code.
+    reasoning: Option<String>,
+}
+
 /// Parse the meta-LLM's selection response.
 fn parse_selection(
     response: &str,
@@ -156,13 +166,6 @@ fn parse_selection(
     };
 
     let json_str = &response[start..=end];
-    /// Typed response from the meta-LLM selection call.
-    #[derive(serde::Deserialize)]
-    struct SelectionResponse {
-        selected: Vec<String>,
-        #[allow(dead_code)]
-        reasoning: Option<String>,
-    }
 
     let Ok(parsed) = serde_json::from_str::<SelectionResponse>(json_str) else {
         tracing::warn!("Meta-LLM response is not valid JSON: {json_str}");

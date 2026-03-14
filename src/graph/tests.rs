@@ -293,10 +293,10 @@ fn test_add_reply_does_not_update_branch() {
     assert_eq!(graph.responds_to.get(&reply_id), Some(&user_id));
 }
 
-/// Bug: `find_chain_leaf` returns the wrong node because the forward index
-/// is not maintained, causing task agents to append to the wrong parent.
+/// Bug: `reply_children_of` forward index not updated after `add_reply`,
+/// causing task agents to not see their own chain children.
 #[test]
-fn test_find_chain_leaf_walks_forward() {
+fn test_reply_children_index_built_on_add_reply() {
     let mut graph = ConversationGraph::new("System prompt");
     let root_id = graph.branch_leaf("main").unwrap();
 
@@ -315,14 +315,14 @@ fn test_find_chain_leaf_walks_forward() {
     let id2 = graph.add_reply(id1, make_msg("msg2")).unwrap();
     let id3 = graph.add_reply(id2, make_msg("msg3")).unwrap();
 
-    assert_eq!(graph.find_chain_leaf(root_id), id3);
-    assert_eq!(graph.find_chain_leaf(id1), id3);
-    assert_eq!(graph.find_chain_leaf(id2), id3);
-    assert_eq!(graph.find_chain_leaf(id3), id3);
+    assert_eq!(graph.reply_children_of(root_id), &[id1]);
+    assert_eq!(graph.reply_children_of(id1), &[id2]);
+    assert_eq!(graph.reply_children_of(id2), &[id3]);
+    assert!(graph.reply_children_of(id3).is_empty());
 }
 
-/// Bug: `reply_children` index not built during deserialization, causing
-/// `find_chain_leaf` to return the root instead of the actual leaf.
+/// Bug: `reply_children` forward index not rebuilt during deserialization,
+/// causing task agents to see empty chains after graph load.
 #[test]
 fn test_reply_children_survives_serialization() {
     let mut graph = ConversationGraph::new("System prompt");
@@ -346,8 +346,8 @@ fn test_reply_children_survives_serialization() {
 
     // Forward index should be rebuilt from edges.
     assert_eq!(
-        restored.find_chain_leaf(root_id),
-        msg_id,
+        restored.reply_children_of(root_id),
+        &[msg_id],
         "reply_children must be rebuilt during deserialization"
     );
 }

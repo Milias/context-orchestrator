@@ -8,13 +8,9 @@
 //! 5. **Render** — serialization to chat messages
 //! 6. **Sanitize** — API constraint enforcement
 
-pub mod budget;
-pub mod candidates;
 pub(crate) mod error_context;
 pub mod policies;
 pub mod sanitize;
-pub mod scoring;
-pub mod selector;
 
 use crate::graph::ConversationGraph;
 use crate::llm::{ChatMessage, LlmProvider, ToolDefinition};
@@ -28,15 +24,6 @@ pub fn extract_messages(
     agent_id: Uuid,
 ) -> policies::ContextBuildResult {
     policy.build_context(graph, agent_id)
-}
-
-/// Legacy extraction for backward compatibility (uses conversational policy).
-/// Synchronous — no API calls. Caller should hold a read lock on the shared graph.
-pub fn extract_messages_conversational(
-    graph: &ConversationGraph,
-    agent_id: Option<Uuid>,
-) -> (Option<String>, Vec<ChatMessage>) {
-    policies::conversational::build_messages(graph, agent_id)
 }
 
 /// Count tokens and truncate messages if needed. Async — calls the LLM provider API.

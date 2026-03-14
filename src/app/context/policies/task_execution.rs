@@ -4,6 +4,8 @@
 //! task statuses, and the agent's own `RespondsTo` chain. Scopes plan context
 //! to the parent plan only (not all plans in the graph).
 
+use std::fmt::Write;
+
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role, WorkItemKind};
 use crate::llm::{ChatContent, ChatMessage, ContentBlock, RawJson};
@@ -19,16 +21,15 @@ pub fn build_context(
 ) -> super::ContextBuildResult {
     let mut system_prompt = String::new();
     let mut messages = Vec::new();
-    let mut selected_node_ids = vec![work_item_id];
 
     // ── Task description ────────────────────────────────────────────
     if let Some(Node::WorkItem {
         title, description, ..
     }) = graph.node(work_item_id)
     {
-        system_prompt.push_str(&format!("# Task: {title}\n"));
+        let _ = writeln!(system_prompt, "# Task: {title}");
         if let Some(desc) = description {
-            system_prompt.push_str(&format!("\n{desc}\n"));
+            let _ = writeln!(system_prompt, "\n{desc}");
         }
     }
 
@@ -56,11 +57,11 @@ pub fn build_context(
     // ── Walk the agent's own RespondsTo chain from the work item ────
     let chain = walk_chain_from_root(graph, work_item_id);
     for node in &chain {
-        selected_node_ids.push(node.id());
-        match node {
-            Node::Message {
-                id, role, content, ..
-            } => match role {
+        if let Node::Message {
+            id, role, content, ..
+        } = node
+        {
+            match role {
                 Role::User => {
                     messages.push(ChatMessage::text(Role::User, content));
                 }
@@ -71,15 +72,13 @@ pub fn build_context(
                     messages.extend(result_msgs);
                 }
                 Role::System => {}
-            },
-            _ => {}
+            }
         }
     }
 
     super::ContextBuildResult {
         system_prompt: Some(system_prompt),
         messages,
-        selected_node_ids,
     }
 }
 
@@ -147,7 +146,7 @@ fn find_parent_plan(graph: &ConversationGraph, mut node_id: Uuid) -> Option<Uuid
 
 /// Walk forward from a root node through the `RespondsTo` chain, collecting
 /// all nodes in chronological order (root first, leaf last).
-fn walk_chain_from_root<'a>(graph: &'a ConversationGraph, root_id: Uuid) -> Vec<&'a Node> {
+fn walk_chain_from_root(graph: &ConversationGraph, root_id: Uuid) -> Vec<&Node> {
     let mut chain = Vec::new();
     let mut current = root_id;
     loop {

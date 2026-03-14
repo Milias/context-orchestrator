@@ -12,7 +12,7 @@ This document surveys the landscape of text-to-speech in Rust as of March 2026, 
 
 **Architecture**: Two-stage pipeline — Flow Language Model (FlowLM) generates latent codes autoregressively, Mimi audio codec decodes latents to waveform.
 
-- **Parameters**: ~100M total (FlowLM ~600M weights, Mimi ~100M weights — note: "100M param model" refers to effective model complexity, not raw weight count)
+- **Parameters**: ~100M total (~70M FlowLM transformer + ~10M MLP sampler + ~20M Mimi codec). The ONNX FP32 total of 475MB at 4 bytes/param ≈ 119M parameters, consistent with the ~100M claim.
 - **Output**: 24kHz mono float32 audio
 - **Frame rate**: 12.5 Hz (each frame = 1,920 audio samples)
 - **Inference**: CPU-only by design (GPU gives zero speedup per Kyutai's blog post). Uses Lagrangian Self Distillation (LSD) decoding with ODE solver.
@@ -44,9 +44,9 @@ This document surveys the landscape of text-to-speech in Rust as of March 2026, 
 - **Parameters**: 82M
 - **Output**: 24kHz mono float32
 - **Inference**: CPU real-time (3-11x real-time factor on modern CPUs; 40-70ms per sentence on GPU)
-- **Tokenization**: espeak-ng (text → IPA phonemes → model tokens). This is a hard dependency — the model was trained on espeak phonemes.
-- **Voice support**: Multiple preset voices (`af_heart`, `af_nicole`, etc.) stored as 256-float style vectors. Voice blending supported (e.g., `af_sky.4 + af_nicole.5`).
-- **Languages**: English primary, multi-language support via espeak-ng
+- **Tokenization**: Primary G2P engine is Misaki (hexgrad/misaki) with gold/silver phoneme dictionaries; espeak-ng is a fallback for out-of-vocabulary words. The model was trained on these phonemes, making some form of espeak-ng a hard dependency.
+- **Voice support**: Multiple preset voices (`af_heart`, `af_nicole`, etc.) stored as 256-float style vectors. 54 voices across 8 languages. Voice blending supported (e.g., `af_sky.4 + af_nicole.5`).
+- **Languages**: 8 languages natively (American English, British English, French, Japanese, Korean, Mandarin, Hindi, Spanish). Note: individual Rust crates may not expose the full multilingual capability (see Section 4).
 - **License**: Apache 2.0 (code + weights)
 - **Format**: Single ONNX file
 
@@ -86,9 +86,11 @@ Plus `tokenizer.json` (~2 KB) and voice `.bin` files (~1 KB each).
 
 ## 2. How Streaming Works in Neural TTS
 
-**Fundamental constraint**: No neural TTS model generates audio character-by-character or word-by-word in real time. The model takes a text input and produces audio for that complete input. This is unlike LLM text generation where tokens stream incrementally.
+There are three levels of TTS streaming, from coarsest to finest:
 
-**The universal streaming strategy is sentence-chunking**:
+### Level 1: Sentence-chunking (application layer, works with any model)
+
+The application splits text into sentences and pipelines synthesis with playback. This is the **universal strategy** that works regardless of model architecture:
 
 1. Split input text into sentences (or short paragraphs)
 2. Feed sentence 1 to the model → receive audio for sentence 1

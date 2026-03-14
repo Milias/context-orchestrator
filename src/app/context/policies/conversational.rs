@@ -9,16 +9,6 @@ use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::llm::{ChatContent, ChatMessage, ContentBlock, RawJson};
 use uuid::Uuid;
 
-/// Build the full message list from the graph. Includes plan and Q/A section injection.
-/// Also collects the IDs of all nodes that contributed to this context.
-pub fn build_messages(
-    graph: &ConversationGraph,
-    agent_id: Option<Uuid>,
-) -> (Option<String>, Vec<ChatMessage>) {
-    let result = build_context(graph, agent_id.unwrap_or(Uuid::nil()));
-    (result.system_prompt, result.messages)
-}
-
 /// Build context for a conversational agent. Walks the active branch history,
 /// collects all contributing node IDs for provenance tracking.
 pub fn build_context(graph: &ConversationGraph, agent_id: Uuid) -> super::ContextBuildResult {
@@ -28,10 +18,8 @@ pub fn build_context(graph: &ConversationGraph, agent_id: Uuid) -> super::Contex
 
     let mut system_prompt = None;
     let mut messages = Vec::new();
-    let mut selected_node_ids = Vec::new();
 
     for node in history {
-        selected_node_ids.push(node.id());
         match node {
             Node::SystemDirective { content, .. } => {
                 system_prompt = Some(content.clone());
@@ -88,7 +76,6 @@ pub fn build_context(graph: &ConversationGraph, agent_id: Uuid) -> super::Contex
     super::ContextBuildResult {
         system_prompt,
         messages,
-        selected_node_ids,
     }
 }
 

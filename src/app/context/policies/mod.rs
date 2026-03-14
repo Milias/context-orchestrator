@@ -18,9 +18,6 @@ pub struct ContextBuildResult {
     pub system_prompt: Option<String>,
     /// Ordered message list for the Anthropic API.
     pub messages: Vec<ChatMessage>,
-    /// IDs of all graph nodes that contributed to this context window.
-    /// Used to create `SelectedFor` edges on the `ContextBuildingRequest`.
-    pub selected_node_ids: Vec<Uuid>,
 }
 
 /// Determines how context is built for an agent and how it interacts with the graph.
@@ -40,33 +37,6 @@ impl ContextPolicy {
             Self::TaskExecution { work_item_id } => {
                 task_execution::build_context(graph, *work_item_id, agent_id)
             }
-        }
-    }
-
-    /// Get the initial parent node for this agent's first message.
-    /// Conversational: active branch leaf. Task: the work item node.
-    pub fn initial_parent(&self, graph: &ConversationGraph) -> anyhow::Result<Uuid> {
-        match self {
-            Self::Conversational => graph.active_leaf(),
-            Self::TaskExecution { work_item_id } => {
-                // The agent's chain starts from the work item's chain leaf
-                // (which may be a synthetic user message if this is the first activation).
-                Ok(graph.find_chain_leaf(*work_item_id))
-            }
-        }
-    }
-
-    /// Record an assistant message in the graph using the appropriate method.
-    /// Conversational: `add_message` (updates branch). Task: `add_reply` (no branch update).
-    pub fn record_message(
-        &self,
-        graph: &mut ConversationGraph,
-        parent_id: Uuid,
-        node: crate::graph::Node,
-    ) -> anyhow::Result<Uuid> {
-        match self {
-            Self::Conversational => graph.add_message(parent_id, node),
-            Self::TaskExecution { .. } => graph.add_reply(parent_id, node),
         }
     }
 

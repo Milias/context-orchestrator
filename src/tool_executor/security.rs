@@ -16,25 +16,24 @@ pub struct ValidatedPath {
 /// Resolve the root directory for file operations. Returns `working_dir` if
 /// provided, otherwise falls back to the process working directory.
 async fn resolve_root(working_dir: Option<&Path>) -> Result<PathBuf, ToolExecutionResult> {
-    match working_dir {
-        Some(dir) => tokio::fs::canonicalize(dir)
+    if let Some(dir) = working_dir {
+        tokio::fs::canonicalize(dir)
             .await
             .map_err(|e| ToolExecutionResult {
                 content: ToolResultContent::text(format!("Error resolving working directory: {e}")),
                 is_error: true,
-            }),
-        None => {
-            let cwd = std::env::current_dir().map_err(|_| ToolExecutionResult {
-                content: ToolResultContent::text("Error: could not determine working directory"),
+            })
+    } else {
+        let cwd = std::env::current_dir().map_err(|_| ToolExecutionResult {
+            content: ToolResultContent::text("Error: could not determine working directory"),
+            is_error: true,
+        })?;
+        tokio::fs::canonicalize(&cwd)
+            .await
+            .map_err(|_| ToolExecutionResult {
+                content: ToolResultContent::text("Error: could not resolve working directory"),
                 is_error: true,
-            })?;
-            tokio::fs::canonicalize(&cwd)
-                .await
-                .map_err(|_| ToolExecutionResult {
-                    content: ToolResultContent::text("Error: could not resolve working directory"),
-                    is_error: true,
-                })
-        }
+            })
     }
 }
 
@@ -45,9 +44,10 @@ pub async fn validate_path(
     working_dir: Option<&Path>,
 ) -> Result<ValidatedPath, ToolExecutionResult> {
     let canonical_root = resolve_root(working_dir).await?;
-    let root = working_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let root = working_dir.map_or_else(
+        || std::env::current_dir().unwrap_or_default(),
+        PathBuf::from,
+    );
     let requested = if std::path::Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {
@@ -81,9 +81,10 @@ pub async fn validate_path_for_write(
     working_dir: Option<&Path>,
 ) -> Result<ValidatedPath, ToolExecutionResult> {
     let canonical_root = resolve_root(working_dir).await?;
-    let root = working_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let root = working_dir.map_or_else(
+        || std::env::current_dir().unwrap_or_default(),
+        PathBuf::from,
+    );
     let requested = if std::path::Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {
