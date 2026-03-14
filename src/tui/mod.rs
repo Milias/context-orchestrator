@@ -233,18 +233,10 @@ pub struct TuiState {
     pub max_scroll: u16,
     /// Lifetime token usage displayed in the status bar (animated).
     pub token_usage: TokenUsage,
-    /// Selected item index in the Work tab tree view.
-    pub work_selected: usize,
-    /// Number of visible items in the Work tab (set each frame by the renderer).
-    pub work_visible_count: usize,
-    /// Animated scroll for the activity stream in the overview tab.
+    /// Animated scroll for the activity stream (shared between overview keys and system tab).
     pub overview_scroll: AnimatedScroll,
-    /// Maximum scroll offset for the overview activity stream (set each frame).
+    /// Maximum scroll offset for the activity stream (set each frame by the renderer).
     pub overview_max: u16,
-    /// Animated scroll for the recent completions panel.
-    pub recent_scroll: AnimatedScroll,
-    /// Maximum scroll offset for the recent completions panel (set each frame).
-    pub recent_max: u16,
     /// Text of the pending user question. Set by `QuestionRoutedToUser` event,
     /// cleared by `QuestionAnswered` or `QuestionStatusChanged(TimedOut)`.
     /// When `Some`, the input box shows answer mode.
@@ -286,12 +278,8 @@ impl TuiState {
             tool_display: ToolDisplayMode::Compact,
             max_scroll: 0,
             token_usage: TokenUsage::default(),
-            work_selected: 0,
-            work_visible_count: 0,
             overview_scroll: AnimatedScroll::zero(),
             overview_max: 0,
-            recent_scroll: AnimatedScroll::zero(),
-            recent_max: 0,
             pending_question_text: None,
             panel_rects: state::PanelRects::default(),
             explorer: state::GraphSection::all()

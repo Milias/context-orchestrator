@@ -71,6 +71,26 @@ impl GraphSection {
             GraphSection::Context => "Context",
         }
     }
+
+    /// Cycle to the next section in display order (wraps around).
+    pub fn next(self) -> Self {
+        match self {
+            Self::Work => Self::QA,
+            Self::QA => Self::Execution,
+            Self::Execution => Self::Context,
+            Self::Context => Self::Work,
+        }
+    }
+
+    /// Cycle to the previous section in display order (wraps around).
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Work => Self::Context,
+            Self::QA => Self::Work,
+            Self::Execution => Self::QA,
+            Self::Context => Self::Execution,
+        }
+    }
 }
 
 /// Which sub-panel within the Graph tab has keyboard focus.
@@ -98,14 +118,8 @@ pub enum FocusZone {
 /// Updated each frame by the rendering code.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PanelRects {
-    /// Activity stream area in the overview tab.
-    pub activity: ratatui::prelude::Rect,
-    /// Recent completions area in the overview tab.
-    pub recent: ratatui::prelude::Rect,
     /// Conversation panel area (right side).
     pub conversation: ratatui::prelude::Rect,
-    /// Work tree area in the overview tab.
-    pub work: ratatui::prelude::Rect,
     /// Tree panel area in the graph explorer tab.
     pub tree: ratatui::prelude::Rect,
     /// Detail panel area in the graph explorer tab.

@@ -6,16 +6,13 @@
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{BackgroundTaskKind, ConversationGraph, Node, TaskStatus};
 use crate::tui::widgets::tool_status::{
-    elapsed, finished, format_duration, tool_call_status_icon, truncate,
+    elapsed, format_duration, tool_call_status_icon, truncate,
 };
 use crate::tui::{TuiState, SPINNER_FRAMES};
 
 use chrono::Utc;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
-
-/// Maximum number of recent tool call completions to display.
-const MAX_RECENT_COMPLETIONS: usize = 50;
 
 /// Compute the agent card height based on the number of active agents.
 /// Each agent gets 2 lines (phase + detail); borders add 2.
@@ -264,85 +261,4 @@ pub(super) fn render_running_tasks(
     let max_rows = inner.height as usize;
     lines.truncate(max_rows);
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
-}
-
-/// Render recently completed/failed tool calls, sorted newest first.
-pub(super) fn render_recent_completions(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &mut TuiState,
-) {
-    let block = Block::default().title("Recent").borders(Borders::ALL);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height == 0 || inner.width < 8 {
-        return;
-    }
-
-    let now = Utc::now();
-    let w = inner.width as usize;
-    let max_rows = inner.height as usize;
-    let mut calls: Vec<&Node> = graph.nodes_by(|n| {
-        matches!(
-            n,
-            Node::ToolCall {
-                status: ToolCallStatus::Completed | ToolCallStatus::Failed,
-                ..
-            }
-        )
-    });
-    calls.sort_by_key(|n| std::cmp::Reverse(n.created_at()));
-    calls.truncate(MAX_RECENT_COMPLETIONS);
-    // Cast safety: bounded by call count, well within u16.
-    #[allow(clippy::cast_possible_truncation)] // Justified: max_offset ≤ calls.len().
-    let max_offset = calls.len().saturating_sub(max_rows) as u16;
-    tui_state.recent_max = max_offset;
-    tui_state.recent_scroll.apply_max(max_offset);
-    let offset = tui_state.recent_scroll.position() as usize;
-    let calls: Vec<_> = calls.into_iter().skip(offset).take(max_rows).collect();
-
-    let lines: Vec<Line<'_>> = calls
-        .iter()
-        .filter_map(|n| {
-            let Node::ToolCall {
-                status,
-                arguments,
-                created_at,
-                completed_at,
-                ..
-            } = n
-            else {
-                return None;
-            };
-            let (icon, color) = tool_call_status_icon(status);
-            let dur = format_duration(&match completed_at {
-                Some(end) => finished(*end, *created_at),
-                None => elapsed(now, *created_at),
-            });
-            let fixed = 2 + 1 + dur.len();
-            let (tool_name, tool_args) = arguments.display_parts();
-            let budget = w.saturating_sub(fixed);
-            let full = format!("{tool_name} {tool_args}");
-            let trunc = truncate(&full, budget);
-            let nl = tool_name.len().min(trunc.chars().count());
-            let np: String = trunc.chars().take(nl).collect();
-            let ap: String = trunc.chars().skip(nl).collect();
-            let pad = budget.saturating_sub(trunc.chars().count());
-            Some(Line::from(vec![
-                Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(np, Style::default().fg(Color::Magenta).bold()),
-                Span::styled(ap, Style::default().fg(Color::White)),
-                Span::raw(" ".repeat(pad)),
-                Span::styled(dur, Style::default().fg(Color::DarkGray)),
-            ]))
-        })
-        .collect();
-
-    if lines.is_empty() {
-        let empty = Span::styled("(no completions)", Style::default().fg(Color::DarkGray));
-        frame.render_widget(Paragraph::new(empty), inner);
-    } else {
-        frame.render_widget(Paragraph::new(Text::from(lines)), inner);
-    }
 }

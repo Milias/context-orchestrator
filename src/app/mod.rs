@@ -1,6 +1,8 @@
 mod agent;
 mod context;
 mod event_dispatch;
+mod graph_actions;
+mod node_resolver;
 mod plan;
 mod qa;
 mod review;
@@ -128,8 +130,7 @@ impl App {
             let agent_active = !self.tui_state.agent_displays.is_empty();
             let animating = self.tui_state.token_usage.is_animating()
                 || self.tui_state.scroll.is_animating()
-                || self.tui_state.overview_scroll.is_animating()
-                || self.tui_state.recent_scroll.is_animating();
+                || self.tui_state.overview_scroll.is_animating();
 
             tokio::select! {
                 maybe_event = event_stream.next() => {
@@ -178,7 +179,6 @@ impl App {
                     self.tui_state.token_usage.tick();
                     self.tui_state.scroll.tick();
                     self.tui_state.overview_scroll.tick();
-                    self.tui_state.recent_scroll.tick();
                 }
                 _ = sigterm.recv() => {
                     self.shutdown();
@@ -237,6 +237,22 @@ impl App {
                 self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
                 self.tui_state.scroll.snap(u16::MAX);
             }
+            // Graph tree navigation actions that need the graph for UUID resolution.
+            Action::ToggleCollapse => {
+                self.handle_graph_toggle_collapse();
+            }
+            Action::ExpandOrFocusDetail => {
+                self.handle_graph_expand_or_focus();
+            }
+            Action::CollapseNode => {
+                self.handle_graph_collapse_node();
+            }
+            Action::FollowEdge => {
+                self.handle_graph_follow_edge();
+            }
+            Action::PopBreadcrumb => {
+                self.handle_graph_pop_breadcrumb();
+            }
             Action::None => {}
         }
         Ok(())
@@ -272,25 +288,15 @@ impl App {
     /// Handle mouse scroll events. Hit-tests against panel rects from the last
     /// render to determine which panel to scroll.
     fn handle_mouse_scroll(&mut self, mouse: crossterm::event::MouseEvent) {
-        let (up, down) = match mouse.kind {
-            MouseEventKind::ScrollUp => (true, false),
-            MouseEventKind::ScrollDown => (false, true),
+        let up = match mouse.kind {
+            MouseEventKind::ScrollUp => true,
+            MouseEventKind::ScrollDown => false,
             _ => return,
         };
         let pos = ratatui::prelude::Position::new(mouse.column, mouse.row);
         let rects = &self.tui_state.panel_rects;
 
-        if rects.activity.contains(pos) {
-            let delta = if up { -3 } else { 3 };
-            self.tui_state
-                .overview_scroll
-                .scroll_by(delta, self.tui_state.overview_max);
-        } else if rects.recent.contains(pos) {
-            let delta = if up { -3 } else { 3 };
-            self.tui_state
-                .recent_scroll
-                .scroll_by(delta, self.tui_state.recent_max);
-        } else if rects.conversation.contains(pos) {
+        if rects.conversation.contains(pos) {
             self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
             let delta = if up { -3 } else { 3 };
             self.tui_state
@@ -300,14 +306,6 @@ impl App {
                 && self.tui_state.max_scroll > 0
             {
                 self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
-            }
-        } else if rects.work.contains(pos) {
-            // Scroll work tree selection.
-            let max = self.tui_state.work_visible_count.saturating_sub(1);
-            if up {
-                self.tui_state.work_selected = self.tui_state.work_selected.saturating_sub(1);
-            } else if down {
-                self.tui_state.work_selected = (self.tui_state.work_selected + 1).min(max);
             }
         }
     }
