@@ -1,3 +1,5 @@
 /target
 Session.vim
 .serena/
+*.profraw
+/coverage/

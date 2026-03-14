@@ -1,3 +1,10 @@
+# Global Rules
+
+- Take your time! It is VERY IMPORTANT to design for the future, much more than
+  for quick solutions. We need well-designed solutions, without hacks.
+- Reuse and refactor, even if it requires fundamental changes, as needed to
+  achieve a high quality codebase.
+
 # Project Rules
 
 - Use Rust language features FIRST: enums, structs, traits. Keep arguments to
