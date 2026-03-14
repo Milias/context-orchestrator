@@ -1,14 +1,14 @@
 use super::InputBuffer;
 
-/// Ctrl+W at column 0 must not underflow or delete from the previous line.
+/// Ctrl+W at column 0 crosses the newline and deletes the previous word.
 #[test]
-fn kill_word_at_line_start_does_nothing() {
+fn kill_word_at_line_start_crosses_newline() {
     let mut buf = InputBuffer::new();
     buf.set_text("hello\nworld".into());
     buf.cursor = 6; // start of "world"
     buf.kill_word_backward();
-    assert_eq!(buf.text(), "hello\nworld");
-    assert_eq!(buf.cursor(), 6);
+    assert_eq!(buf.text(), "world");
+    assert_eq!(buf.cursor(), 0);
 }
 
 /// Ctrl+W must skip trailing whitespace then delete the word, not stop after whitespace.

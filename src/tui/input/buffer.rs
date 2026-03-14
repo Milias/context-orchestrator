@@ -320,12 +320,12 @@ impl InputBuffer {
 
     /// Find the start of the word before the cursor (for backward word operations).
     /// Emacs convention: skip non-word chars backward, then skip word chars backward.
-    /// Newlines act as hard boundaries — word operations do not cross lines.
+    /// Crosses newlines — Ctrl+W at start of a line deletes back into the previous line.
     fn find_word_start(&self) -> usize {
         let chars: Vec<char> = self.text.chars().collect();
         let mut pos = self.cursor;
-        // Skip non-alphanumeric backward (stop at newline)
-        while pos > 0 && !chars[pos - 1].is_alphanumeric() && chars[pos - 1] != '\n' {
+        // Skip non-alphanumeric backward (including newlines)
+        while pos > 0 && !chars[pos - 1].is_alphanumeric() {
             pos -= 1;
         }
         // Skip alphanumeric backward
