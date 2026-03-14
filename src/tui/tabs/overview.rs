@@ -19,42 +19,51 @@ use super::{agents, work};
 /// Maximum number of work tree lines shown in the overview.
 const WORK_TREE_MAX_LINES: u16 = 8;
 
-/// Render the Overview tab: stats, agents+running (horizontal), work tree, activity.
+/// Render the Overview tab.
+///
+/// Layout:
+/// ```text
+/// Activity (65%, flex)  | Agent card    (35%)
+///                       | Running tasks
+///                       | Stats
+/// Work tree (full width, capped at 8 lines)
+/// ```
 pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
-    let agent_h = agents::agent_card_height(tui_state);
-    let running_h = agents::running_tasks_height(graph);
-    let row2_h = agent_h.max(running_h);
     let work_h = work_tree_height(graph);
 
-    let vertical = Layout::default()
+    // Top: main content (flex). Bottom: work tree (capped).
+    let outer = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(row2_h),
-            Constraint::Length(work_h),
-            Constraint::Min(3),
-        ])
+        .constraints([Constraint::Min(5), Constraint::Length(work_h)])
         .split(area);
 
-    // Row 1: Agent card (left) + Running tasks (right), side by side.
-    let row1 = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(vertical[0]);
-
-    agents::render_agent_card(frame, row1[0], tui_state);
-    agents::render_running_tasks(frame, row1[1], graph, tui_state);
-
-    // Row 2: Work tree (compact).
-    render_work_section(frame, vertical[1], graph, tui_state);
-
-    // Row 3: Activity stream (left) + Stats (right).
-    let bottom = Layout::default()
+    // Main content: activity (left 65%) | right column (35%).
+    let main_row = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(vertical[2]);
+        .split(outer[0]);
 
-    render_activity_stream(frame, bottom[0], graph, tui_state);
-    crate::tui::widgets::stats_panel::render(frame, bottom[1], graph, tui_state);
+    // Left: activity stream.
+    render_activity_stream(frame, main_row[0], graph, tui_state);
+    tui_state.panel_rects.activity = main_row[0];
+
+    // Right column: agent card + running tasks + stats (stacked vertically).
+    let right_col = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(agents::agent_card_height(tui_state)),
+            Constraint::Length(agents::running_tasks_height(graph)),
+            Constraint::Min(3),
+        ])
+        .split(main_row[1]);
+
+    agents::render_agent_card(frame, right_col[0], tui_state);
+    agents::render_running_tasks(frame, right_col[1], graph, tui_state);
+    crate::tui::widgets::stats_panel::render(frame, right_col[2], graph, tui_state);
+
+    // Bottom: work tree.
+    render_work_section(frame, outer[1], graph, tui_state);
+    tui_state.panel_rects.work = outer[1];
 }
 
 // ── Activity stream ──────────────────────────────────────────────────

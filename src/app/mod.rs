@@ -19,7 +19,7 @@ use crate::tui::ui;
 use crate::tui::{self, AnimatedCounter, TuiState};
 
 use chrono::Utc;
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyEventKind, MouseEventKind};
 use futures::StreamExt;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -121,14 +121,20 @@ impl App {
 
             tokio::select! {
                 maybe_event = event_stream.next() => {
-                    if let Some(Ok(Event::Key(key))) = maybe_event {
-                        if key.kind != KeyEventKind::Press { continue; }
-                        let action = {
-                            let g = self.graph.read();
-                            input::handle_key_event(key, &mut self.tui_state, &g)
-                        };
-                        let page = terminal.size().map(|s| s.height / 2).unwrap_or(20);
-                        self.handle_action(action, agent_active, page)?;
+                    match maybe_event {
+                        Some(Ok(Event::Key(key))) => {
+                            if key.kind != KeyEventKind::Press { continue; }
+                            let action = {
+                                let g = self.graph.read();
+                                input::handle_key_event(key, &mut self.tui_state, &g)
+                            };
+                            let page = terminal.size().map(|s| s.height / 2).unwrap_or(20);
+                            self.handle_action(action, agent_active, page)?;
+                        }
+                        Some(Ok(Event::Mouse(mouse))) => {
+                            self.handle_mouse_scroll(mouse);
+                        }
+                        _ => {}
                     }
                 }
                 Some(task_msg) = self.task_rx.recv() => {
@@ -248,6 +254,58 @@ impl App {
         // Re-enable autoscroll when the user scrolls to the bottom.
         if new_offset >= self.tui_state.max_scroll && self.tui_state.max_scroll > 0 {
             self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
+        }
+    }
+
+    /// Handle mouse scroll events. Hit-tests against panel rects from the last
+    /// render to determine which panel to scroll.
+    fn handle_mouse_scroll(&mut self, mouse: crossterm::event::MouseEvent) {
+        let (up, down) = match mouse.kind {
+            MouseEventKind::ScrollUp => (true, false),
+            MouseEventKind::ScrollDown => (false, true),
+            _ => return,
+        };
+        let pos = ratatui::prelude::Position::new(mouse.column, mouse.row);
+        let rects = &self.tui_state.panel_rects;
+
+        if rects.activity.contains(pos) {
+            // Scroll activity stream.
+            let max = self.tui_state.overview_total.saturating_sub(1);
+            if up {
+                self.tui_state.overview_scroll =
+                    self.tui_state.overview_scroll.saturating_sub(3);
+            } else if down {
+                self.tui_state.overview_scroll =
+                    (self.tui_state.overview_scroll + 3).min(max);
+            }
+        } else if rects.conversation.contains(pos) {
+            // Scroll conversation.
+            self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
+            if up {
+                self.tui_state.scroll_offset =
+                    self.tui_state.scroll_offset.saturating_sub(3);
+            } else if down {
+                self.tui_state.scroll_offset = self
+                    .tui_state
+                    .scroll_offset
+                    .saturating_add(3)
+                    .min(self.tui_state.max_scroll);
+            }
+            if self.tui_state.scroll_offset >= self.tui_state.max_scroll
+                && self.tui_state.max_scroll > 0
+            {
+                self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
+            }
+        } else if rects.work.contains(pos) {
+            // Scroll work tree selection.
+            let max = self.tui_state.work_visible_count.saturating_sub(1);
+            if up {
+                self.tui_state.work_selected =
+                    self.tui_state.work_selected.saturating_sub(1);
+            } else if down {
+                self.tui_state.work_selected =
+                    (self.tui_state.work_selected + 1).min(max);
+            }
         }
     }
 

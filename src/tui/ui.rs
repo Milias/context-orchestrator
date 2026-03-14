@@ -47,6 +47,7 @@ pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &mut TuiSta
             .split(horizontal[1]);
 
         conversation::render(frame, right_col[0], graph, tui_state);
+        tui_state.panel_rects.conversation = right_col[0];
         input_box::render(frame, right_col[1], area, tui_state);
     } else {
         // No conversation: tab content fills the area, no input box visible.

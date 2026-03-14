@@ -6,7 +6,10 @@ pub mod ui;
 pub mod widgets;
 
 use crossterm::{
-    event::{KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{
         disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
@@ -233,6 +236,8 @@ pub struct TuiState {
     /// cleared by `QuestionAnswered` or `QuestionStatusChanged(TimedOut)`.
     /// When `Some`, the input box shows answer mode.
     pub pending_question_text: Option<String>,
+    /// Cached panel rectangles from last render for mouse hit-testing.
+    pub panel_rects: state::PanelRects,
 }
 
 #[derive(Debug)]
@@ -266,6 +271,7 @@ impl TuiState {
             overview_scroll: 0,
             overview_total: 0,
             pending_question_text: None,
+            panel_rects: state::PanelRects::default(),
         }
     }
 }
@@ -273,7 +279,7 @@ impl TuiState {
 pub fn setup_terminal() -> anyhow::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     // Push AFTER entering alternate screen — Kitty clears the keyboard
     // enhancement stack on screen switch, so pushing before would be lost.
     if supports_keyboard_enhancement().unwrap_or(false) {
@@ -294,6 +300,7 @@ pub fn restore_terminal(
     execute!(
         terminal.backend_mut(),
         PopKeyboardEnhancementFlags,
+        DisableMouseCapture,
         LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;

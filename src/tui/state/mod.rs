@@ -39,6 +39,18 @@ pub enum FocusZone {
     ChatPanel,
 }
 
+/// Cached panel rectangles from the last render, used for mouse hit-testing.
+/// Updated each frame by the rendering code.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PanelRects {
+    /// Activity stream area in the overview tab.
+    pub activity: ratatui::prelude::Rect,
+    /// Conversation panel area (right side).
+    pub conversation: ratatui::prelude::Rect,
+    /// Work tree area in the overview tab.
+    pub work: ratatui::prelude::Rect,
+}
+
 /// Top-level navigation state for the tab-based layout.
 #[derive(Debug)]
 pub struct NavigationState {
