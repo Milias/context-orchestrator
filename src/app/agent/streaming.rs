@@ -1,10 +1,15 @@
+//! LLM streaming with retry, reconnection, and cancellation.
+//!
+//! All functions receive an `AgentContext` for sending events back to the main
+//! loop. This avoids threading `(task_tx, agent_id)` through every function.
+
 use crate::graph::StopReason;
 use crate::llm::error::ApiError;
 use crate::llm::retry::RetryConfig;
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, StreamChunk};
 use crate::tasks::{AgentEvent, AgentPhase, TaskMessage, ToolUseRecord};
 
-use super::think_splitter::ThinkSplitter;
+use crate::app::think_splitter::ThinkSplitter;
 
 use futures::StreamExt;
 use std::pin::Pin;
@@ -16,7 +21,28 @@ use uuid::Uuid;
 
 const MAX_STREAM_RETRIES: u32 = 2;
 
-pub(super) struct StreamResult {
+// ── AgentContext ─────────────────────────────────────────────────────
+
+/// Context carried by an agent loop, used to send events back to the main loop.
+/// Replaces threading `(task_tx, agent_id)` through every function.
+pub(in crate::app) struct AgentContext {
+    pub agent_id: Uuid,
+    pub task_tx: mpsc::UnboundedSender<TaskMessage>,
+}
+
+impl AgentContext {
+    /// Send an agent event to the main loop, tagged with this agent's ID.
+    pub fn send(&self, event: AgentEvent) {
+        let _ = self.task_tx.send(TaskMessage::Agent {
+            agent_id: self.agent_id,
+            event,
+        });
+    }
+}
+
+// ── StreamResult ────────────────────────────────────────────────────
+
+pub(in crate::app) struct StreamResult {
     pub response: String,
     pub think_text: String,
     pub output_tokens: Option<u32>,
@@ -28,22 +54,17 @@ pub(super) struct StreamResult {
     pub recv_phase_id: Option<Uuid>,
 }
 
-pub(super) async fn stream_llm_response(
+// ── Public API ──────────────────────────────────────────────────────
+
+pub(in crate::app) async fn stream_llm_response(
     provider: &Arc<dyn LlmProvider>,
     messages: Vec<ChatMessage>,
     config: &ChatConfig,
-    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    ctx: &AgentContext,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<StreamResult> {
-    let Some((stream, recv_phase_id)) = try_connect_chat(
-        provider,
-        &messages,
-        config,
-        task_tx,
-        cancel_token,
-        "Connecting",
-    )
-    .await?
+    let Some((stream, recv_phase_id)) =
+        try_connect_chat(provider, &messages, config, ctx, cancel_token, "Connecting").await?
     else {
         return Ok(cancelled_result());
     };
@@ -54,11 +75,13 @@ pub(super) async fn stream_llm_response(
         provider,
         &messages,
         config,
-        task_tx,
+        ctx,
         cancel_token,
     )
     .await
 }
+
+// ── Stream consumption ──────────────────────────────────────────────
 
 async fn consume_stream(
     mut stream: ChatStream,
@@ -66,7 +89,7 @@ async fn consume_stream(
     provider: &Arc<dyn LlmProvider>,
     messages: &[ChatMessage],
     config: &ChatConfig,
-    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    ctx: &AgentContext,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<StreamResult> {
     let mut state = StreamState::new();
@@ -76,7 +99,7 @@ async fn consume_stream(
             Some(Ok(StreamChunk::TextDelta(text))) => {
                 state.think_splitter.push(&text);
                 if state.last_send.elapsed() >= state.send_budget {
-                    send_delta(&state.think_splitter, task_tx);
+                    send_delta(&state.think_splitter, ctx);
                     state.last_send = Instant::now();
                 }
             }
@@ -102,18 +125,20 @@ async fn consume_stream(
                     provider,
                     messages,
                     config,
-                    task_tx,
+                    ctx,
                     cancel_token,
                 )
                 .await?
                 {
-                    complete_phase(task_tx, recv_phase_id);
+                    ctx.send(AgentEvent::PhaseCompleted {
+                        phase_id: recv_phase_id,
+                    });
                     (stream, recv_phase_id) = r;
                     state.think_splitter = ThinkSplitter::new();
                     continue;
                 }
                 if state.retries > MAX_STREAM_RETRIES {
-                    send(task_tx, AgentEvent::Error(format!("Stream error: {e}")));
+                    ctx.send(AgentEvent::Error(format!("Stream error: {e}")));
                 }
                 break;
             }
@@ -127,25 +152,27 @@ async fn consume_stream(
                         provider,
                         messages,
                         config,
-                        task_tx,
+                        ctx,
                         cancel_token,
                     )
                     .await?
                     {
-                        complete_phase(task_tx, recv_phase_id);
+                        ctx.send(AgentEvent::PhaseCompleted {
+                            phase_id: recv_phase_id,
+                        });
                         (stream, recv_phase_id) = r;
                         state.think_splitter = ThinkSplitter::new();
                         continue;
                     }
                 }
-                send(task_tx, AgentEvent::Error(format_error(&e)));
+                ctx.send(AgentEvent::Error(format_error(&e)));
                 break;
             }
             None => break,
         }
     }
 
-    send_delta(&state.think_splitter, task_tx);
+    send_delta(&state.think_splitter, ctx);
     Ok(state.into_result(recv_phase_id))
 }
 
@@ -188,13 +215,15 @@ impl StreamState {
 
 type ChatStream = Pin<Box<dyn futures::Stream<Item = anyhow::Result<StreamChunk>> + Send>>;
 
+// ── Connection helpers ──────────────────────────────────────────────
+
 /// Attempt a stream reconnection if retries remain. Returns `None` when exhausted or cancelled.
 async fn try_reconnect(
     retries: &mut u32,
     provider: &Arc<dyn LlmProvider>,
     messages: &[ChatMessage],
     config: &ChatConfig,
-    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    ctx: &AgentContext,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<Option<(ChatStream, Uuid)>> {
     if *retries >= MAX_STREAM_RETRIES {
@@ -205,7 +234,7 @@ async fn try_reconnect(
         provider,
         messages,
         config,
-        task_tx,
+        ctx,
         cancel_token,
         "Reconnecting",
     )
@@ -218,7 +247,7 @@ async fn try_connect_chat(
     provider: &Arc<dyn LlmProvider>,
     messages: &[ChatMessage],
     config: &ChatConfig,
-    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    ctx: &AgentContext,
     cancel_token: &CancellationToken,
     context_label: &str,
 ) -> anyhow::Result<Option<(ChatStream, Uuid)>> {
@@ -226,33 +255,24 @@ async fn try_connect_chat(
 
     for attempt in 1..=retry_config.max_attempts {
         let connect_phase = Uuid::new_v4();
-        send(
-            task_tx,
-            AgentEvent::Progress {
-                phase_id: connect_phase,
-                phase: AgentPhase::Connecting {
-                    attempt,
-                    max: retry_config.max_attempts,
-                },
+        ctx.send(AgentEvent::Progress {
+            phase_id: connect_phase,
+            phase: AgentPhase::Connecting {
+                attempt,
+                max: retry_config.max_attempts,
             },
-        );
+        });
 
         match provider.chat(messages.to_vec(), config).await {
             Ok(s) => {
-                send(
-                    task_tx,
-                    AgentEvent::PhaseCompleted {
-                        phase_id: connect_phase,
-                    },
-                );
+                ctx.send(AgentEvent::PhaseCompleted {
+                    phase_id: connect_phase,
+                });
                 let recv_phase = Uuid::new_v4();
-                send(
-                    task_tx,
-                    AgentEvent::Progress {
-                        phase_id: recv_phase,
-                        phase: AgentPhase::Receiving,
-                    },
-                );
+                ctx.send(AgentEvent::Progress {
+                    phase_id: recv_phase,
+                    phase: AgentPhase::Receiving,
+                });
                 return Ok(Some((s, recv_phase)));
             }
             Err(e) => {
@@ -261,38 +281,28 @@ async fn try_connect_chat(
                     .is_some_and(ApiError::is_retryable);
 
                 if !retryable || attempt == retry_config.max_attempts {
-                    send(
-                        task_tx,
-                        AgentEvent::PhaseCompleted {
-                            phase_id: connect_phase,
-                        },
-                    );
-                    send(task_tx, AgentEvent::Error(format_error(&e)));
+                    ctx.send(AgentEvent::PhaseCompleted {
+                        phase_id: connect_phase,
+                    });
+                    ctx.send(AgentEvent::Error(format_error(&e)));
                     return Ok(None);
                 }
-                send(
-                    task_tx,
-                    AgentEvent::PhaseCompleted {
-                        phase_id: connect_phase,
-                    },
-                );
+                ctx.send(AgentEvent::PhaseCompleted {
+                    phase_id: connect_phase,
+                });
 
                 let delay = retry_config.delay_for(attempt - 1, e.downcast_ref::<ApiError>());
-                send(
-                    task_tx,
-                    AgentEvent::Error(format!(
-                        "{context_label} ({attempt}/{})... {}",
-                        retry_config.max_attempts,
-                        format_error(&e)
-                    )),
-                );
+                ctx.send(AgentEvent::Error(format!(
+                    "{context_label} ({attempt}/{})... {}",
+                    retry_config.max_attempts,
+                    format_error(&e)
+                )));
 
                 let cancelled = tokio::select! {
                     () = tokio::time::sleep(delay) => false,
                     () = cancel_token.cancelled() => true,
                 };
                 if cancelled {
-                    // connect_phase for this attempt already completed above
                     return Ok(None);
                 }
             }
@@ -301,6 +311,8 @@ async fn try_connect_chat(
 
     Ok(None)
 }
+
+// ── Helpers ─────────────────────────────────────────────────────────
 
 fn cancelled_result() -> StreamResult {
     StreamResult {
@@ -314,25 +326,14 @@ fn cancelled_result() -> StreamResult {
     }
 }
 
-fn send_delta(splitter: &ThinkSplitter, tx: &mpsc::UnboundedSender<TaskMessage>) {
-    send(
-        tx,
-        AgentEvent::StreamDelta {
-            text: splitter.visible().to_string(),
-            is_thinking: splitter.is_thinking(),
-        },
-    );
+fn send_delta(splitter: &ThinkSplitter, ctx: &AgentContext) {
+    ctx.send(AgentEvent::StreamDelta {
+        text: splitter.visible().to_string(),
+        is_thinking: splitter.is_thinking(),
+    });
 }
 
-fn complete_phase(tx: &mpsc::UnboundedSender<TaskMessage>, phase_id: Uuid) {
-    send(tx, AgentEvent::PhaseCompleted { phase_id });
-}
-
-pub(super) fn send(tx: &mpsc::UnboundedSender<TaskMessage>, event: AgentEvent) {
-    let _ = tx.send(TaskMessage::Agent(event));
-}
-
-pub(super) fn format_error(e: &anyhow::Error) -> String {
+pub(in crate::app) fn format_error(e: &anyhow::Error) -> String {
     e.downcast_ref::<ApiError>()
         .map_or_else(|| format!("{e}"), ToString::to_string)
 }

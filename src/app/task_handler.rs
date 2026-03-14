@@ -1,7 +1,7 @@
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
 use crate::graph::{BackgroundTaskKind, EdgeKind, Node, StopReason, TaskStatus};
 use crate::storage::{TokenDirection, TokenEvent};
-use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
+use crate::tasks::{AgentEvent, AgentPhase, TaskMessage};
 use crate::tool_executor;
 use crate::tui::{AgentDisplayState, AgentVisualPhase};
 
@@ -18,6 +18,7 @@ impl App {
                 let mut g = self.graph.write();
                 g.remove_nodes_by(|n| matches!(n, Node::GitFile { .. }));
                 let root_id = g.branch_leaf(g.active_branch());
+                let count = files.len();
                 for file in files {
                     let node = Node::GitFile {
                         id: Uuid::new_v4(),
@@ -30,11 +31,13 @@ impl App {
                         let _ = g.add_edge(node_id, root, EdgeKind::Indexes);
                     }
                 }
+                g.emit(crate::graph::event::GraphEvent::GitFilesRefreshed { count });
             }
             TaskMessage::ToolsDiscovered(tools) => {
                 let mut g = self.graph.write();
                 g.remove_nodes_by(|n| matches!(n, Node::Tool { .. }));
                 let root_id = g.branch_leaf(g.active_branch());
+                let count = tools.len();
                 for tool in tools {
                     let node = Node::Tool {
                         id: Uuid::new_v4(),
@@ -47,6 +50,7 @@ impl App {
                         let _ = g.add_edge(node_id, root, EdgeKind::Provides);
                     }
                 }
+                g.emit(crate::graph::event::GraphEvent::ToolsRefreshed { count });
             }
             TaskMessage::TaskStatusChanged {
                 task_id,
@@ -67,20 +71,23 @@ impl App {
                         updated_at: Utc::now(),
                     });
                 }
+                g.emit(crate::graph::event::GraphEvent::BackgroundTaskChanged {
+                    node_id: task_id,
+                    status,
+                });
             }
             TaskMessage::ToolCallCompleted {
                 tool_call_id,
                 content,
                 is_error,
             } => {
-                // Graph mutation first (shared graph), then notify agent.
-                // This ensures the graph is updated before the agent reads it.
+                // Graph mutation first, then route to the owning agent.
                 self.handle_tool_call_completed(tool_call_id, content, is_error);
-                if let Some(tx) = &self.agent_tool_tx {
-                    let _ = tx.send(AgentToolResult { tool_call_id });
-                }
+                self.agents.route_tool_result(tool_call_id);
             }
-            TaskMessage::Agent(event) => self.handle_agent_event(event),
+            TaskMessage::Agent { agent_id, event } => {
+                self.handle_agent_event(agent_id, event);
+            }
             TaskMessage::TokenTotalsUpdated(totals) => {
                 self.tui_state.token_usage.input.target = totals.input;
                 self.tui_state.token_usage.output.target = totals.output;
@@ -91,40 +98,20 @@ impl App {
         }
     }
 
-    fn handle_agent_event(&mut self, event: AgentEvent) {
+    fn handle_agent_event(&mut self, agent_id: Uuid, event: AgentEvent) {
+        let is_primary = self.agents.is_primary(agent_id);
         match event {
             AgentEvent::Progress { phase_id, phase } => {
-                self.tui_state.status_message = Some(phase.to_string());
+                self.agents.track_phase(agent_id, phase_id);
                 self.track_phase_node(phase_id, &phase);
-                self.ensure_agent_display();
-                match phase {
-                    AgentPhase::Receiving => {
-                        if let Some(ref mut d) = self.tui_state.agent_display {
-                            d.phase = AgentVisualPhase::Streaming {
-                                text: String::new(),
-                                is_thinking: false,
-                            };
-                            // Reset reveal so the new iteration animates from scratch
-                            d.revealed_chars = 0;
-                        }
-                    }
-                    AgentPhase::ExecutingTools { .. } => {
-                        if let Some(ref mut d) = self.tui_state.agent_display {
-                            d.phase = AgentVisualPhase::ExecutingTools;
-                        }
-                    }
-                    AgentPhase::CountingTokens
-                    | AgentPhase::BuildingContext
-                    | AgentPhase::Connecting { .. } => {
-                        if let Some(ref mut d) = self.tui_state.agent_display {
-                            if !matches!(d.phase, AgentVisualPhase::Streaming { .. }) {
-                                d.phase = AgentVisualPhase::Preparing;
-                            }
-                        }
-                    }
+                if is_primary {
+                    self.tui_state.status_message = Some(phase.to_string());
+                    self.ensure_agent_display();
+                    self.update_visual_phase(&phase);
                 }
             }
             AgentEvent::PhaseCompleted { phase_id } => {
+                self.agents.complete_phase(agent_id, &phase_id);
                 self.complete_phase(phase_id);
             }
             AgentEvent::UserTokensCounted { node_id, count } => {
@@ -137,28 +124,30 @@ impl App {
                 });
             }
             AgentEvent::StreamDelta { text, is_thinking } => {
-                if let Some(ref mut d) = self.tui_state.agent_display {
-                    d.phase = AgentVisualPhase::Streaming { text, is_thinking };
-                }
-                if self.tui_state.scroll_mode == crate::tui::ScrollMode::Auto {
-                    self.tui_state.scroll_offset = u16::MAX;
+                if is_primary {
+                    if let Some(ref mut d) = self.tui_state.agent_display {
+                        d.phase = AgentVisualPhase::Streaming { text, is_thinking };
+                    }
+                    if self.tui_state.scroll_mode == crate::tui::ScrollMode::Auto {
+                        self.tui_state.scroll_offset = u16::MAX;
+                    }
                 }
             }
             AgentEvent::IterationCommitted {
                 assistant_id,
                 stop_reason,
-            } => self.handle_iteration_committed(assistant_id, stop_reason),
+            } => {
+                if is_primary {
+                    self.handle_iteration_committed(assistant_id, stop_reason);
+                }
+            }
             AgentEvent::ToolCallDispatched {
                 tool_call_id,
                 arguments,
             } => {
-                // Agent already added the ToolCall node to the shared graph.
-                // We only spawn execution and track the cancel token.
-                let token = self
-                    .cancel_token
-                    .as_ref()
-                    .map_or_else(CancellationToken::new, CancellationToken::child_token);
-                self.task_tokens.insert(tool_call_id, token.clone());
+                let token = self.agents.child_cancel_token(agent_id);
+                self.agents
+                    .track_tool_call(agent_id, tool_call_id, token.clone());
                 tool_executor::spawn_tool_execution(
                     tool_call_id,
                     arguments,
@@ -167,21 +156,69 @@ impl App {
                 );
             }
             AgentEvent::Finished => {
-                self.complete_all_phases();
-                self.tui_state.agent_display = None;
-                self.tui_state.status_message = None;
-                self.agent_tool_tx = None;
-                self.cancel_token = None;
-                self.task_tokens.clear();
+                let phase_ids = self.agents.drain_phases(agent_id);
+                for pid in phase_ids {
+                    self.complete_phase(pid);
+                }
+                let entry_mode = self.agents.remove(agent_id);
+                if is_primary {
+                    self.tui_state.agent_display = None;
+                    self.tui_state.status_message = None;
+                }
+                // Log what this agent was doing for debugging.
+                if let Some(super::agent::AgentEntryMode::AnswerQuestion { question_id }) =
+                    entry_mode
+                {
+                    tracing::debug!("Question agent finished for {question_id}");
+                }
+                // Release claims held by this agent (identified by ClaimedBy edge target).
+                self.graph
+                    .write()
+                    .edges
+                    .retain(|e| !(e.kind == crate::graph::EdgeKind::ClaimedBy && e.to == agent_id));
                 let _ = self.save();
+                self.check_ready_work();
             }
             AgentEvent::Error(msg) => {
-                self.tui_state.error_message = Some(msg);
+                // On error, cancel the agent's remaining work.
+                self.agents.cancel_agent(agent_id);
+                if is_primary {
+                    self.tui_state.error_message = Some(msg);
+                }
             }
         }
     }
 
-    /// Mark the previous agent phase as Completed and create a new Running phase node.
+    /// Update the TUI visual phase indicator for the primary agent.
+    fn update_visual_phase(&mut self, phase: &AgentPhase) {
+        match phase {
+            AgentPhase::Receiving => {
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    d.phase = AgentVisualPhase::Streaming {
+                        text: String::new(),
+                        is_thinking: false,
+                    };
+                    d.revealed_chars = 0;
+                }
+            }
+            AgentPhase::ExecutingTools { .. } => {
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    d.phase = AgentVisualPhase::ExecutingTools;
+                }
+            }
+            AgentPhase::CountingTokens
+            | AgentPhase::BuildingContext
+            | AgentPhase::Connecting { .. } => {
+                if let Some(ref mut d) = self.tui_state.agent_display {
+                    if !matches!(d.phase, AgentVisualPhase::Streaming { .. }) {
+                        d.phase = AgentVisualPhase::Preparing;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Create a `BackgroundTask` node for a phase. Per-agent tracking is in the registry.
     fn track_phase_node(&mut self, phase_id: Uuid, phase: &AgentPhase) {
         self.graph.write().add_node(Node::BackgroundTask {
             id: phase_id,
@@ -191,14 +228,10 @@ impl App {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         });
-        self.active_phase_ids.insert(phase_id);
     }
 
-    /// Complete a specific phase. Also handles late-arriving completions where
-    /// `Finished` has already drained `active_phase_ids` (e.g. fire-and-forget
-    /// token counting sending `PhaseCompleted` after the agent loop ends).
+    /// Mark a phase as Completed in the graph.
     fn complete_phase(&mut self, phase_id: Uuid) {
-        self.active_phase_ids.remove(&phase_id);
         let mut g = self.graph.write();
         if let Some(Node::BackgroundTask {
             status,
@@ -209,17 +242,6 @@ impl App {
             if *status == TaskStatus::Running {
                 let desc = description.clone();
                 let _ = g.update_background_task_status(phase_id, TaskStatus::Completed, desc);
-            }
-        }
-    }
-
-    fn complete_all_phases(&mut self) {
-        let ids: Vec<Uuid> = self.active_phase_ids.drain().collect();
-        let mut g = self.graph.write();
-        for id in ids {
-            if let Some(Node::BackgroundTask { description, .. }) = g.node(id) {
-                let desc = description.clone();
-                let _ = g.update_background_task_status(id, TaskStatus::Completed, desc);
             }
         }
     }
@@ -247,11 +269,8 @@ impl App {
             arguments.clone(),
             api_tool_use_id,
         );
-        let token = self
-            .cancel_token
-            .as_ref()
-            .map_or_else(CancellationToken::new, CancellationToken::child_token);
-        self.task_tokens.insert(tool_call_id, token.clone());
+        // User-triggered tool calls have no owning agent — use a standalone token.
+        let token = CancellationToken::new();
         tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone(), token);
     }
 
@@ -295,11 +314,14 @@ impl App {
             }
 
             // Plan tools: create WorkItems, edges, enrich content with UUIDs.
-            if let Some(effect) = super::plan::effects::apply(&mut g, tool_call_id) {
-                content = effect.content;
-                if let Some(msg) = effect.status_message {
-                    self.tui_state.status_message = Some(msg);
-                }
+            // TUI notifications flow through GraphEvent, not direct calls.
+            if let Some(enriched) = super::plan::effects::apply(&mut g, tool_call_id) {
+                content = enriched;
+            }
+
+            // Q/A tools: create Question nodes + edges. Routing via EventBus.
+            if let Some(enriched) = super::qa::effects::apply(&mut g, tool_call_id) {
+                content = enriched;
             }
         }
 
@@ -311,8 +333,6 @@ impl App {
         let _ = g.update_tool_call_status(tool_call_id, new_status, Some(Utc::now()));
         g.add_tool_result(tool_call_id, content, is_error);
         drop(g);
-
-        self.task_tokens.remove(&tool_call_id);
     }
 
     /// Process an assistant iteration committed by the agent loop.
@@ -372,10 +392,8 @@ impl App {
         });
     }
 
-    /// Cancel a running task by its graph node ID.
+    /// Cancel a running task by its `tool_call_id`.
     pub(super) fn cancel_task(&mut self, id: Uuid) {
-        if let Some(token) = self.task_tokens.remove(&id) {
-            token.cancel();
-        }
+        self.agents.cancel_tool(id);
     }
 }

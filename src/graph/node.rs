@@ -101,6 +101,46 @@ pub enum TaskStatus {
     Stopped,
 }
 
+/// Routing destination for a question.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionDestination {
+    User,
+    Llm,
+    Auto,
+}
+
+/// Lifecycle state machine for `Question` nodes.
+///
+/// ```text
+/// Pending ──try_claim()──→ Claimed ──add_answer()──→ Answered (if !requires_approval)
+///    │                        │
+///    ├──timeout──→ TimedOut   └──add_answer()──→ PendingApproval
+///                                                    │
+///                                  accept──→ Answered │
+///                                  reject──→ Rejected ──→ Pending (re-claimable)
+/// ```
+///
+/// Transitions are validated by `update_question_status()` in `mutation.rs`.
+/// Invalid transitions (e.g., `Pending` → `Answered`) return `Err`.
+/// `Rejected` is transient — it immediately transitions back to `Pending`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionStatus {
+    /// Awaiting routing/claiming by a backend.
+    Pending,
+    /// Claimed by an agent or backend; answer in progress.
+    Claimed,
+    /// Answer produced but requires user approval before resolving.
+    PendingApproval,
+    /// Terminal: question fully resolved.
+    Answered,
+    /// Transient: user rejected the proposed answer. Returns to `Pending`.
+    Rejected,
+    /// Terminal: question expired without an answer.
+    TimedOut,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
@@ -115,6 +155,18 @@ pub enum EdgeKind {
     ThinkingOf,
     Invoked,
     Produced,
+    /// `ToolCall` → `Question`: provenance of who asked.
+    Asks,
+    /// `Answer` → `Question`: resolution link.
+    Answers,
+    /// `Question` → any node: what the question references.
+    About,
+    /// `Answer` → any node: what the answer caused.
+    Triggers,
+    /// `Answer` → `Answer`: newer answer replaces older for the same question.
+    Supersedes,
+    /// Any node → agent UUID: coordination lock preventing double-execution.
+    ClaimedBy,
 }
 
 // ── Edge ─────────────────────────────────────────────────────────────
@@ -203,6 +255,23 @@ pub enum Node {
         is_error: bool,
         created_at: DateTime<Utc>,
     },
+    /// A question surfaced by an agent for routing to a backend (user, LLM, auto).
+    Question {
+        id: Uuid,
+        content: String,
+        destination: QuestionDestination,
+        status: QuestionStatus,
+        requires_approval: bool,
+        created_at: DateTime<Utc>,
+    },
+    /// An answer resolving a `Question`. Linked via `Answers` edge.
+    /// `question_id` is denormalized convenience (canonical link is the edge).
+    Answer {
+        id: Uuid,
+        content: String,
+        question_id: Uuid,
+        created_at: DateTime<Utc>,
+    },
 }
 
 impl Node {
@@ -216,7 +285,9 @@ impl Node {
             | Node::BackgroundTask { id, .. }
             | Node::ThinkBlock { id, .. }
             | Node::ToolCall { id, .. }
-            | Node::ToolResult { id, .. } => *id,
+            | Node::ToolResult { id, .. }
+            | Node::Question { id, .. }
+            | Node::Answer { id, .. } => *id,
         }
     }
 
@@ -224,7 +295,9 @@ impl Node {
         match self {
             Node::Message { content, .. }
             | Node::SystemDirective { content, .. }
-            | Node::ThinkBlock { content, .. } => content,
+            | Node::ThinkBlock { content, .. }
+            | Node::Question { content, .. }
+            | Node::Answer { content, .. } => content,
             Node::ToolResult { content, .. } => content.text_content(),
             Node::WorkItem { title, .. } => title,
             Node::GitFile { path, .. } => path,
@@ -256,7 +329,9 @@ impl Node {
             | Node::ToolCall { created_at, .. }
             | Node::ToolResult { created_at, .. }
             | Node::WorkItem { created_at, .. }
-            | Node::BackgroundTask { created_at, .. } => *created_at,
+            | Node::BackgroundTask { created_at, .. }
+            | Node::Question { created_at, .. }
+            | Node::Answer { created_at, .. } => *created_at,
             Node::GitFile { updated_at, .. } | Node::Tool { updated_at, .. } => *updated_at,
         }
     }

@@ -19,6 +19,8 @@ pub fn role_label(node: &Node) -> &'static str {
         Node::ToolResult { .. } => "result",
         // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
         Node::ThinkBlock { .. } => "think",
+        Node::Question { .. } => "question",
+        Node::Answer { .. } => "answer",
     }
 }
 
@@ -29,10 +31,11 @@ pub fn role_color(node: &Node) -> Color {
             Role::Assistant => Color::Green,
             Role::System => Color::DarkGray,
         },
-        Node::WorkItem { .. } => Color::Yellow,
+        Node::WorkItem { .. } | Node::Question { .. } => Color::Yellow,
         Node::GitFile { .. } => Color::Blue,
         Node::Tool { .. } | Node::ToolCall { .. } => Color::Magenta,
         Node::ToolResult { .. } => Color::Cyan,
+        Node::Answer { .. } => Color::Green,
         // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
         Node::SystemDirective { .. } | Node::BackgroundTask { .. } | Node::ThinkBlock { .. } => {
             Color::DarkGray

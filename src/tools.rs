@@ -82,6 +82,25 @@ pub fn parse_user_trigger_args(tool_name: &str, args: &str) -> ToolCallArguments
             pattern: args.to_string(),
             path: None,
         },
+        ToolName::Ask => {
+            // /ask user What JWT library? → destination=User, question="What JWT library?"
+            // /ask llm Should we use JWT? → destination=Llm
+            use crate::graph::node::QuestionDestination;
+            let mut parts = args.splitn(2, ' ');
+            let dest_str = parts.next().unwrap_or("user");
+            let question = parts.next().unwrap_or("").to_string();
+            let destination = match dest_str {
+                "llm" => QuestionDestination::Llm,
+                "auto" => QuestionDestination::Auto,
+                _ => QuestionDestination::User,
+            };
+            ToolCallArguments::Ask {
+                question,
+                destination,
+                about_node_id: None,
+                requires_approval: None,
+            }
+        }
         // Tools requiring UUID args — positional parsing cannot produce Uuid fields.
         ToolName::AddTask
         | ToolName::UpdateWorkItem

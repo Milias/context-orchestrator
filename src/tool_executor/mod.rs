@@ -8,6 +8,7 @@
 mod execute;
 mod list_directory;
 mod plan_tools;
+mod qa_tools;
 mod read_file;
 mod search_files;
 mod security;
@@ -62,6 +63,7 @@ pub fn tool_registry() -> &'static [ToolRegistryEntry] {
 fn build_registry() -> Vec<ToolRegistryEntry> {
     let mut tools = config_tools();
     tools.extend(plan_tools());
+    tools.extend(qa_tools());
     tools.extend(filesystem_tools());
     tools
 }
@@ -171,6 +173,36 @@ fn plan_tools() -> Vec<ToolRegistryEntry> {
             ],
         ),
     ]
+}
+
+/// Q/A tools: ask questions routed to user, LLM, or auto.
+fn qa_tools() -> Vec<ToolRegistryEntry> {
+    vec![entry(
+        ToolName::Ask,
+        "Ask a question to the user, an LLM, or auto-route. Returns a question UUID. \
+         The answer arrives asynchronously and resolves any DependsOn edges.",
+        &[
+            prop("question", SchemaType::String, "The question to ask", true),
+            prop(
+                "destination",
+                SchemaType::String,
+                "Who answers: user, llm, or auto",
+                true,
+            ),
+            prop(
+                "about_node_id",
+                SchemaType::String,
+                "UUID of a node this question is about (optional)",
+                false,
+            ),
+            prop(
+                "requires_approval",
+                SchemaType::Boolean,
+                "If true, LLM answers require user approval before resolving (default: false)",
+                false,
+            ),
+        ],
+    )]
 }
 
 /// Filesystem tools: read, write, list, search.

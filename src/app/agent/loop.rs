@@ -1,11 +1,17 @@
-use crate::graph::tool_types::{ToolCallStatus, ToolResultContent};
+//! Background agent loop: context building → LLM streaming → tool dispatch → repeat.
+//!
+//! Each agent loop runs as an independent tokio task. It communicates with the
+//! main loop via [`AgentContext`] (events out) and a tool-result receiver (results in).
+
+use crate::graph::tool::result::ToolResultContent;
+use crate::graph::tool::types::ToolCallStatus;
 use crate::graph::{parse_tool_arguments, EdgeKind, Node, Role, StopReason};
 use crate::llm::{ChatConfig, ChatMessage, LlmProvider, ToolDefinition};
-use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
+use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult};
 
-use super::agent_streaming::{self, send, StreamResult};
-use super::context;
-use super::SharedGraph;
+use super::streaming::{self as agent_streaming, AgentContext, StreamResult};
+use crate::app::context;
+use crate::app::SharedGraph;
 
 use chrono::Utc;
 use std::collections::HashSet;
@@ -15,52 +21,94 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-/// Configuration extracted from `AppConfig` for the agent loop.
-pub(super) struct AgentLoopConfig {
+/// How the agent loop was triggered — determines context and post-loop behavior.
+#[derive(Debug, Clone)]
+pub(in crate::app) enum AgentEntryMode {
+    /// Standard: respond to a user message in the conversation.
+    UserMessage,
+    /// Answer a graph question. After the loop finishes, the last assistant
+    /// message content becomes an `Answer` node via `graph.add_answer()`.
+    AnswerQuestion { question_id: Uuid },
+}
+
+/// Full configuration for spawning an agent loop.
+pub(in crate::app) struct AgentLoopConfig {
+    pub graph: SharedGraph,
+    pub provider: Arc<dyn LlmProvider>,
     pub model: String,
     pub max_tokens: u32,
     pub max_context_tokens: u32,
     pub max_tool_loop_iterations: usize,
     pub tools: Vec<ToolDefinition>,
+    pub entry_mode: AgentEntryMode,
+    /// The anchor node ID (user message or question ID).
+    pub anchor_id: Uuid,
+    pub agent_id: Uuid,
 }
 
 /// Spawn the agent loop as a background task.
-pub(super) fn spawn_agent_loop(
-    graph: SharedGraph,
-    provider: Arc<dyn LlmProvider>,
+pub(in crate::app) fn spawn_agent_loop(
     config: AgentLoopConfig,
-    user_msg_id: Uuid,
     task_tx: mpsc::UnboundedSender<TaskMessage>,
     tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
     cancel_token: CancellationToken,
 ) {
+    let entry_mode = config.entry_mode.clone();
+    let agent_id = config.agent_id;
+    let ctx = AgentContext { agent_id, task_tx };
+    let graph = Arc::clone(&config.graph);
+    let provider = Arc::clone(&config.provider);
+    let anchor_id = config.anchor_id;
     tokio::spawn(async move {
         let result = run_agent_loop(
             &graph,
             provider,
             config,
-            user_msg_id,
-            &task_tx,
+            anchor_id,
+            &ctx,
             tool_result_rx,
             cancel_token,
         )
         .await;
-        if let Err(e) = result {
-            let _ = task_tx.send(TaskMessage::Agent(AgentEvent::Error(e.to_string())));
+        if let Err(e) = &result {
+            ctx.send(AgentEvent::Error(e.to_string()));
         }
-        let _ = task_tx.send(TaskMessage::Agent(AgentEvent::Finished));
+        // If answering a question, create the Answer node from the last assistant message.
+        if let AgentEntryMode::AnswerQuestion { question_id } = entry_mode {
+            if result.is_ok() {
+                let mut g = graph.write();
+                let answer_text = g
+                    .get_branch_history(g.active_branch())
+                    .unwrap_or_default()
+                    .iter()
+                    .rev()
+                    .find_map(|n| match n {
+                        Node::Message {
+                            role: Role::Assistant,
+                            content,
+                            ..
+                        } => Some(content.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "No answer produced.".to_string());
+                let _ = g.add_answer(question_id, answer_text);
+            }
+        }
+        ctx.send(AgentEvent::Finished);
     });
 }
 
 /// Max times we auto-continue when the LLM hits `max_tokens`.
 const MAX_CONTINUATIONS: u32 = 3;
 
+use crate::tasks::TaskMessage;
+
 async fn run_agent_loop(
     graph: &SharedGraph,
     provider: Arc<dyn LlmProvider>,
     config: AgentLoopConfig,
     user_msg_id: Uuid,
-    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    ctx: &AgentContext,
     mut tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
     cancel_token: CancellationToken,
 ) -> anyhow::Result<()> {
@@ -70,7 +118,7 @@ async fn run_agent_loop(
         Arc::clone(&provider),
         config.model.clone(),
         user_msg_id,
-        task_tx.clone(),
+        ctx,
     );
 
     let chat_config = ChatConfig {
@@ -84,15 +132,11 @@ async fn run_agent_loop(
 
     for _ in 0..config.max_tool_loop_iterations {
         let ctx_phase = Uuid::new_v4();
-        send(
-            task_tx,
-            AgentEvent::Progress {
-                phase_id: ctx_phase,
-                phase: AgentPhase::BuildingContext,
-            },
-        );
+        ctx.send(AgentEvent::Progress {
+            phase_id: ctx_phase,
+            phase: AgentPhase::BuildingContext,
+        });
 
-        // Read graph under lock, then release before async token counting.
         let (system_prompt, messages) = {
             let g = graph.read();
             context::extract_messages(&g, &config.tools)
@@ -107,12 +151,9 @@ async fn run_agent_loop(
         )
         .await?;
 
-        send(
-            task_tx,
-            AgentEvent::PhaseCompleted {
-                phase_id: ctx_phase,
-            },
-        );
+        ctx.send(AgentEvent::PhaseCompleted {
+            phase_id: ctx_phase,
+        });
 
         let loop_config = ChatConfig {
             system_prompt,
@@ -123,20 +164,20 @@ async fn run_agent_loop(
             &provider,
             messages,
             &loop_config,
-            task_tx,
+            ctx,
             &cancel_token,
         )
         .await?;
 
         if let Some(recv_id) = result.recv_phase_id {
-            send(task_tx, AgentEvent::PhaseCompleted { phase_id: recv_id });
+            ctx.send(AgentEvent::PhaseCompleted { phase_id: recv_id });
         }
 
         if result.cancelled || (result.response.is_empty() && result.tool_use_records.is_empty()) {
             break;
         }
 
-        let assistant_id = apply_iteration_to_graph(graph, &result, &loop_config, task_tx)?;
+        let assistant_id = apply_iteration_to_graph(graph, &result, &loop_config, ctx)?;
 
         let is_tool_use =
             result.stop_reason == Some(StopReason::ToolUse) && !result.tool_use_records.is_empty();
@@ -145,10 +186,9 @@ async fn run_agent_loop(
         if is_truncated {
             continuation_count += 1;
             if continuation_count > MAX_CONTINUATIONS {
-                send(
-                    task_tx,
-                    AgentEvent::Error("Max continuations reached after repeated truncation".into()),
-                );
+                ctx.send(AgentEvent::Error(
+                    "Max continuations reached after repeated truncation".into(),
+                ));
                 break;
             }
         } else {
@@ -158,14 +198,13 @@ async fn run_agent_loop(
         if is_tool_use {
             // Execute tool calls and wait for results before next iteration.
         } else if is_truncated {
-            // Auto-continue: skip tool dispatch, loop directly to next iteration.
             continue;
         } else {
             break;
         }
 
         let timed_out =
-            dispatch_and_wait_for_tools(graph, &result, assistant_id, &mut tool_result_rx, task_tx)
+            dispatch_and_wait_for_tools(graph, &result, assistant_id, &mut tool_result_rx, ctx)
                 .await;
 
         if timed_out {
@@ -176,24 +215,26 @@ async fn run_agent_loop(
     Ok(())
 }
 
-/// Spawn token counting as a fire-and-forget task. Runs concurrently with context building.
+/// Spawn token counting as a fire-and-forget task.
 fn spawn_count_user_tokens(
     graph: SharedGraph,
     provider: Arc<dyn LlmProvider>,
     model: String,
     user_msg_id: Uuid,
-    task_tx: mpsc::UnboundedSender<TaskMessage>,
+    ctx: &AgentContext,
 ) {
+    let ctx_tx = ctx.task_tx.clone();
+    let ctx_id = ctx.agent_id;
     tokio::spawn(async move {
+        let fire_ctx = AgentContext {
+            agent_id: ctx_id,
+            task_tx: ctx_tx,
+        };
         let phase_id = Uuid::new_v4();
-        send(
-            &task_tx,
-            AgentEvent::Progress {
-                phase_id,
-                phase: AgentPhase::CountingTokens,
-            },
-        );
-        // Read the user message content under lock, then release before async API call.
+        fire_ctx.send(AgentEvent::Progress {
+            phase_id,
+            phase: AgentPhase::CountingTokens,
+        });
         let content = {
             let g = graph.read();
             if let Some(Node::Message { content, .. }) = g.node(user_msg_id) {
@@ -205,26 +246,22 @@ fn spawn_count_user_tokens(
         if let Some(content) = content {
             let msg = vec![ChatMessage::text(Role::User, &content)];
             if let Ok(count) = provider.count_tokens(&msg, &model, None, &[]).await {
-                send(
-                    &task_tx,
-                    AgentEvent::UserTokensCounted {
-                        node_id: user_msg_id,
-                        count,
-                    },
-                );
+                fire_ctx.send(AgentEvent::UserTokensCounted {
+                    node_id: user_msg_id,
+                    count,
+                });
             }
         }
-        send(&task_tx, AgentEvent::PhaseCompleted { phase_id });
+        fire_ctx.send(AgentEvent::PhaseCompleted { phase_id });
     });
 }
 
-/// Add the assistant response and think block to the shared graph,
-/// send `IterationCommitted` notification.
+/// Add the assistant response and think block to the shared graph.
 fn apply_iteration_to_graph(
     graph: &SharedGraph,
     result: &StreamResult,
     config: &ChatConfig,
-    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    ctx: &AgentContext,
 ) -> anyhow::Result<Uuid> {
     let assistant_id = Uuid::new_v4();
 
@@ -255,25 +292,21 @@ fn apply_iteration_to_graph(
         }
     }
 
-    send(
-        task_tx,
-        AgentEvent::IterationCommitted {
-            assistant_id,
-            stop_reason: result.stop_reason,
-        },
-    );
+    ctx.send(AgentEvent::IterationCommitted {
+        assistant_id,
+        stop_reason: result.stop_reason,
+    });
 
     Ok(assistant_id)
 }
 
-/// Add tool call nodes to the shared graph, send dispatch notifications,
-/// wait for results from the main loop.
+/// Add tool call nodes to the graph, send dispatch notifications, wait for results.
 async fn dispatch_and_wait_for_tools(
     graph: &SharedGraph,
     result: &StreamResult,
     assistant_id: Uuid,
     tool_result_rx: &mut mpsc::UnboundedReceiver<AgentToolResult>,
-    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    ctx: &AgentContext,
 ) -> bool {
     let mut pending_ids = HashSet::new();
     {
@@ -288,45 +321,33 @@ async fn dispatch_and_wait_for_tools(
             );
             pending_ids.insert(record.tool_call_id);
 
-            // Notify main loop to spawn executor (graph mutation already done).
-            send(
-                task_tx,
-                AgentEvent::ToolCallDispatched {
-                    tool_call_id: record.tool_call_id,
-                    arguments: args,
-                },
-            );
+            ctx.send(AgentEvent::ToolCallDispatched {
+                tool_call_id: record.tool_call_id,
+                arguments: args,
+            });
         }
     }
 
     let tools_phase = Uuid::new_v4();
-    send(
-        task_tx,
-        AgentEvent::Progress {
-            phase_id: tools_phase,
-            phase: AgentPhase::ExecutingTools {
-                count: pending_ids.len(),
-            },
+    ctx.send(AgentEvent::Progress {
+        phase_id: tools_phase,
+        phase: AgentPhase::ExecutingTools {
+            count: pending_ids.len(),
         },
-    );
+    });
 
-    let timed_out = wait_for_tool_results(&mut pending_ids, tool_result_rx, task_tx, graph).await;
-    send(
-        task_tx,
-        AgentEvent::PhaseCompleted {
-            phase_id: tools_phase,
-        },
-    );
+    let timed_out = wait_for_tool_results(&mut pending_ids, tool_result_rx, ctx, graph).await;
+    ctx.send(AgentEvent::PhaseCompleted {
+        phase_id: tools_phase,
+    });
     timed_out
 }
 
 /// Wait for all pending tool calls to complete. Returns `true` if timed out.
-/// The main loop updates the shared graph for each completion. The agent just
-/// tracks which calls are still pending.
 async fn wait_for_tool_results(
     pending_ids: &mut HashSet<Uuid>,
     tool_result_rx: &mut mpsc::UnboundedReceiver<AgentToolResult>,
-    task_tx: &mpsc::UnboundedSender<TaskMessage>,
+    ctx: &AgentContext,
     graph: &SharedGraph,
 ) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
@@ -334,12 +355,11 @@ async fn wait_for_tool_results(
     while !pending_ids.is_empty() {
         tokio::select! {
             Some(result) = tool_result_rx.recv() => {
-                // Main loop already updated the shared graph.
                 pending_ids.remove(&result.tool_call_id);
             }
             () = tokio::time::sleep_until(deadline) => {
                 timeout_pending_tools(graph, pending_ids);
-                send(task_tx, AgentEvent::Error("Tool call(s) timed out".into()));
+                ctx.send(AgentEvent::Error("Tool call(s) timed out".into()));
                 return true;
             }
         }
@@ -349,11 +369,9 @@ async fn wait_for_tool_results(
 }
 
 /// Write timeout results to the shared graph for tools that didn't complete in time.
-/// Checks current status to avoid overwriting tools the main loop already completed.
 fn timeout_pending_tools(graph: &SharedGraph, pending_ids: &mut HashSet<Uuid>) {
     let mut g = graph.write();
     for tc_id in pending_ids.drain() {
-        // Don't overwrite if the main loop already completed this tool.
         if let Some(Node::ToolCall { status, .. }) = g.node(tc_id) {
             if *status == ToolCallStatus::Completed || *status == ToolCallStatus::Failed {
                 continue;

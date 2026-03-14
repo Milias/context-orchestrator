@@ -1,16 +1,18 @@
-mod agent_loop;
-mod agent_streaming;
+mod agent;
 mod context;
+mod coordination;
 mod plan;
+mod qa;
 mod task_handler;
 mod think_splitter;
 
 use crate::config::AppConfig;
+use crate::graph::event::GraphEvent;
 use crate::graph::{ConversationGraph, Node, Role};
 use crate::llm::LlmProvider;
 use crate::persistence::{self, ConversationMetadata};
 use crate::storage::TokenStore;
-use crate::tasks::{self, AgentToolResult, TaskMessage};
+use crate::tasks::{self, TaskMessage};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
 use crate::tui::{self, AgentDisplayState, AnimatedCounter, TuiState};
@@ -19,11 +21,9 @@ use chrono::Utc;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// Shared graph type — single source of truth for the conversation graph.
@@ -38,20 +38,15 @@ pub struct App {
     tui_state: TuiState,
     task_rx: mpsc::UnboundedReceiver<TaskMessage>,
     task_tx: mpsc::UnboundedSender<TaskMessage>,
-    /// Sender for forwarding tool completions to the running agent.
-    agent_tool_tx: Option<mpsc::UnboundedSender<AgentToolResult>>,
-    /// Root cancellation token for the running agent. Cancelling this propagates
-    /// to all child tokens (tool executions, streaming retries).
-    cancel_token: Option<CancellationToken>,
-    /// Per-task cancellation tokens, keyed by `tool_call_id`. Child tokens of
-    /// `cancel_token` — cancelling the parent propagates to all children.
-    task_tokens: HashMap<Uuid, CancellationToken>,
-    /// Node IDs of currently running agent phases (`BackgroundTask` nodes).
-    /// Multiple phases can be active simultaneously (e.g. token counting + context building).
-    active_phase_ids: HashSet<Uuid>,
+    /// Registry of all active agent loops. Owns routing, cancellation, phase tracking.
+    agents: agent::AgentRegistry,
     /// Async analytics store for persistent token tracking.
-    /// `None` if the analytics DB could not be opened (non-fatal).
     token_store: Option<TokenStore>,
+    /// Receiver for graph events broadcast by the `EventBus`.
+    event_rx: Option<tokio::sync::broadcast::Receiver<GraphEvent>>,
+    /// Question currently shown to the user for answering. `None` if no
+    /// user-destined question is pending.
+    pending_user_question: Option<Uuid>,
 }
 
 impl App {
@@ -71,12 +66,31 @@ impl App {
             tui_state: TuiState::new(),
             task_rx,
             task_tx,
-            agent_tool_tx: None,
-            cancel_token: None,
-            task_tokens: HashMap::new(),
-            active_phase_ids: HashSet::new(),
+            agents: agent::AgentRegistry::new(),
             token_store,
+            event_rx: None,
+            pending_user_question: None,
         }
+    }
+
+    /// Initialize graph state, event bus, and background tasks.
+    fn startup(&mut self) {
+        let mut g = self.graph.write();
+        g.expire_stale_tasks();
+        g.release_all_claims();
+        self.event_rx = Some(g.init_event_bus());
+        drop(g);
+
+        tasks::spawn_git_watcher(self.task_tx.clone());
+        tasks::spawn_tool_discovery(self.task_tx.clone());
+        tasks::spawn_context_summarization(self.task_tx.clone());
+    }
+
+    /// Cancel agent, stop tasks, save graph.
+    fn shutdown(&mut self) {
+        self.agents.cancel_all();
+        self.graph.write().stop_running_tasks();
+        let _ = self.save();
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
@@ -89,13 +103,7 @@ impl App {
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
-        // Stale Running tasks from a previous crash → mark as Failed
-        self.graph.write().expire_stale_tasks();
-
-        // Spawn background tasks
-        tasks::spawn_git_watcher(self.task_tx.clone());
-        tasks::spawn_tool_discovery(self.task_tx.clone());
-        tasks::spawn_context_summarization(self.task_tx.clone());
+        self.startup();
 
         {
             let g = self.graph.read();
@@ -118,39 +126,24 @@ impl App {
                             let g = self.graph.read();
                             input::handle_key_event(key, &mut self.tui_state, &g)
                         };
-                        match action {
-                            Action::Quit => {
-                                if let Some(ref token) = self.cancel_token {
-                                    token.cancel();
-                                }
-                                self.agent_tool_tx = None;
-                                self.graph.write().stop_running_tasks();
-                                self.save()?;
-                                break;
-                            }
-                            Action::SendMessage(text) => {
-                                if agent_active {
-                                    self.tui_state.input_text = text;
-                                    self.tui_state.input_cursor =
-                                        self.tui_state.input_text.chars().count();
-                                } else {
-                                    self.handle_send_message(text)?;
-                                }
-                            }
-                            Action::ScrollUp | Action::ScrollDown
-                            | Action::PageUp | Action::PageDown => {
-                                let page = terminal.size()?.height / 2;
-                                self.handle_scroll(&action, page);
-                            }
-                            Action::CancelTask(id) => {
-                                self.cancel_task(id);
-                            }
-                            Action::None => {}
-                        }
+                        let page = terminal.size().map(|s| s.height / 2).unwrap_or(20);
+                        self.handle_action(action, agent_active, page)?;
                     }
                 }
                 Some(task_msg) = self.task_rx.recv() => {
                     self.handle_task_message(task_msg);
+                }
+                // Graph event subscriber — decoupled reactions to graph mutations.
+                result = async {
+                    if let Some(ref mut rx) = self.event_rx {
+                        rx.recv().await
+                    } else {
+                        std::future::pending().await
+                    }
+                } => {
+                    if let Ok(ref event) = result {
+                        self.handle_graph_event(event);
+                    }
                 }
                 _ = spinner_interval.tick(), if agent_active || animating => {
                     if let Some(ref mut display) = self.tui_state.agent_display {
@@ -166,12 +159,7 @@ impl App {
                     self.tui_state.token_usage.tick();
                 }
                 _ = sigterm.recv() => {
-                    if let Some(ref token) = self.cancel_token {
-                        token.cancel();
-                    }
-                    self.agent_tool_tx = None;
-                    self.graph.write().stop_running_tasks();
-                    let _ = self.save();
+                    self.shutdown();
                     break;
                 }
             }
@@ -186,8 +174,42 @@ impl App {
         Ok(())
     }
 
-    /// Apply a scroll action, switching to manual mode and snapping the reveal
-    /// cursor when scrolling upward so the user doesn't see a trailing animation.
+    /// Dispatch a user action from the input handler.
+    /// Dispatch a user action from the input handler.
+    fn handle_action(
+        &mut self,
+        action: Action,
+        agent_active: bool,
+        page_size: u16,
+    ) -> anyhow::Result<()> {
+        match action {
+            Action::Quit => {
+                self.shutdown();
+                self.tui_state.should_quit = true;
+            }
+            Action::SendMessage(text) => {
+                // If a user question is pending, treat the message as an answer.
+                if let Some(q_id) = self.pending_user_question.take() {
+                    self.handle_user_answer(q_id, text);
+                } else if agent_active {
+                    self.tui_state.input_text = text;
+                    self.tui_state.input_cursor = self.tui_state.input_text.chars().count();
+                } else {
+                    self.handle_send_message(text)?;
+                }
+            }
+            Action::ScrollUp | Action::ScrollDown | Action::PageUp | Action::PageDown => {
+                self.handle_scroll(&action, page_size);
+            }
+            Action::CancelTask(id) => {
+                self.cancel_task(id);
+            }
+            Action::None => {}
+        }
+        Ok(())
+    }
+
+    /// Apply a scroll action.
     fn handle_scroll(&mut self, action: &Action, page_size: u16) {
         self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
         let going_up = matches!(action, Action::ScrollUp | Action::PageUp);
@@ -230,42 +252,36 @@ impl App {
 
         self.dispatch_user_triggers(&trigger_text, user_msg_id);
 
-        // Set UI state for immediate feedback
         self.tui_state.agent_display = Some(AgentDisplayState::default());
         self.tui_state.status_message = Some("Counting tokens...".to_string());
         self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
         self.tui_state.scroll_offset = u16::MAX;
 
-        // Create channels and cancellation for agent ↔ main loop communication
-        let (agent_tool_tx, agent_tool_rx) = mpsc::unbounded_channel();
-        let cancel_token = CancellationToken::new();
-        self.agent_tool_tx = Some(agent_tool_tx);
-        self.cancel_token = Some(cancel_token.clone());
-        self.task_tokens.clear();
+        let agent_id = Uuid::new_v4();
+        let (tool_rx, cancel_token) = self
+            .agents
+            .register(agent_id, agent::AgentEntryMode::UserMessage);
+        self.agents.primary_agent_id = Some(agent_id);
 
-        let loop_config = agent_loop::AgentLoopConfig {
+        let loop_config = agent::AgentLoopConfig {
+            graph: Arc::clone(&self.graph),
+            provider: Arc::clone(&self.provider),
             model: self.config.anthropic_model.clone(),
             max_tokens: self.config.max_tokens,
             max_context_tokens: self.config.max_context_tokens,
             max_tool_loop_iterations: self.config.max_tool_loop_iterations,
             tools: crate::tool_executor::registered_tool_definitions(),
+            entry_mode: agent::AgentEntryMode::UserMessage,
+            anchor_id: user_msg_id,
+            agent_id,
         };
 
-        agent_loop::spawn_agent_loop(
-            Arc::clone(&self.graph),
-            Arc::clone(&self.provider),
-            loop_config,
-            user_msg_id,
-            self.task_tx.clone(),
-            agent_tool_rx,
-            cancel_token,
-        );
+        agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
 
         Ok(())
     }
 
     /// Dispatch user triggers through the same pipeline as LLM tool calls.
-    /// All triggers go through `handle_tool_call_dispatched` → `spawn_tool_execution` → `ToolCallCompleted`.
     fn dispatch_user_triggers(&mut self, text: &str, user_msg_id: Uuid) {
         for trigger in crate::tools::parse_triggers(text) {
             let args = crate::tools::parse_user_trigger_args(&trigger.tool_name, &trigger.args);
@@ -275,8 +291,6 @@ impl App {
     }
 
     /// Seed the status-bar token counters from the analytics DB.
-    /// Sets both `current` and `target` to the same value so there is
-    /// no counting animation on startup.
     async fn seed_token_usage(&mut self) {
         let Some(ref store) = self.token_store else {
             return;

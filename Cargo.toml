@@ -28,6 +28,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 parking_lot = "0.12"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio-rusqlite = "0.6"
+tracing = "0.1.44"
 
 [lints.clippy]
 pedantic = { level = "deny", priority = -1 }

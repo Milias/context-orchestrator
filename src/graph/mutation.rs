@@ -35,6 +35,11 @@ impl ConversationGraph {
         new_status: ToolCallStatus,
         completed_at: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {
+        let is_failed = new_status == ToolCallStatus::Failed;
+        let is_terminal = matches!(
+            new_status,
+            ToolCallStatus::Completed | ToolCallStatus::Failed
+        );
         self.mutate_node(id, |node| match node {
             Node::ToolCall {
                 status,
@@ -46,7 +51,14 @@ impl ConversationGraph {
                 Ok(())
             }
             _ => anyhow::bail!("Node {id} is not a ToolCall"),
-        })
+        })?;
+        if is_terminal {
+            self.emit(super::event::GraphEvent::ToolCallCompleted {
+                node_id: id,
+                is_error: is_failed,
+            });
+        }
+        Ok(())
     }
 
     /// Update the status, description, and `updated_at` of a `BackgroundTask`.
@@ -135,6 +147,7 @@ impl ConversationGraph {
         id: Uuid,
         new_status: WorkItemStatus,
     ) -> anyhow::Result<()> {
+        let status_for_event = new_status.clone();
         self.mutate_node(id, |node| match node {
             Node::WorkItem { status, .. } => {
                 *status = new_status;
@@ -142,6 +155,10 @@ impl ConversationGraph {
             }
             _ => anyhow::bail!("Node {id} is not a WorkItem"),
         })?;
+        self.emit(super::event::GraphEvent::WorkItemStatusChanged {
+            node_id: id,
+            new_status: status_for_event,
+        });
         self.propagate_status(id);
         Ok(())
     }
@@ -244,6 +261,94 @@ impl ConversationGraph {
         let _ = self.add_edge(id, parent_message_id, EdgeKind::Invoked);
         let _ = self.update_tool_call_status(id, ToolCallStatus::Running, None);
         id
+    }
+
+    /// Transition a `Question` node's status, validating the state machine.
+    /// Captures a version snapshot before the mutation.
+    ///
+    /// See `QuestionStatus` for valid transitions.
+    pub fn update_question_status(
+        &mut self,
+        id: Uuid,
+        new_status: super::node::QuestionStatus,
+    ) -> anyhow::Result<()> {
+        use super::node::QuestionStatus;
+        self.mutate_node(id, |node| match node {
+            Node::Question { status, .. } => {
+                let valid = matches!(
+                    (*status, new_status),
+                    (
+                        QuestionStatus::Pending,
+                        QuestionStatus::Claimed | QuestionStatus::TimedOut
+                    ) | (
+                        QuestionStatus::Claimed,
+                        QuestionStatus::Answered | QuestionStatus::PendingApproval
+                    ) | (
+                        QuestionStatus::PendingApproval,
+                        QuestionStatus::Answered | QuestionStatus::Rejected
+                    ) | (QuestionStatus::Rejected, QuestionStatus::Pending)
+                );
+                if !valid {
+                    anyhow::bail!(
+                        "Invalid question status transition: {status:?} → {new_status:?}"
+                    );
+                }
+                *status = new_status;
+                Ok(())
+            }
+            _ => anyhow::bail!("Node {id} is not a Question"),
+        })?;
+        self.emit(super::event::GraphEvent::QuestionStatusChanged {
+            node_id: id,
+            new_status,
+        });
+        Ok(())
+    }
+
+    /// Create an `Answer` node wired to its `Question` via an `Answers` edge.
+    /// Transitions the question to `Answered` (or `PendingApproval` if `requires_approval`).
+    pub fn add_answer(&mut self, question_id: Uuid, content: String) -> anyhow::Result<Uuid> {
+        use super::node::QuestionStatus;
+        let requires_approval = match self.node(question_id) {
+            Some(Node::Question {
+                requires_approval,
+                status,
+                ..
+            }) => {
+                // Only Claimed questions can receive answers.
+                if *status != QuestionStatus::Claimed {
+                    anyhow::bail!("Question {question_id} is not in Claimed state (is {status:?})");
+                }
+                *requires_approval
+            }
+            _ => anyhow::bail!("Node {question_id} is not a Question"),
+        };
+
+        let answer_id = Uuid::new_v4();
+        let answer = Node::Answer {
+            id: answer_id,
+            content,
+            question_id,
+            created_at: Utc::now(),
+        };
+        self.add_node(answer);
+        let _ = self.add_edge(answer_id, question_id, EdgeKind::Answers);
+
+        let target_status = if requires_approval {
+            QuestionStatus::PendingApproval
+        } else {
+            QuestionStatus::Answered
+        };
+        self.update_question_status(question_id, target_status)?;
+
+        if target_status == super::node::QuestionStatus::Answered {
+            self.emit(super::event::GraphEvent::QuestionAnswered {
+                question_id,
+                answer_id,
+            });
+        }
+
+        Ok(answer_id)
     }
 
     /// Add a `ToolResult` node linked to its tool call via `Produced` edge.

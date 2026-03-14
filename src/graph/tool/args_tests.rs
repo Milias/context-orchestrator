@@ -1,6 +1,5 @@
-use crate::graph::tool_types::{
-    parse_tool_arguments, ImageSource, ToolCallArguments, ToolResultContent, ToolResultContentBlock,
-};
+use crate::graph::tool::result::{ImageSource, ToolResultContent, ToolResultContentBlock};
+use crate::graph::tool::types::{parse_tool_arguments, ToolCallArguments};
 
 /// Catches `ToolCallArguments` tag discrimination failures across variants.
 /// Each variant must serialize with a unique `tool_type` discriminant.

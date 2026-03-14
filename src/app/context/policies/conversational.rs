@@ -1,13 +1,17 @@
+//! Conversational context policy — interactive chat with the user.
+//!
+//! Anchors on the active branch leaf, walks `RespondsTo` ancestors, includes
+//! all messages verbatim. Produces identical output to the original
+//! `extract_messages()` function (behavioral equivalence).
+
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
-use crate::llm::{ChatContent, ChatMessage, ContentBlock, LlmProvider, RawJson, ToolDefinition};
+use crate::llm::{ChatContent, ChatMessage, ContentBlock, RawJson};
+use uuid::Uuid;
 
-/// Extract messages from the conversation graph. Synchronous — no API calls.
-/// Caller should hold a read lock on the shared graph while calling this.
-pub(super) fn extract_messages(
-    graph: &ConversationGraph,
-    _tools: &[ToolDefinition],
-) -> (Option<String>, Vec<ChatMessage>) {
+/// Build the full message list from the graph, matching the original
+/// `extract_messages()` output exactly. Includes plan section injection.
+pub fn build_messages(graph: &ConversationGraph) -> (Option<String>, Vec<ChatMessage>) {
     let history = graph
         .get_branch_history(graph.active_branch())
         .unwrap_or_default();
@@ -40,12 +44,14 @@ pub(super) fn extract_messages(
             | Node::BackgroundTask { .. }
             | Node::ThinkBlock { .. }
             | Node::ToolCall { .. }
-            | Node::ToolResult { .. } => {}
+            | Node::ToolResult { .. }
+            | Node::Question { .. }
+            | Node::Answer { .. } => {}
         }
     }
 
     // Inject active plan context into the system prompt.
-    if let Some(plan_section) = super::plan::context::build_plan_section(graph) {
+    if let Some(plan_section) = crate::app::plan::context::build_plan_section(graph) {
         let prompt = system_prompt.get_or_insert_with(String::new);
         prompt.push_str("\n\n");
         prompt.push_str(&plan_section);
@@ -54,35 +60,11 @@ pub(super) fn extract_messages(
     (system_prompt, messages)
 }
 
-/// Count tokens and truncate messages if needed. Async — calls the LLM provider API.
-/// Must NOT hold any graph lock while calling this.
-pub(super) async fn finalize_context(
-    system_prompt: Option<String>,
-    mut messages: Vec<ChatMessage>,
-    provider: &dyn LlmProvider,
-    model: &str,
-    max_context_tokens: u32,
-    tools: &[ToolDefinition],
-) -> anyhow::Result<(Option<String>, Vec<ChatMessage>)> {
-    let token_count = provider
-        .count_tokens(&messages, model, system_prompt.as_deref(), tools)
-        .await
-        .unwrap_or_default();
-
-    if token_count > max_context_tokens {
-        truncate_messages(&mut messages, max_context_tokens, token_count);
-    }
-
-    sanitize_message_boundaries(&mut messages);
-
-    Ok((system_prompt, messages))
-}
-
 /// Build assistant `ChatMessage` with `ToolUse` blocks and any following
 /// user `ToolResult` messages. Ensures Anthropic API tool call/result pairing.
-pub(super) fn build_assistant_message_with_tools(
+fn build_assistant_message_with_tools(
     graph: &ConversationGraph,
-    message_id: uuid::Uuid,
+    message_id: Uuid,
     text_content: &str,
 ) -> (ChatMessage, Vec<ChatMessage>) {
     let tool_call_ids = graph.sources_by_edge(message_id, EdgeKind::Invoked);
@@ -147,60 +129,4 @@ pub(super) fn build_assistant_message_with_tools(
         content: ChatContent::Blocks(result_blocks),
     };
     (asst, vec![results])
-}
-
-fn truncate_messages(messages: &mut Vec<ChatMessage>, max_tokens: u32, token_count: u32) {
-    let total_chars: usize = messages.iter().map(|m| m.content.char_len()).sum();
-    let ratio = f64::from(max_tokens) / f64::from(token_count);
-    // Truncation/sign-loss/precision-loss are acceptable here: total_chars and ratio
-    // are both non-negative and the result fits comfortably in usize for any realistic
-    // conversation size.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss
-    )]
-    let target_chars = (total_chars as f64 * ratio) as usize;
-
-    let mut current_chars = total_chars;
-    let mut remove_count = 0;
-    while current_chars > target_chars && remove_count < messages.len() - 1 {
-        current_chars -= messages[remove_count].content.char_len();
-        remove_count += 1;
-    }
-    if remove_count > 0 {
-        messages.drain(0..remove_count);
-    }
-}
-
-fn sanitize_message_boundaries(messages: &mut Vec<ChatMessage>) {
-    // Drop orphaned tool_result user messages at the front after truncation.
-    while messages.len() > 1 && messages[0].role == Role::User {
-        let all_results = matches!(&messages[0].content,
-            ChatContent::Blocks(b) if b.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. })));
-        if all_results {
-            messages.remove(0);
-        } else {
-            break;
-        }
-    }
-
-    // Drop leading assistant messages — API requires conversation start with user.
-    while messages.len() > 1 && messages[0].role == Role::Assistant {
-        messages.remove(0);
-    }
-
-    // Drop trailing assistant messages with tool_use blocks that lack a following tool_result.
-    while messages.len() > 1 {
-        let dominated = messages.last().is_some_and(|last| {
-            last.role == Role::Assistant
-                && matches!(&last.content,
-                    ChatContent::Blocks(b) if b.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })))
-        });
-        if dominated {
-            messages.pop();
-        } else {
-            break;
-        }
-    }
 }

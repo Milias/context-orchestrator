@@ -1,7 +1,6 @@
 use super::*;
-use crate::graph::tool_types::{
-    ImageSource, ToolCallArguments, ToolCallStatus, ToolResultContent, ToolResultContentBlock,
-};
+use crate::graph::tool::result::{ImageSource, ToolResultContent, ToolResultContentBlock};
+use crate::graph::tool::types::{ToolCallArguments, ToolCallStatus};
 use crate::graph::{ConversationGraph, EdgeKind, Node};
 
 #[test]

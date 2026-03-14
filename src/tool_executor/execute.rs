@@ -6,6 +6,7 @@
 
 use super::list_directory;
 use super::plan_tools;
+use super::qa_tools;
 use super::read_file;
 use super::search_files;
 use super::write_file;
@@ -91,6 +92,7 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
         ToolCallArguments::SearchFiles { pattern, path } => {
             search_files::execute(pattern, path.as_deref()).await
         }
+        ToolCallArguments::Ask { question, .. } => qa_tools::execute_ask(question),
         ToolCallArguments::WebSearch { query } => ToolExecutionResult {
             content: ToolResultContent::text(format!(
                 "web_search not yet implemented (query: {query})"

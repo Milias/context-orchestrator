@@ -112,7 +112,10 @@ pub enum TaskMessage {
         content: ToolResultContent,
         is_error: bool,
     },
-    Agent(AgentEvent),
+    Agent {
+        agent_id: Uuid,
+        event: AgentEvent,
+    },
     /// Fresh lifetime token totals from the analytics DB.
     TokenTotalsUpdated(TokenTotals),
     /// Non-fatal analytics error to display in the status bar.

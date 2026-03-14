@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::WorkItemStatus;
+use super::super::WorkItemStatus;
+
+// Re-export from result.rs so existing `tool_types::ToolResultContent` imports keep working.
+pub use super::result::ToolResultContent;
 
 // ── ToolName ─────────────────────────────────────────────────────────
 
@@ -19,22 +22,37 @@ pub enum ToolName {
     SearchFiles,
     WebSearch,
     Set,
+    Ask,
 }
 
 impl ToolName {
+    // Wire names (single source of truth for string literals).
+    const PLAN: &str = "plan";
+    const ADD_TASK: &str = "add_task";
+    const UPDATE_WORK_ITEM: &str = "update_work_item";
+    const ADD_DEPENDENCY: &str = "add_dependency";
+    const READ_FILE: &str = "read_file";
+    const WRITE_FILE: &str = "write_file";
+    const LIST_DIRECTORY: &str = "list_directory";
+    const SEARCH_FILES: &str = "search_files";
+    const WEB_SEARCH: &str = "web_search";
+    const SET: &str = "set";
+    const ASK: &str = "ask";
+
     /// Wire name as it appears in the API, triggers, and registry.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Plan => "plan",
-            Self::AddTask => "add_task",
-            Self::UpdateWorkItem => "update_work_item",
-            Self::AddDependency => "add_dependency",
-            Self::ReadFile => "read_file",
-            Self::WriteFile => "write_file",
-            Self::ListDirectory => "list_directory",
-            Self::SearchFiles => "search_files",
-            Self::WebSearch => "web_search",
-            Self::Set => "set",
+            Self::Plan => Self::PLAN,
+            Self::AddTask => Self::ADD_TASK,
+            Self::UpdateWorkItem => Self::UPDATE_WORK_ITEM,
+            Self::AddDependency => Self::ADD_DEPENDENCY,
+            Self::ReadFile => Self::READ_FILE,
+            Self::WriteFile => Self::WRITE_FILE,
+            Self::ListDirectory => Self::LIST_DIRECTORY,
+            Self::SearchFiles => Self::SEARCH_FILES,
+            Self::WebSearch => Self::WEB_SEARCH,
+            Self::Set => Self::SET,
+            Self::Ask => Self::ASK,
         }
     }
 
@@ -52,22 +70,24 @@ impl ToolName {
             Self::SearchFiles => "SearchFiles",
             Self::WebSearch => "WebSearch",
             Self::Set => "Set",
+            Self::Ask => "Ask",
         }
     }
 
     /// Parse a wire name into a `ToolName`, if recognized.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "plan" => Some(Self::Plan),
-            "add_task" => Some(Self::AddTask),
-            "update_work_item" => Some(Self::UpdateWorkItem),
-            "add_dependency" => Some(Self::AddDependency),
-            "read_file" => Some(Self::ReadFile),
-            "write_file" => Some(Self::WriteFile),
-            "list_directory" => Some(Self::ListDirectory),
-            "search_files" => Some(Self::SearchFiles),
-            "web_search" => Some(Self::WebSearch),
-            "set" => Some(Self::Set),
+            Self::PLAN => Some(Self::Plan),
+            Self::ADD_TASK => Some(Self::AddTask),
+            Self::UPDATE_WORK_ITEM => Some(Self::UpdateWorkItem),
+            Self::ADD_DEPENDENCY => Some(Self::AddDependency),
+            Self::READ_FILE => Some(Self::ReadFile),
+            Self::WRITE_FILE => Some(Self::WriteFile),
+            Self::LIST_DIRECTORY => Some(Self::ListDirectory),
+            Self::SEARCH_FILES => Some(Self::SearchFiles),
+            Self::WEB_SEARCH => Some(Self::WebSearch),
+            Self::SET => Some(Self::Set),
+            Self::ASK => Some(Self::Ask),
             _ => None,
         }
     }
@@ -137,6 +157,13 @@ pub enum ToolCallArguments {
         key: String,
         value: String,
     },
+    /// Ask a question routed to a backend (user, LLM, or auto).
+    Ask {
+        question: String,
+        destination: super::super::node::QuestionDestination,
+        about_node_id: Option<Uuid>,
+        requires_approval: Option<bool>,
+    },
     Unknown {
         tool_name: String,
         raw_json: String,
@@ -158,6 +185,7 @@ impl ToolCallArguments {
             Self::SearchFiles { .. } => ToolName::SearchFiles.as_str(),
             Self::WebSearch { .. } => ToolName::WebSearch.as_str(),
             Self::Set { .. } => ToolName::Set.as_str(),
+            Self::Ask { .. } => ToolName::Ask.as_str(),
             Self::Unknown { tool_name, .. } => tool_name,
         }
     }
@@ -188,6 +216,11 @@ impl ToolCallArguments {
             },
             Self::WebSearch { query } => format!("web_search: {query}"),
             Self::Set { key, value } => format!("set: {key}={value}"),
+            Self::Ask {
+                question,
+                destination,
+                ..
+            } => format!("ask ({destination:?}): {question}"),
             Self::Unknown {
                 tool_name,
                 raw_json,
@@ -234,91 +267,7 @@ impl ToolCallArguments {
     }
 }
 
-// ── Tool result content types ─────────────────────────────────────
-
-/// A content block within a structured tool result.
-///
-/// Currently supports `text` and `image` block types. The Anthropic API also
-/// defines `document`, `search_result`, and `tool_reference` types — these are
-/// not modeled here. Deserializing an unsupported block type will fail; this is
-/// acceptable because `ToolResultContent` is only constructed client-side and
-/// never deserialized from API responses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ToolResultContentBlock {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "image")]
-    Image { source: ImageSource },
-}
-
-/// Source data for an image content block.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ImageSource {
-    #[serde(rename = "base64")]
-    Base64 { media_type: String, data: String },
-}
-
-/// Tool result content: plain string or array of content blocks (text + images).
-/// Matches the Anthropic API `tool_result.content` format.
-///
-/// `#[serde(untagged)]` with `Text` first ensures existing V2 graphs with
-/// `"content": "string"` deserialize correctly — no migration needed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ToolResultContent {
-    Text(String),
-    Blocks(Vec<ToolResultContentBlock>),
-}
-
-impl ToolResultContent {
-    pub fn text(s: impl Into<String>) -> Self {
-        Self::Text(s.into())
-    }
-
-    /// Returns the first text block as `&str`, or `""` if there are no text blocks.
-    /// For `Blocks` with multiple `Text` entries, only the first is returned.
-    pub fn text_content(&self) -> &str {
-        match self {
-            Self::Text(s) => s,
-            Self::Blocks(blocks) => blocks
-                .iter()
-                .find_map(|b| match b {
-                    ToolResultContentBlock::Text { text } => Some(text.as_str()),
-                    ToolResultContentBlock::Image { .. } => None,
-                })
-                .unwrap_or(""),
-        }
-    }
-
-    /// Approximate byte length for token budget calculations.
-    /// For images, uses base64 data length as a rough proxy — actual API token
-    /// cost is dimension-based, but this suffices for heuristic context truncation
-    /// since precise counting is done via the `count_tokens` API endpoint.
-    pub fn char_len(&self) -> usize {
-        match self {
-            Self::Text(s) => s.len(),
-            Self::Blocks(blocks) => blocks
-                .iter()
-                .map(|b| match b {
-                    ToolResultContentBlock::Text { text } => text.len(),
-                    ToolResultContentBlock::Image { source } => match source {
-                        ImageSource::Base64 { data, .. } => data.len(),
-                    },
-                })
-                .sum(),
-        }
-    }
-
-    // User: accepatble use of #[cfg(test)].
-    #[cfg(test)]
-    pub fn has_images(&self) -> bool {
-        matches!(self, Self::Blocks(blocks) if blocks.iter().any(
-            |b| matches!(b, ToolResultContentBlock::Image { .. })
-        ))
-    }
-}
+// Tool result content types are in `tool_result.rs`.
 
 /// Parse raw JSON from an LLM `tool_use` response into a typed `ToolCallArguments`.
 ///

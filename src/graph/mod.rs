@@ -1,14 +1,21 @@
+mod coordination;
+pub mod event;
 pub mod history;
 mod mutation;
 pub mod node;
-pub mod tool_types;
+pub mod tool;
+
+/// Convenience alias: `graph::tool_types` → `graph::tool::types`.
+/// Preserves existing import paths across the codebase.
+pub use tool::types as tool_types;
 
 pub use history::NodeSnapshot;
 pub use node::{
     BackgroundTaskKind, Edge, EdgeKind, GitFileStatus, Node, Role, StopReason, TaskStatus,
     WorkItemKind, WorkItemStatus,
 };
-pub use tool_types::{parse_tool_arguments, ToolCallArguments, ToolResultContent};
+pub use tool::result::ToolResultContent;
+pub use tool::types::{parse_tool_arguments, ToolCallArguments};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -34,6 +41,10 @@ pub struct ConversationGraph {
     /// Runtime index: `ToolCall` id -> parent message id (from `Invoked` edges). Not serialized.
     #[serde(skip)]
     pub(super) invoked_by: HashMap<Uuid, Uuid>,
+    /// Event broadcast bus. Runtime-only (not serialized). `None` during tests
+    /// and deserialization; initialized at app startup via `set_event_bus`.
+    #[serde(skip)]
+    event_bus: Option<event::EventBus>,
 }
 
 /// Raw form for serde (no runtime indexes).
@@ -69,6 +80,7 @@ impl From<ConversationGraphRaw> for ConversationGraph {
             history: raw.history,
             responds_to,
             invoked_by,
+            event_bus: None,
         }
     }
 }
@@ -107,6 +119,23 @@ impl ConversationGraph {
             history: HashMap::new(),
             responds_to: HashMap::new(),
             invoked_by: HashMap::new(),
+            event_bus: None,
+        }
+    }
+
+    /// Initialize the event bus. Call once at app startup after loading/creating
+    /// the graph. Returns a receiver for subscribing to events.
+    pub fn init_event_bus(&mut self) -> tokio::sync::broadcast::Receiver<event::GraphEvent> {
+        let bus = event::EventBus::new();
+        let rx = bus.subscribe();
+        self.event_bus = Some(bus);
+        rx
+    }
+
+    /// Emit a graph event to all subscribers. No-op if the bus is not initialized.
+    pub(crate) fn emit(&self, event: event::GraphEvent) {
+        if let Some(bus) = &self.event_bus {
+            bus.emit(event);
         }
     }
 
@@ -117,6 +146,10 @@ impl ConversationGraph {
             anyhow::bail!("Parent node {parent_id} does not exist");
         }
         let id = node.id();
+        let role = match &node {
+            Node::Message { role, .. } => Some(*role),
+            _ => None,
+        };
         self.nodes.insert(id, node);
         self.edges.push(Edge {
             from: id,
@@ -125,22 +158,29 @@ impl ConversationGraph {
         });
         self.responds_to.insert(id, parent_id);
         self.branches.insert(self.active_branch.clone(), id);
+        if let Some(role) = role {
+            self.emit(event::GraphEvent::MessageAdded { node_id: id, role });
+        }
         Ok(id)
     }
 
-    /// Insert a node without any edges.
+    /// Insert a node without any edges. Does NOT emit events — callers that
+    /// create domain-significant nodes (`Question`, `WorkItem`) must emit the
+    /// appropriate `GraphEvent` themselves after calling this.
     pub fn add_node(&mut self, node: Node) -> Uuid {
         let id = node.id();
         self.nodes.insert(id, node);
         id
     }
 
-    /// Add a typed edge between two existing nodes.
+    /// Add a typed edge between two nodes. Both endpoints must exist in the graph,
+    /// except for `ClaimedBy` edges where `to` is an agent UUID (not a graph node).
     pub fn add_edge(&mut self, from: Uuid, to: Uuid, kind: EdgeKind) -> anyhow::Result<()> {
         if !self.nodes.contains_key(&from) {
             anyhow::bail!("Node {from} does not exist");
         }
-        if !self.nodes.contains_key(&to) {
+        // ClaimedBy targets an agent UUID, not a graph node.
+        if kind != EdgeKind::ClaimedBy && !self.nodes.contains_key(&to) {
             anyhow::bail!("Node {to} does not exist");
         }
         match kind {
@@ -295,9 +335,9 @@ mod mutation_tests;
 mod history_tests;
 
 #[cfg(test)]
-#[path = "tool_types_tests.rs"]
-mod tool_types_tests;
+#[path = "question_tests.rs"]
+mod question_tests;
 
 #[cfg(test)]
-#[path = "tool_args_tests.rs"]
-mod tool_args_tests;
+#[path = "event_tests.rs"]
+mod event_tests;

@@ -51,7 +51,6 @@ fn apply_tool_call(
     let result = super::apply(graph, tc_id);
     result
         .expect("plan effect should return Some for plan tools")
-        .content
         .text_content()
         .to_string()
 }

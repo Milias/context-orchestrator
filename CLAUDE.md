@@ -27,7 +27,7 @@
   automatically convert struct fields into builder methods), or split into
   modules.
 - Files MUST be at most 400 lines. If a file grows beyond that, split it into
-  modules.
+  modules. Modules MAY be nested to keep the codebase organized.
 - Prefer nested modules over flat structure when names share a prefix (e.g.
   `plan_effects.rs` + `plan_context.rs` → `plan/effects.rs` + `plan/context.rs`).
 - Tests MUST be in a separate file: `tests.rs` if the source is a module
@@ -45,6 +45,8 @@
   comments: `//` or `///`.
 - EVERY test must answer the question "what bug does this test catch?" If there
   isn't a valid answer, especially if it is low effort, remove the test.
+- Repeated strings MUST be converted to `const &str` part of the `impl` block
+  and be reused.
 
 # Planning
 
