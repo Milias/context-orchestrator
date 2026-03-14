@@ -31,6 +31,9 @@ struct AgentHandle {
     task_tokens: HashMap<Uuid, CancellationToken>,
     /// Node IDs of currently active `BackgroundTask` (phase) nodes.
     active_phase_ids: HashSet<Uuid>,
+    /// Working directory for file operations (git worktree path for task agents,
+    /// `None` for conversational agents using process CWD).
+    working_dir: Option<std::path::PathBuf>,
 }
 
 impl AgentRegistry {
@@ -48,10 +51,12 @@ impl AgentRegistry {
     }
 
     /// Register a new agent. Returns the tool-result receiver and cancellation
-    /// token for the agent loop to use.
+    /// token for the agent loop to use. `working_dir` is the git worktree path
+    /// for task agents (`None` for conversational agents).
     pub fn register(
         &mut self,
         agent_id: Uuid,
+        working_dir: Option<std::path::PathBuf>,
     ) -> (mpsc::UnboundedReceiver<AgentToolResult>, CancellationToken) {
         let (tx, rx) = mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
@@ -62,9 +67,17 @@ impl AgentRegistry {
                 cancel_token: cancel_token.clone(),
                 task_tokens: HashMap::new(),
                 active_phase_ids: HashSet::new(),
+                working_dir,
             },
         );
         (rx, cancel_token)
+    }
+
+    /// Get the working directory for an agent's file operations.
+    pub fn working_dir(&self, agent_id: Uuid) -> Option<std::path::PathBuf> {
+        self.agents
+            .get(&agent_id)
+            .and_then(|h| h.working_dir.clone())
     }
 
     /// Record a tool call dispatched by a specific agent.

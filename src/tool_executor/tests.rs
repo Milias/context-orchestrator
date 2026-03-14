@@ -19,7 +19,7 @@ async fn test_read_file_returns_contents() {
     let args = ToolCallArguments::ReadFile {
         path: path.to_str().unwrap().to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     assert_eq!(result.content.text_content(), "hello world");
 }
@@ -29,7 +29,7 @@ async fn test_read_file_nonexistent_returns_error() {
     let args = ToolCallArguments::ReadFile {
         path: "nonexistent_file_abc123xyz.txt".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error);
     assert!(result.content.text_content().contains("Error"));
 }
@@ -39,7 +39,7 @@ async fn test_read_file_rejects_path_outside_cwd() {
     let args = ToolCallArguments::ReadFile {
         path: "/etc/passwd".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error);
     assert!(result
         .content
@@ -56,7 +56,7 @@ async fn test_read_file_truncates_large_files() {
     let args = ToolCallArguments::ReadFile {
         path: path.to_str().unwrap().to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     assert!(result
         .content
@@ -76,7 +76,7 @@ async fn test_spawn_execution_sends_completion() {
     let args = ToolCallArguments::ReadFile {
         path: path.to_str().unwrap().to_string(),
     };
-    spawn_tool_execution(tc_id, args, tx, tokio_util::sync::CancellationToken::new());
+    spawn_tool_execution(tc_id, args, tx, tokio_util::sync::CancellationToken::new(), None);
 
     let msg = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
         .await
@@ -104,7 +104,7 @@ async fn test_execute_unknown_tool_returns_error() {
         tool_name: "nonexistent".to_string(),
         raw_json: "{}".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error);
     assert!(result.content.text_content().contains("nonexistent"));
 }
@@ -120,7 +120,7 @@ async fn test_write_file_creates_and_writes() {
         path: path.to_str().unwrap().to_string(),
         content: "hello from write_file".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     assert!(result.content.text_content().contains("Wrote"));
     let written = std::fs::read_to_string(&path).unwrap();
@@ -136,7 +136,7 @@ async fn test_write_file_creates_parent_dirs() {
         path: path.to_str().unwrap().to_string(),
         content: "nested".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "nested");
 }
@@ -148,7 +148,7 @@ async fn test_write_file_rejects_escape() {
         path: "/tmp/evil_write_test.txt".to_string(),
         content: "pwned".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error);
     assert!(result
         .content
@@ -166,7 +166,7 @@ async fn test_write_file_overwrites_existing() {
         path: path.to_str().unwrap().to_string(),
         content: "replaced".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "replaced");
 }
@@ -180,7 +180,7 @@ async fn test_write_file_rejects_oversized() {
         path: path.to_str().unwrap().to_string(),
         content: "x".repeat(600_000),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error);
     assert!(result.content.text_content().contains("exceeds maximum"));
 }
@@ -197,7 +197,7 @@ async fn test_list_directory_shows_files_and_dirs() {
         path: dir.path().to_str().unwrap().to_string(),
         recursive: None,
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     let text = result.content.text_content();
     assert!(
@@ -214,7 +214,7 @@ async fn test_list_directory_rejects_escape() {
         path: "/etc".to_string(),
         recursive: None,
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error);
     assert!(result
         .content
@@ -233,7 +233,7 @@ async fn test_list_directory_recursive_descends() {
         path: dir.path().to_str().unwrap().to_string(),
         recursive: Some(true),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     let text = result.content.text_content();
     assert!(
@@ -254,7 +254,7 @@ async fn test_search_files_finds_matches() {
         pattern: "fn main".to_string(),
         path: Some(dir.path().to_str().unwrap().to_string()),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     let text = result.content.text_content();
     assert!(text.contains("a.rs:1:"), "should show file:line: {text}");
@@ -275,7 +275,7 @@ async fn test_search_files_invalid_regex_returns_error() {
         pattern: "[invalid".to_string(),
         path: None,
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error);
     assert!(result.content.text_content().contains("Invalid regex"));
 }
@@ -293,7 +293,7 @@ async fn test_search_files_skips_binary() {
         pattern: "fn main".to_string(),
         path: Some(dir.path().to_str().unwrap().to_string()),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     let text = result.content.text_content();
     assert!(text.contains("text.rs"), "should find text file: {text}");
@@ -318,7 +318,7 @@ async fn test_search_files_respects_max_results() {
         pattern: "match_line".to_string(),
         path: Some(dir.path().to_str().unwrap().to_string()),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     let text = result.content.text_content();
     assert!(
@@ -334,7 +334,7 @@ async fn test_search_files_rejects_escape() {
         pattern: "root".to_string(),
         path: Some("/etc".to_string()),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error);
     assert!(result
         .content
@@ -349,7 +349,7 @@ async fn test_execute_plan_returns_success() {
         title: "fix the login".to_string(),
         description: None,
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error);
     assert!(
         result.content.text_content().contains("Created plan"),

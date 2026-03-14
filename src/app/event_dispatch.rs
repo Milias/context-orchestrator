@@ -110,7 +110,9 @@ impl App {
                 // until the next conversational agent spawns and claims them
                 // during context building. Future: spawn a dedicated question-
                 // response agent here.
-                tracing::debug!("LLM question {question_id} pending — will be claimed by next agent");
+                tracing::debug!(
+                    "LLM question {question_id} pending — will be claimed by next agent"
+                );
             }
             QuestionDestination::Auto => unreachable!("resolved above"),
         }
@@ -141,7 +143,7 @@ impl App {
     /// Each user message gets its own agent — no persistent primary loop.
     fn spawn_conversational_agent(&mut self) {
         let agent_id = Uuid::new_v4();
-        let (tool_rx, cancel_token) = self.agents.register(agent_id);
+        let (tool_rx, cancel_token) = self.agents.register(agent_id, None);
 
         // Emit an initial phase event for immediate TUI feedback.
         self.graph.read().emit(GraphEvent::AgentPhaseChanged {

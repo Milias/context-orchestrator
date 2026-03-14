@@ -333,15 +333,19 @@ pub fn registered_tool_definitions() -> Vec<ToolDefinition> {
 
 /// Spawn a tokio task that executes a tool call and sends the result back via the channel.
 /// The task is cancelled when `cancel_token` fires, sending a cancellation error.
+///
+/// `working_dir` scopes file operations to a specific directory (e.g., a git
+/// worktree for task agents). When `None`, the process CWD is used.
 pub fn spawn_tool_execution(
     tool_call_id: Uuid,
     arguments: ToolCallArguments,
     tx: mpsc::UnboundedSender<TaskMessage>,
     cancel_token: CancellationToken,
+    working_dir: Option<std::path::PathBuf>,
 ) {
     tokio::spawn(async move {
         let (content, is_error) = tokio::select! {
-            result = execute_tool(&arguments) => (result.content, result.is_error),
+            result = execute_tool(&arguments, working_dir.as_deref()) => (result.content, result.is_error),
             () = cancel_token.cancelled() => {
                 (ToolResultContent::text("Tool execution cancelled"), true)
             }

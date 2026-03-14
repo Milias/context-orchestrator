@@ -1,21 +1,57 @@
+//! Path validation for file operations with configurable root directory.
+//!
+//! All file tools resolve paths relative to a root directory (process CWD by
+//! default, or a git worktree path for task agents). Paths that escape the root
+//! via `..` traversal or symlinks are rejected.
+
 use super::ToolExecutionResult;
 use crate::graph::tool_types::ToolResultContent;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+/// A validated, canonical path safe for file operations.
 pub struct ValidatedPath {
     pub canonical: PathBuf,
 }
 
-/// Validate a path for read operations. The file must exist and be within CWD.
-pub async fn validate_path(path: &str) -> Result<ValidatedPath, ToolExecutionResult> {
-    let cwd = std::env::current_dir().map_err(|_| ToolExecutionResult {
-        content: ToolResultContent::text("Error: could not determine working directory"),
-        is_error: true,
-    })?;
+/// Resolve the root directory for file operations. Returns `working_dir` if
+/// provided, otherwise falls back to the process working directory.
+async fn resolve_root(working_dir: Option<&Path>) -> Result<PathBuf, ToolExecutionResult> {
+    match working_dir {
+        Some(dir) => tokio::fs::canonicalize(dir)
+            .await
+            .map_err(|e| ToolExecutionResult {
+                content: ToolResultContent::text(format!("Error resolving working directory: {e}")),
+                is_error: true,
+            }),
+        None => {
+            let cwd = std::env::current_dir().map_err(|_| ToolExecutionResult {
+                content: ToolResultContent::text("Error: could not determine working directory"),
+                is_error: true,
+            })?;
+            tokio::fs::canonicalize(&cwd)
+                .await
+                .map_err(|_| ToolExecutionResult {
+                    content: ToolResultContent::text("Error: could not resolve working directory"),
+                    is_error: true,
+                })
+        }
+    }
+}
+
+/// Validate a path for read operations. The file must exist and be within the
+/// root directory.
+pub async fn validate_path(
+    path: &str,
+    working_dir: Option<&Path>,
+) -> Result<ValidatedPath, ToolExecutionResult> {
+    let canonical_root = resolve_root(working_dir).await?;
+    let root = working_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let requested = if std::path::Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {
-        cwd.join(path)
+        root.join(path)
     };
     let canonical = tokio::fs::canonicalize(&requested)
         .await
@@ -23,13 +59,7 @@ pub async fn validate_path(path: &str) -> Result<ValidatedPath, ToolExecutionRes
             content: ToolResultContent::text(format!("Error resolving path: {e}")),
             is_error: true,
         })?;
-    let canonical_cwd = tokio::fs::canonicalize(&cwd)
-        .await
-        .map_err(|_| ToolExecutionResult {
-            content: ToolResultContent::text("Error: could not resolve working directory"),
-            is_error: true,
-        })?;
-    if !canonical.starts_with(&canonical_cwd) {
+    if !canonical.starts_with(&canonical_root) {
         return Err(ToolExecutionResult {
             content: ToolResultContent::text(format!(
                 "Error: path escapes working directory: {path}"
@@ -41,31 +71,28 @@ pub async fn validate_path(path: &str) -> Result<ValidatedPath, ToolExecutionRes
 }
 
 /// Validate a path for write operations. The parent directory must exist within
-/// CWD; the file itself may not exist yet.
+/// the root directory; the file itself may not exist yet.
 ///
-/// Walks up to the first existing ancestor to validate CWD containment BEFORE
-/// creating any directories. This prevents `create_dir_all` from creating
-/// directories outside CWD via `..` traversal or symlinks.
-pub async fn validate_path_for_write(path: &str) -> Result<ValidatedPath, ToolExecutionResult> {
-    let cwd = std::env::current_dir().map_err(|_| ToolExecutionResult {
-        content: ToolResultContent::text("Error: could not determine working directory"),
-        is_error: true,
-    })?;
+/// Walks up to the first existing ancestor to validate containment BEFORE
+/// creating any directories. Prevents `create_dir_all` from creating
+/// directories outside the root via `..` traversal or symlinks.
+pub async fn validate_path_for_write(
+    path: &str,
+    working_dir: Option<&Path>,
+) -> Result<ValidatedPath, ToolExecutionResult> {
+    let canonical_root = resolve_root(working_dir).await?;
+    let root = working_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let requested = if std::path::Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {
-        cwd.join(path)
+        root.join(path)
     };
     let parent = requested.parent().ok_or_else(|| ToolExecutionResult {
         content: ToolResultContent::text(format!("Error: no parent directory for path: {path}")),
         is_error: true,
     })?;
-    let canonical_cwd = tokio::fs::canonicalize(&cwd)
-        .await
-        .map_err(|_| ToolExecutionResult {
-            content: ToolResultContent::text("Error: could not resolve working directory"),
-            is_error: true,
-        })?;
     // Find the first existing ancestor so we can canonicalize and check
     // containment before creating anything on disk.
     let mut ancestor = parent.to_path_buf();
@@ -87,7 +114,7 @@ pub async fn validate_path_for_write(path: &str) -> Result<ValidatedPath, ToolEx
                 content: ToolResultContent::text(format!("Error resolving path: {e}")),
                 is_error: true,
             })?;
-    if !canonical_ancestor.starts_with(&canonical_cwd) {
+    if !canonical_ancestor.starts_with(&canonical_root) {
         return Err(ToolExecutionResult {
             content: ToolResultContent::text(format!(
                 "Error: path escapes working directory: {path}"
@@ -95,7 +122,7 @@ pub async fn validate_path_for_write(path: &str) -> Result<ValidatedPath, ToolEx
             is_error: true,
         });
     }
-    // Safe to create directories — the ancestor is verified within CWD.
+    // Safe to create directories — the ancestor is verified within root.
     tokio::fs::create_dir_all(parent)
         .await
         .map_err(|e| ToolExecutionResult {
@@ -110,8 +137,8 @@ pub async fn validate_path_for_write(path: &str) -> Result<ValidatedPath, ToolEx
                 is_error: true,
             })?;
     // Re-check after creation: a symlink within the newly created subtree
-    // could redirect outside CWD (TOCTOU defense).
-    if !canonical_parent.starts_with(&canonical_cwd) {
+    // could redirect outside the root (TOCTOU defense).
+    if !canonical_parent.starts_with(&canonical_root) {
         return Err(ToolExecutionResult {
             content: ToolResultContent::text(format!(
                 "Error: path escapes working directory: {path}"

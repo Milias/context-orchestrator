@@ -157,11 +157,13 @@ impl App {
                 let token = self.agents.child_cancel_token(agent_id);
                 self.agents
                     .track_tool_call(agent_id, tool_call_id, token.clone());
+                let working_dir = self.agents.working_dir(agent_id);
                 tool_executor::spawn_tool_execution(
                     tool_call_id,
                     arguments,
                     self.task_tx.clone(),
                     token,
+                    working_dir,
                 );
             }
             AgentEvent::Finished => {
@@ -263,9 +265,9 @@ impl App {
             arguments.clone(),
             api_tool_use_id,
         );
-        // User-triggered tool calls have no owning agent — use a standalone token.
+        // User-triggered tool calls have no owning agent — use CWD (no worktree).
         let token = CancellationToken::new();
-        tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone(), token);
+        tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone(), token, None);
     }
 
     /// Handle tool completion: update graph status, add result, apply side-effects.

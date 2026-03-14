@@ -77,20 +77,28 @@ impl std::str::FromStr for ConfigKey {
 // ── Tool Execution ──────────────────────────────────────────────────
 
 /// Execute a tool call and return the result.
-pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult {
+///
+/// `working_dir` scopes file operations to a specific directory (e.g., a git
+/// worktree for task agents). When `None`, the process CWD is used.
+pub async fn execute_tool(
+    arguments: &ToolCallArguments,
+    working_dir: Option<&std::path::Path>,
+) -> ToolExecutionResult {
     match arguments {
         ToolCallArguments::Set { key, value } => execute_set(key, value),
         ToolCallArguments::Plan { title, .. } => plan_tools::execute_plan(title),
         ToolCallArguments::AddTask { title, .. } => plan_tools::execute_add_task(title),
         ToolCallArguments::UpdateWorkItem { .. } => plan_tools::execute_update_work_item(),
         ToolCallArguments::AddDependency { .. } => plan_tools::execute_add_dependency(),
-        ToolCallArguments::ReadFile { path } => read_file::execute(path).await,
-        ToolCallArguments::WriteFile { path, content } => write_file::execute(path, content).await,
+        ToolCallArguments::ReadFile { path } => read_file::execute(path, working_dir).await,
+        ToolCallArguments::WriteFile { path, content } => {
+            write_file::execute(path, content, working_dir).await
+        }
         ToolCallArguments::ListDirectory { path, recursive } => {
-            list_directory::execute(path, recursive.unwrap_or(false)).await
+            list_directory::execute(path, recursive.unwrap_or(false), working_dir).await
         }
         ToolCallArguments::SearchFiles { pattern, path } => {
-            search_files::execute(pattern, path.as_deref()).await
+            search_files::execute(pattern, path.as_deref(), working_dir).await
         }
         ToolCallArguments::Ask { question, .. } => qa_tools::execute_ask(question),
         ToolCallArguments::Answer { question_id, .. } => qa_tools::execute_answer(question_id),

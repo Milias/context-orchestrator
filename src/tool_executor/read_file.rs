@@ -5,8 +5,8 @@ use crate::graph::tool_types::ToolResultContent;
 const MAX_READ_FILE_BYTES: usize = 100_000;
 const MAX_FILE_SIZE_BYTES: u64 = 50_000_000; // 50 MB — prevent OOM on huge files
 
-pub async fn execute(path: &str) -> ToolExecutionResult {
-    let validated = match security::validate_path(path).await {
+pub async fn execute(path: &str, working_dir: Option<&std::path::Path>) -> ToolExecutionResult {
+    let validated = match security::validate_path(path, working_dir).await {
         Ok(v) => v,
         Err(e) => return e,
     };

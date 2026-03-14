@@ -43,7 +43,7 @@ async fn test_set_max_tokens_rejects_zero() {
         key: "max_tokens".to_string(),
         value: "0".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error, "max_tokens=0 should be rejected");
 }
 
@@ -55,7 +55,7 @@ async fn test_set_max_tokens_rejects_over_limit() {
         key: "max_tokens".to_string(),
         value: "200000".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error, "max_tokens=200000 should be rejected");
 }
 
@@ -66,7 +66,7 @@ async fn test_set_empty_value_returns_error() {
         key: "max_tokens".to_string(),
         value: String::new(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(result.is_error, "empty value should be rejected");
 }
 
@@ -77,7 +77,7 @@ async fn test_set_valid_value_succeeds() {
         key: "max_tokens".to_string(),
         value: "8192".to_string(),
     };
-    let result = execute_tool(&args).await;
+    let result = execute_tool(&args, None).await;
     assert!(!result.is_error, "valid set should succeed");
     assert!(result.content.text_content().contains("8192"));
 }

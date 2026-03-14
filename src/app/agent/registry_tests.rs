@@ -19,7 +19,7 @@ fn test_route_unknown_tool_returns_false() {
 fn test_remove_cleans_up_tool_call_owner() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_, _cancel) = reg.register(agent_id);
+    let (_, _cancel) = reg.register(agent_id, None);
 
     let tc_id = Uuid::new_v4();
     reg.track_tool_call(agent_id, tc_id, CancellationToken::new());
@@ -40,8 +40,8 @@ fn test_cancel_all_clears_state_and_cancels_tokens() {
     let mut reg = AgentRegistry::new();
     let id1 = Uuid::new_v4();
     let id2 = Uuid::new_v4();
-    let (_, token1) = reg.register(id1);
-    let (_, token2) = reg.register(id2);
+    let (_, token1) = reg.register(id1, None);
+    let (_, token2) = reg.register(id2, None);
 
     reg.cancel_all();
 
@@ -56,7 +56,7 @@ fn test_cancel_all_clears_state_and_cancels_tokens() {
 fn test_drain_phases_returns_all_and_clears() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_rx, _cancel) = reg.register(agent_id);
+    let (_rx, _cancel) = reg.register(agent_id, None);
 
     let p1 = Uuid::new_v4();
     let p2 = Uuid::new_v4();
@@ -79,7 +79,7 @@ fn test_drain_phases_returns_all_and_clears() {
 fn test_active_count_decremented_after_remove() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_rx, _cancel) = reg.register(agent_id);
+    let (_rx, _cancel) = reg.register(agent_id, None);
     assert_eq!(reg.active_count(), 1);
 
     reg.remove(agent_id);
@@ -93,7 +93,7 @@ fn test_active_count_decremented_after_remove() {
 fn test_route_after_agent_removed_returns_false() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_rx, _cancel) = reg.register(agent_id);
+    let (_rx, _cancel) = reg.register(agent_id, None);
 
     let tc_id = Uuid::new_v4();
     reg.track_tool_call(agent_id, tc_id, CancellationToken::new());
@@ -113,7 +113,7 @@ fn test_route_after_agent_removed_returns_false() {
 fn test_complete_phase_removes_id() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_rx, _cancel) = reg.register(agent_id);
+    let (_rx, _cancel) = reg.register(agent_id, None);
 
     let phase_id = Uuid::new_v4();
     reg.track_phase(agent_id, phase_id);
