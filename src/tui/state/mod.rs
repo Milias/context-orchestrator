@@ -4,7 +4,6 @@
 //! `FocusZone` tracks which region owns keyboard focus.
 //! The conversation panel is a persistent right-side panel, not a tab.
 
-
 /// Top-level tab controlling the left content area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TopTab {

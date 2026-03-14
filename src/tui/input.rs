@@ -388,4 +388,3 @@ fn move_cursor_down(tui_state: &mut TuiState) {
     let (start, len) = line_start_and_len(&tui_state.input_text, cur_line + 1);
     tui_state.input_cursor = start + cur_col.min(len);
 }
-

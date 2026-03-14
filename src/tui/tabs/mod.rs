@@ -3,6 +3,8 @@
 //! Each tab fills the left content area and has its own rendering logic.
 //! The tab bar at the top shows all tabs with the active one highlighted.
 
+pub mod agents;
+
 use crate::tui::state::TopTab;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;

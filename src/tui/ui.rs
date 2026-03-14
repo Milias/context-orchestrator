@@ -63,14 +63,19 @@ pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &mut TuiSta
     input_box::render(frame, input_area, area, tui_state);
 }
 
-/// Dispatch to the active tab's renderer (placeholders for now).
+/// Dispatch to the active tab's renderer.
 fn render_tab_content(
     frame: &mut Frame,
     area: Rect,
-    _graph: &ConversationGraph,
+    graph: &ConversationGraph,
     tui_state: &TuiState,
 ) {
-    tabs::render_placeholder(frame, area, tui_state.nav.active_tab);
+    match tui_state.nav.active_tab {
+        crate::tui::state::TopTab::Agents => {
+            tabs::agents::render(frame, area, graph, tui_state);
+        }
+        other => tabs::render_placeholder(frame, area, other),
+    }
 }
 
 /// Combined tab bar + branch/token info in a single row.
