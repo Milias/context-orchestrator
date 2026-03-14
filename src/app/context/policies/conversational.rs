@@ -9,20 +9,32 @@ use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::llm::{ChatContent, ChatMessage, ContentBlock, RawJson};
 use uuid::Uuid;
 
-/// Build the full message list from the graph, matching the original
-/// `extract_messages()` output exactly. Includes plan and Q/A section injection.
+/// Build the full message list from the graph. Includes plan and Q/A section injection.
+/// Also collects the IDs of all nodes that contributed to this context.
 pub fn build_messages(
     graph: &ConversationGraph,
     agent_id: Option<Uuid>,
 ) -> (Option<String>, Vec<ChatMessage>) {
+    let result = build_context(graph, agent_id.unwrap_or(Uuid::nil()));
+    (result.system_prompt, result.messages)
+}
+
+/// Build context for a conversational agent. Walks the active branch history,
+/// collects all contributing node IDs for provenance tracking.
+pub fn build_context(
+    graph: &ConversationGraph,
+    agent_id: Uuid,
+) -> super::ContextBuildResult {
     let history = graph
         .get_branch_history(graph.active_branch())
         .unwrap_or_default();
 
     let mut system_prompt = None;
     let mut messages = Vec::new();
+    let mut selected_node_ids = Vec::new();
 
     for node in history {
+        selected_node_ids.push(node.id());
         match node {
             Node::SystemDirective { content, .. } => {
                 system_prompt = Some(content.clone());
@@ -62,12 +74,10 @@ pub fn build_messages(
     }
 
     // Inject pending Q/A context for the agent.
-    if let Some(agent_id) = agent_id {
-        if let Some(qa_section) = crate::app::qa::context::build_qa_section(graph, agent_id) {
-            let prompt = system_prompt.get_or_insert_with(String::new);
-            prompt.push_str("\n\n");
-            prompt.push_str(&qa_section);
-        }
+    if let Some(qa_section) = crate::app::qa::context::build_qa_section(graph, agent_id) {
+        let prompt = system_prompt.get_or_insert_with(String::new);
+        prompt.push_str("\n\n");
+        prompt.push_str(&qa_section);
     }
 
     // Inject API error context so the LLM can adapt on retry.
@@ -77,7 +87,11 @@ pub fn build_messages(
         prompt.push_str(&error_section);
     }
 
-    (system_prompt, messages)
+    super::ContextBuildResult {
+        system_prompt,
+        messages,
+        selected_node_ids,
+    }
 }
 
 /// Build assistant `ChatMessage` with `ToolUse` blocks and any following

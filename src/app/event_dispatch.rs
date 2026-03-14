@@ -160,6 +160,7 @@ impl App {
             max_tool_loop_iterations: self.config.max_tool_loop_iterations,
             tools: crate::tool_executor::registered_tool_definitions(),
             agent_id,
+            policy: crate::app::context::policies::ContextPolicy::Conversational,
         };
 
         super::agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);

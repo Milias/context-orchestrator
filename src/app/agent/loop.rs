@@ -32,6 +32,8 @@ pub(in crate::app) struct AgentLoopConfig {
     pub max_tool_loop_iterations: usize,
     pub tools: Vec<ToolDefinition>,
     pub agent_id: Uuid,
+    /// Context policy determines how the agent builds context and records messages.
+    pub policy: crate::app::context::policies::ContextPolicy,
 }
 
 /// Spawn the agent loop as a persistent background task.
@@ -121,13 +123,13 @@ async fn run_activation(
             phase: AgentPhase::BuildingContext,
         });
 
-        let (system_prompt, messages) = {
+        let context_result = {
             let g = graph.read();
-            context::extract_messages(&g, Some(config.agent_id))
+            context::extract_messages(&g, &config.policy, config.agent_id)
         };
         let (system_prompt, messages) = context::finalize_context(
-            system_prompt,
-            messages,
+            context_result.system_prompt,
+            context_result.messages,
             provider.as_ref(),
             &config.model,
             config.max_context_tokens,

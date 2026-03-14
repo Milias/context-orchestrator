@@ -16,12 +16,19 @@ use crate::graph::ConversationGraph;
 use crate::llm::{ChatMessage, LlmProvider, ToolDefinition};
 use uuid::Uuid;
 
-/// Extract messages from the conversation graph using the `ConversationalPolicy`.
+/// Extract messages from the conversation graph using a context policy.
 /// Synchronous — no API calls. Caller should hold a read lock on the shared graph.
-///
-/// `agent_id` is passed through to the context policy so it can surface
-/// agent-specific state (e.g. claimed questions in the Q/A section).
 pub fn extract_messages(
+    graph: &ConversationGraph,
+    policy: &policies::ContextPolicy,
+    agent_id: Uuid,
+) -> policies::ContextBuildResult {
+    policy.build_context(graph, agent_id)
+}
+
+/// Legacy extraction for backward compatibility (uses conversational policy).
+/// Synchronous — no API calls. Caller should hold a read lock on the shared graph.
+pub fn extract_messages_conversational(
     graph: &ConversationGraph,
     agent_id: Option<Uuid>,
 ) -> (Option<String>, Vec<ChatMessage>) {

@@ -347,6 +347,14 @@ impl ConversationGraph {
         false
     }
 
+    /// Get the children of a node in the `RespondsTo` chain (forward traversal).
+    /// Returns an empty slice if the node has no reply children.
+    pub fn reply_children_of(&self, parent_id: Uuid) -> &[Uuid] {
+        self.reply_children
+            .get(&parent_id)
+            .map_or(&[], |v| v.as_slice())
+    }
+
     /// Check if a node has an associated `ThinkBlock` linked via `ThinkingOf`.
     pub fn has_think_block(&self, node_id: Uuid) -> bool {
         self.edges
