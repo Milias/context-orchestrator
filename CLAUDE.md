@@ -32,6 +32,7 @@
   `plan_effects.rs` + `plan_context.rs` → `plan/effects.rs` + `plan/context.rs`).
 - Tests MUST be in a separate file: `tests.rs` if the source is a module
   directory, or `<name>_tests.rs` if not.
+- Take the conversation with the user, and the high-level requirements stated in plans and other documents, to create tests. High-level behavior is typically a good source of behaviors to test.
 - Every test MUST answer the question "what bug does this test catch?". If you
   can't articulate a specific bug or invariant violation the test would detect,
   don't write it. No low-effort tests that just call a function and assert "it

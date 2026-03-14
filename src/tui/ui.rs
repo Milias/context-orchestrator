@@ -40,10 +40,12 @@ pub fn draw(frame: &mut Frame, graph: &ConversationGraph, tui_state: &mut TuiSta
 
         render_tab_content(frame, horizontal[0], graph, tui_state);
 
-        // Right column: conversation (flex) + input (3 rows).
+        // Right column: conversation (flex) + input (dynamic height).
+        let max_input = (horizontal[1].height * 40 / 100).max(3);
+        let input_height = input_box::compute_height(tui_state, horizontal[1].width, max_input);
         let right_col = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(3), Constraint::Length(3)])
+            .constraints([Constraint::Min(3), Constraint::Length(input_height)])
             .split(horizontal[1]);
 
         conversation::render(frame, right_col[0], graph, tui_state);
@@ -165,11 +167,11 @@ fn build_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'static str)> {
                 shortcuts.insert(0, ("Esc", "dismiss"));
                 shortcuts.insert(0, ("Enter", "answer"));
             } else {
-                shortcuts.insert(0, ("Ctrl+E", "tools"));
                 shortcuts.insert(0, ("Enter", "send"));
             }
         }
         FocusZone::TabContent => {
+            shortcuts.insert(0, ("Ctrl+E", "tools"));
             shortcuts.insert(0, ("Up/Dn", "nav"));
         }
     }

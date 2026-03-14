@@ -216,8 +216,7 @@ impl App {
                 if let Some(q_id) = self.pending_user_question.take() {
                     self.handle_user_answer(q_id, text);
                 } else if agent_active {
-                    self.tui_state.input_text = text;
-                    self.tui_state.input_cursor = self.tui_state.input_text.chars().count();
+                    self.tui_state.input.set_text(text);
                 } else {
                     self.handle_send_message(text)?;
                 }

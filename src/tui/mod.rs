@@ -200,10 +200,10 @@ impl TokenUsage {
 pub struct TuiState {
     /// Top-level navigation: active tab, focus zone.
     pub nav: state::NavigationState,
-    /// Current text in the input box.
-    pub input_text: String,
-    /// Character-indexed cursor position within `input_text`.
-    pub input_cursor: usize,
+    /// Input buffer with cursor, kill buffer, and readline operations.
+    pub input: input::buffer::InputBuffer,
+    /// Vertical scroll offset within the input box (when text exceeds max height).
+    pub input_scroll: u16,
     /// Animated conversation scroll (lines from the top).
     pub scroll: AnimatedScroll,
     /// Informational status message shown in the status bar.
@@ -265,8 +265,8 @@ impl TuiState {
     pub fn new() -> Self {
         Self {
             nav: state::NavigationState::new(),
-            input_text: String::new(),
-            input_cursor: 0,
+            input: input::buffer::InputBuffer::new(),
+            input_scroll: 0,
             scroll: AnimatedScroll::new(),
             status_message: None,
             error_message: None,

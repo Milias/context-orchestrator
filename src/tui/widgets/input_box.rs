@@ -6,7 +6,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 /// Render the persistent input box at the bottom of the screen.
 /// Shows answer mode (cyan border, question text) when a user question is pending.
-pub fn render(frame: &mut Frame, area: Rect, frame_area: Rect, tui_state: &TuiState) {
+/// Scrolls vertically to keep the cursor visible when text exceeds the box height.
+pub fn render(frame: &mut Frame, area: Rect, frame_area: Rect, tui_state: &mut TuiState) {
     let (title, border_color) = if let Some(ref q) = tui_state.pending_question_text {
         let max_chars = 60;
         let char_count = q.chars().count();
@@ -26,27 +27,60 @@ pub fn render(frame: &mut Frame, area: Rect, frame_area: Rect, tui_state: &TuiSt
         ("Message".to_string(), color)
     };
 
-    let input = Paragraph::new(tui_state.input_text.as_str()).block(
-        Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color)),
-    );
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    // Compute scroll offset to keep cursor visible within the inner area.
+    let inner_height = area.height.saturating_sub(2) as usize; // -2 for borders
+    let (cursor_line, col) = cursor_line_col(tui_state.input.text(), tui_state.input.cursor());
+    let scroll = &mut tui_state.input_scroll;
+    if inner_height > 0 {
+        // Scroll offsets are bounded by terminal height (u16 max).
+        #[allow(clippy::cast_possible_truncation)]
+        if cursor_line >= *scroll as usize + inner_height {
+            *scroll = (cursor_line + 1).saturating_sub(inner_height) as u16;
+        } else if cursor_line < *scroll as usize {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                *scroll = cursor_line as u16;
+            }
+        }
+    }
+
+    let input = Paragraph::new(tui_state.input.text())
+        .block(block)
+        .scroll((tui_state.input_scroll, 0));
 
     frame.render_widget(input, area);
 
-    // Compute line/column for multiline cursor positioning.
-    let (line_idx, col) = cursor_line_col(&tui_state.input_text, tui_state.input_cursor);
+    // Cursor position adjusted for scroll offset.
     #[allow(clippy::cast_possible_truncation)] // bounded by terminal width
     let cursor_x = area.x + 1 + col as u16;
     #[allow(clippy::cast_possible_truncation)] // bounded by input box height
-    let cursor_y = area.y + 1 + line_idx as u16;
+    let cursor_y = area.y + 1 + (cursor_line as u16).saturating_sub(tui_state.input_scroll);
     frame.set_cursor_position((cursor_x, cursor_y));
 
     // Autocomplete popup
     if tui_state.autocomplete.active && !tui_state.autocomplete.candidates.is_empty() {
         render_autocomplete_popup(frame, area, frame_area, cursor_x, tui_state);
     }
+}
+
+/// Compute the height the input box should occupy, based on text content.
+///
+/// Accounts for explicit newlines and soft wrapping at the given width.
+/// Returns a value between `MIN_HEIGHT` and `max_height`.
+pub fn compute_height(tui_state: &TuiState, content_width: u16, max_height: u16) -> u16 {
+    const MIN_HEIGHT: u16 = 3; // 1 line + 2 borders
+    const BORDER_ROWS: u16 = 2;
+
+    let inner_width = content_width.saturating_sub(BORDER_ROWS) as usize;
+    // Visual line count is bounded by text length; terminal height caps it well under u16::MAX.
+    #[allow(clippy::cast_possible_truncation)]
+    let visual_lines = tui_state.input.visual_line_count(inner_width) as u16;
+    (visual_lines + BORDER_ROWS).clamp(MIN_HEIGHT, max_height.max(MIN_HEIGHT))
 }
 
 fn render_autocomplete_popup(
