@@ -225,13 +225,9 @@ pub struct TuiState {
     pub work_selected: usize,
     /// Number of visible items in the Work tab (set each frame by the renderer).
     pub work_visible_count: usize,
-    /// Scroll offset for the Activity tab event stream.
-    pub activity_scroll: usize,
-    /// Total event count in the Activity tab (set each frame by the renderer).
-    pub activity_total: usize,
-    /// Scroll offset for the Agents tab (recent completions overflow).
+    /// Scroll offset for recent completions in the overview tab.
     pub agents_scroll: usize,
-    /// Total line count in the Agents tab (set each frame by the renderer).
+    /// Total line count in recent completions (set each frame by the renderer).
     pub agents_total: usize,
     /// Text of the pending user question. Set by `QuestionRoutedToUser` event,
     /// cleared by `QuestionAnswered` or `QuestionStatusChanged(TimedOut)`.
@@ -267,8 +263,6 @@ impl TuiState {
             token_usage: TokenUsage::default(),
             work_selected: 0,
             work_visible_count: 0,
-            activity_scroll: 0,
-            activity_total: 0,
             agents_scroll: 0,
             agents_total: 0,
             pending_question_text: None,

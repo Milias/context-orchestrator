@@ -1,64 +1,17 @@
-//! Work tab: plan/task tree with dependency tracking.
+//! Work tree utilities: building and rendering plan/task trees.
 //!
-//! Displays all work items (plans and tasks) as a tree. Plans are
-//! top-level, tasks are nested under their parent via `SubtaskOf` edges.
-//! Dependency annotations show which items block others.
+//! Provides building blocks for displaying work items as a tree.
+//! Plans are top-level, tasks are nested under their parent via
+//! `SubtaskOf` edges. Used by the overview tab.
 
 use crate::graph::node::{WorkItemKind, WorkItemStatus};
 use crate::graph::{ConversationGraph, Node};
 use crate::tui::widgets::tool_status::truncate;
-use crate::tui::TuiState;
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
-
-/// Render the Work tab content into the given area.
-pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
-    let block = Block::default().title("Work").borders(Borders::ALL);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 || inner.width < 8 {
-        return;
-    }
-
-    let tree = build_work_tree(graph);
-
-    if tree.is_empty() {
-        let empty = Paragraph::new(Span::styled(
-            "(no plans or tasks)",
-            Style::default().fg(Color::DarkGray),
-        ));
-        frame.render_widget(empty, inner);
-        return;
-    }
-
-    let width = inner.width as usize;
-    let max_lines = inner.height as usize;
-    let mut lines: Vec<Line<'_>> = Vec::new();
-
-    for item in &tree {
-        if lines.len() >= max_lines {
-            break;
-        }
-        render_item(
-            &mut lines,
-            item,
-            0,
-            width,
-            max_lines,
-            tui_state.work_selected,
-        );
-    }
-
-    // Publish visible count so input handler can clamp selection.
-    tui_state.work_visible_count = lines.len();
-
-    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
-}
 
 /// A flattened work item with its children for tree rendering.
-struct WorkTreeItem {
+pub(super) struct WorkTreeItem {
     title: String,
     kind: WorkItemKind,
     status: WorkItemStatus,
@@ -66,9 +19,16 @@ struct WorkTreeItem {
     children: Vec<WorkTreeItem>,
 }
 
+impl WorkTreeItem {
+    /// Access the child items for recursive traversal.
+    pub(super) fn children(&self) -> &[WorkTreeItem] {
+        &self.children
+    }
+}
+
 /// Build the work tree from graph nodes.
 /// Plans are roots; tasks nest under their parent via `SubtaskOf`.
-fn build_work_tree(graph: &ConversationGraph) -> Vec<WorkTreeItem> {
+pub(super) fn build_work_tree(graph: &ConversationGraph) -> Vec<WorkTreeItem> {
     // Collect all work items.
     let work_items: Vec<&Node> = graph.nodes_by(|n| matches!(n, Node::WorkItem { .. }));
 
@@ -133,7 +93,7 @@ fn build_item(graph: &ConversationGraph, node: &Node) -> WorkTreeItem {
 
 /// Render a single item and its children recursively.
 /// `selected_idx` highlights the item at that flat index.
-fn render_item(
+pub(super) fn render_item(
     lines: &mut Vec<Line<'static>>,
     item: &WorkTreeItem,
     depth: usize,
@@ -198,7 +158,7 @@ fn render_item(
 }
 
 /// Status icon and color for a work item.
-fn status_icon(status: WorkItemStatus) -> (&'static str, Color) {
+pub(super) fn status_icon(status: WorkItemStatus) -> (&'static str, Color) {
     match status {
         WorkItemStatus::Todo => ("[ ]", Color::DarkGray),
         WorkItemStatus::Active => ("[*]", Color::Yellow),

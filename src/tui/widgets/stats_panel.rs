@@ -10,12 +10,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 /// Render stats panel with token usage, message count, and service status.
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &TuiState,
-) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
     let block = Block::default().title("Stats").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -27,12 +22,8 @@ pub fn render(
     let input_tok = tui_state.token_usage.input.current;
     let output_tok = tui_state.token_usage.output.current;
 
-    let msg_count = graph
-        .nodes_by(|n| matches!(n, Node::Message { .. }))
-        .len();
-    let tool_count = graph
-        .nodes_by(|n| matches!(n, Node::ToolCall { .. }))
-        .len();
+    let msg_count = graph.nodes_by(|n| matches!(n, Node::Message { .. })).len();
+    let tool_count = graph.nodes_by(|n| matches!(n, Node::ToolCall { .. })).len();
 
     let dim = Style::default().fg(Color::DarkGray);
     let val = Style::default().fg(Color::White);

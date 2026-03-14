@@ -1,8 +1,8 @@
-//! Agents tab: primary monitoring view.
+//! Agent widget library: reusable rendering functions for agent status.
 //!
-//! Shows the current agent's status, recent tool call completions,
-//! attention items (errors), and basic stats. When the conversation
-//! panel is hidden, uses a 3-column layout; otherwise a stacked layout.
+//! Provides building blocks for the overview tab: agent card, running tasks,
+//! and recent completions. No top-level render function; the overview tab
+//! composes these widgets directly.
 
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{BackgroundTaskKind, ConversationGraph, Node, TaskStatus};
@@ -15,68 +15,8 @@ use chrono::Utc;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-/// Render the Agents tab content into the given area.
-pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
-    if area.width < 40 {
-        render_compact(frame, area, graph, tui_state);
-    } else {
-        render_standard(frame, area, graph, tui_state);
-    }
-}
-
-/// Standard layout: agent card + running tasks + recent completions + stats.
-fn render_standard(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &mut TuiState,
-) {
-    let running_h = running_tasks_height(graph);
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(agent_card_height(tui_state)),
-            Constraint::Length(running_h),
-            Constraint::Min(3),
-        ])
-        .split(area);
-
-    render_agent_card(frame, vertical[0], tui_state);
-    render_running_tasks(frame, vertical[1], graph, tui_state);
-
-    let bottom = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(vertical[2]);
-
-    render_recent_completions(frame, bottom[0], graph, tui_state);
-    crate::tui::widgets::stats_panel::render(frame, bottom[1], graph, tui_state);
-}
-
-/// Compact layout for narrow terminals: everything stacked.
-fn render_compact(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &mut TuiState,
-) {
-    let running_h = running_tasks_height(graph);
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(agent_card_height(tui_state)),
-            Constraint::Length(running_h),
-            Constraint::Min(3),
-        ])
-        .split(area);
-
-    render_agent_card(frame, vertical[0], tui_state);
-    render_running_tasks(frame, vertical[1], graph, tui_state);
-    render_recent_completions(frame, vertical[2], graph, tui_state);
-}
-
 /// Compute the agent card height based on the number of active tool calls.
-fn agent_card_height(tui_state: &TuiState) -> u16 {
+pub(super) fn agent_card_height(tui_state: &TuiState) -> u16 {
     match &tui_state.agent_display {
         Some(_) => 5, // border + phase line + detail line + padding + border
         None => 3,    // border + "(idle)" + border
@@ -84,7 +24,7 @@ fn agent_card_height(tui_state: &TuiState) -> u16 {
 }
 
 /// Render the agent status card.
-fn render_agent_card(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
+pub(super) fn render_agent_card(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
     let block = Block::default().title("Agents").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -143,7 +83,7 @@ fn render_agent_card(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
 }
 
 /// Count active items for sizing the Running section.
-fn running_tasks_height(graph: &ConversationGraph) -> u16 {
+pub(super) fn running_tasks_height(graph: &ConversationGraph) -> u16 {
     let count = count_running(graph);
     if count == 0 {
         return 0; // Hide the section entirely when nothing is running.
@@ -154,7 +94,7 @@ fn running_tasks_height(graph: &ConversationGraph) -> u16 {
 }
 
 /// Count running background tasks (non-AgentPhase) + active tool calls.
-fn count_running(graph: &ConversationGraph) -> usize {
+pub(super) fn count_running(graph: &ConversationGraph) -> usize {
     let bg = graph
         .nodes_by(|n| {
             matches!(
@@ -182,7 +122,7 @@ fn count_running(graph: &ConversationGraph) -> usize {
 }
 
 /// Render active background tasks and tool calls.
-fn render_running_tasks(
+pub(super) fn render_running_tasks(
     frame: &mut Frame,
     area: Rect,
     graph: &ConversationGraph,
@@ -279,7 +219,7 @@ fn render_running_tasks(
 }
 
 /// Render a list of recent tool call completions from the graph.
-fn render_recent_completions(
+pub(super) fn render_recent_completions(
     frame: &mut Frame,
     area: Rect,
     graph: &ConversationGraph,

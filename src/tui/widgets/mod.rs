@@ -3,8 +3,8 @@ pub mod display_helpers;
 pub mod input_box;
 pub mod markdown;
 pub mod message_style;
-mod table;
 pub mod stats_panel;
+mod table;
 pub mod tool_status;
 pub mod trigger_highlight;
 

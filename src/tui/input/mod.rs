@@ -41,16 +41,6 @@ pub fn handle_key_event(
         }
     }
 
-    // Number keys 1-3: switch tabs (only when TabContent focused).
-    if tui_state.nav.focus == FocusZone::TabContent {
-        if let KeyCode::Char(c @ '1'..='3') = key.code {
-            if let Some(tab) = crate::tui::state::TopTab::from_number(c.to_digit(10).unwrap_or(0)) {
-                tui_state.nav.active_tab = tab;
-                return Action::None;
-            }
-        }
-    }
-
     // Tab key: toggle between TabContent and ChatPanel.
     if key.code == KeyCode::Tab {
         // Autocomplete takes priority when chat panel is focused.
@@ -93,18 +83,10 @@ fn handle_chat_panel_key(
 }
 
 /// Handle keys when a tab's content area is focused.
-/// Up/Down navigates the active tab's list or scrolls its content.
+/// Up/Down scrolls through the overview's recent completions list.
 fn handle_tab_content_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
     let (offset, max) = match tui_state.nav.active_tab {
-        crate::tui::state::TopTab::Work => (
-            &mut tui_state.work_selected,
-            tui_state.work_visible_count.saturating_sub(1),
-        ),
-        crate::tui::state::TopTab::Activity => (
-            &mut tui_state.activity_scroll,
-            tui_state.activity_total.saturating_sub(1),
-        ),
-        crate::tui::state::TopTab::Agents => (
+        crate::tui::state::TopTab::Overview => (
             &mut tui_state.agents_scroll,
             tui_state.agents_total.saturating_sub(1),
         ),

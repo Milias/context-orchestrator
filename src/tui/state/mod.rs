@@ -5,40 +5,28 @@
 //! Tab toggles between monitoring (left) and conversation+input (right).
 
 /// Top-level tab controlling the left content area.
+///
+/// Currently a single `Overview` tab combines agents, work, and activity.
+/// The tab container is preserved for future expansion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TopTab {
-    /// Agent activity, attention items, stats. Default on startup.
-    Agents,
-    /// Plan/task tree with dependencies and detail.
-    Work,
-    /// Live event stream (tool calls, file changes, agent phases).
-    Activity,
+    /// Combined dashboard: agent card, running tasks, work tree, completions, stats.
+    Overview,
 }
 
 impl TopTab {
     /// All tabs in display order.
     pub fn all() -> &'static [TopTab] {
-        &[TopTab::Agents, TopTab::Work, TopTab::Activity]
+        &[TopTab::Overview]
     }
 
     /// Display label for the tab bar.
     pub fn label(self) -> &'static str {
         match self {
-            TopTab::Agents => "Agents",
-            TopTab::Work => "Work",
-            TopTab::Activity => "Activity",
+            TopTab::Overview => "Overview",
         }
     }
 
-    /// Look up a tab by its 1-indexed number key ('1' = Agents, etc.).
-    pub fn from_number(n: u32) -> Option<TopTab> {
-        match n {
-            1 => Some(TopTab::Agents),
-            2 => Some(TopTab::Work),
-            3 => Some(TopTab::Activity),
-            _ => None,
-        }
-    }
 }
 
 /// Which half of the screen owns keyboard focus.
@@ -66,7 +54,7 @@ impl NavigationState {
     /// Starts focused on the chat panel (conversation visible).
     pub fn new() -> Self {
         Self {
-            active_tab: TopTab::Agents,
+            active_tab: TopTab::Overview,
             focus: FocusZone::ChatPanel,
         }
     }
