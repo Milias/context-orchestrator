@@ -82,6 +82,14 @@ impl App {
         self.event_rx = Some(g.init_event_bus());
         drop(g);
 
+        // Clean up stale worktrees from previous sessions.
+        let project_root = std::env::current_dir().unwrap_or_default();
+        tokio::spawn(async move {
+            if let Err(e) = agent::worktree::cleanup_stale_worktrees(&project_root).await {
+                tracing::warn!("Failed to clean stale worktrees: {e}");
+            }
+        });
+
         tasks::spawn_git_watcher(self.task_tx.clone());
         tasks::spawn_tool_discovery(self.task_tx.clone());
         tasks::spawn_context_summarization(self.task_tx.clone());

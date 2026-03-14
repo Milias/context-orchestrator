@@ -18,11 +18,13 @@ pub fn build_context(graph: &ConversationGraph, agent_id: Uuid) -> super::Contex
 
     let mut system_prompt = None;
     let mut messages = Vec::new();
+    let mut selected_node_ids = Vec::new();
 
     for node in history {
         match node {
-            Node::SystemDirective { content, .. } => {
+            Node::SystemDirective { id, content, .. } => {
                 system_prompt = Some(content.clone());
+                selected_node_ids.push(*id);
             }
             Node::Message {
                 id, role, content, ..
@@ -30,12 +32,14 @@ pub fn build_context(graph: &ConversationGraph, agent_id: Uuid) -> super::Contex
                 Role::System => {}
                 Role::User => {
                     messages.push(ChatMessage::text(Role::User, content));
+                    selected_node_ids.push(*id);
                 }
                 Role::Assistant => {
                     let (asst_msg, result_msgs) =
                         build_assistant_message_with_tools(graph, *id, content);
                     messages.push(asst_msg);
                     messages.extend(result_msgs);
+                    selected_node_ids.push(*id);
                 }
             },
             Node::WorkItem { .. }
@@ -76,6 +80,7 @@ pub fn build_context(graph: &ConversationGraph, agent_id: Uuid) -> super::Contex
     super::ContextBuildResult {
         system_prompt,
         messages,
+        selected_node_ids,
     }
 }
 

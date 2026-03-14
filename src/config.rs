@@ -29,6 +29,17 @@ fn default_max_concurrent_agents() -> usize {
     3
 }
 
+/// How the context scoring pipeline selects nodes for the context window.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextSelectionMode {
+    /// Deterministic edge-weighted scoring only. Zero API cost.
+    #[default]
+    Heuristic,
+    /// Deterministic scoring followed by a meta-LLM refinement call.
+    LlmGuided,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_base_url")]
@@ -48,6 +59,12 @@ pub struct AppConfig {
     /// Maximum number of concurrent ephemeral agents.
     #[serde(default = "default_max_concurrent_agents")]
     pub max_concurrent_agents: usize,
+    /// How to select nodes for the context window (heuristic or LLM-guided).
+    #[serde(default)]
+    pub context_selection: ContextSelectionMode,
+    /// Model override for the meta-LLM selector (only used when `context_selection = "llm_guided"`).
+    /// Falls back to `anthropic_model` when `None`.
+    pub context_selector_model: Option<String>,
 }
 
 impl AppConfig {

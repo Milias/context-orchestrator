@@ -173,6 +173,8 @@ impl App {
             tools: crate::tool_executor::registered_tool_definitions(),
             agent_id,
             policy: crate::app::context::policies::ContextPolicy::Conversational,
+            context_selection: self.config.context_selection,
+            context_selector_model: self.config.context_selector_model.clone(),
         };
 
         super::agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
@@ -213,14 +215,85 @@ impl App {
             }
         }
 
-        // Create a synthetic User message rooted at the work item to start the chain.
+        if !self.create_task_seed_message(work_item_id) {
+            return;
+        }
+
+        // Create worktree asynchronously, then spawn the agent loop.
+        let graph = Arc::clone(&self.graph);
+        let provider = Arc::clone(&self.provider);
+        let task_tx = self.task_tx.clone();
+        let model = self.config.anthropic_model.clone();
+        let max_tokens = self.config.max_tokens;
+        let max_context_tokens = self.config.max_context_tokens;
+        let max_tool_loop_iterations = self.config.max_tool_loop_iterations;
+        let context_selection = self.config.context_selection;
+        let context_selector_model = self.config.context_selector_model.clone();
+
+        // Register synchronously to hold the agent slot (prevents concurrent spawn race).
+        let (tool_rx, cancel_token) = self.agents.register(agent_id, None);
+        self.agents.track_work_item(work_item_id, agent_id);
+
+        self.graph.read().emit(GraphEvent::AgentPhaseChanged {
+            agent_id,
+            phase: AgentPhase::BuildingContext,
+        });
+
+        // Spawn async task: create worktree → spawn agent loop.
+        tokio::spawn(async move {
+            // Create git worktree for file isolation.
+            let project_root = std::env::current_dir().unwrap_or_default();
+            let working_dir =
+                match super::agent::worktree::create_worktree(&project_root, work_item_id).await {
+                    Ok(path) => Some(path),
+                    Err(e) => {
+                        tracing::error!("Failed to create worktree for task {work_item_id}: {e}");
+                        None // Fall back to shared filesystem.
+                    }
+                };
+
+            // Filter tools for task agents.
+            let policy =
+                crate::app::context::policies::ContextPolicy::TaskExecution { work_item_id };
+            let all_tools = crate::tool_executor::registered_tool_definitions();
+            let tools = match policy.tool_filter() {
+                Some(allowed) => all_tools
+                    .into_iter()
+                    .filter(|t| allowed.contains(&t.name.as_str()))
+                    .collect(),
+                None => all_tools,
+            };
+
+            let loop_config = super::agent::AgentLoopConfig {
+                graph,
+                provider,
+                model,
+                max_tokens,
+                max_context_tokens,
+                max_tool_loop_iterations,
+                tools,
+                agent_id,
+                policy,
+                context_selection,
+                context_selector_model,
+            };
+
+            super::agent::spawn_agent_loop(loop_config, task_tx, tool_rx, cancel_token);
+            let _ = working_dir; // Will be used when registry supports updating working_dir.
+        });
+    }
+
+    /// Create a synthetic User message rooted at the work item to seed the agent's
+    /// `RespondsTo` chain. Returns `false` if the work item is missing or the reply
+    /// cannot be added (caller should abort agent spawn).
+    fn create_task_seed_message(&self, work_item_id: Uuid) -> bool {
         let (title, description) = {
             let g = self.graph.read();
             match g.node(work_item_id) {
                 Some(Node::WorkItem {
                     title, description, ..
                 }) => (title.clone(), description.clone().unwrap_or_default()),
-                _ => return,
+                _ => return false,
             }
         };
         let synthetic_msg = Node::Message {
@@ -233,46 +306,12 @@ impl App {
             output_tokens: None,
             stop_reason: None,
         };
-        {
-            let mut g = self.graph.write();
-            if let Err(e) = g.add_reply(work_item_id, synthetic_msg) {
-                tracing::error!("Failed to create synthetic message for task {work_item_id}: {e}");
-                return;
-            }
+        let mut g = self.graph.write();
+        if let Err(e) = g.add_reply(work_item_id, synthetic_msg) {
+            tracing::error!("Failed to create synthetic message for task {work_item_id}: {e}");
+            return false;
         }
-
-        let (tool_rx, cancel_token) = self.agents.register(agent_id, None);
-        self.agents.track_work_item(work_item_id, agent_id);
-
-        self.graph.read().emit(GraphEvent::AgentPhaseChanged {
-            agent_id,
-            phase: AgentPhase::BuildingContext,
-        });
-
-        // Filter tools for task agents.
-        let policy = crate::app::context::policies::ContextPolicy::TaskExecution { work_item_id };
-        let all_tools = crate::tool_executor::registered_tool_definitions();
-        let tools = match policy.tool_filter() {
-            Some(allowed) => all_tools
-                .into_iter()
-                .filter(|t| allowed.contains(&t.name.as_str()))
-                .collect(),
-            None => all_tools,
-        };
-
-        let loop_config = super::agent::AgentLoopConfig {
-            graph: Arc::clone(&self.graph),
-            provider: Arc::clone(&self.provider),
-            model: self.config.anthropic_model.clone(),
-            max_tokens: self.config.max_tokens,
-            max_context_tokens: self.config.max_context_tokens,
-            max_tool_loop_iterations: self.config.max_tool_loop_iterations,
-            tools,
-            agent_id,
-            policy,
-        };
-
-        super::agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
+        true
     }
 
     /// Spawn a background task to count tokens for a message node.

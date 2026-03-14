@@ -96,6 +96,8 @@ fn test_apply_config_set_mutates_config() {
         system_prompt: String::new(),
         max_tool_loop_iterations: 5,
         max_concurrent_agents: 3,
+        context_selection: crate::config::ContextSelectionMode::Heuristic,
+        context_selector_model: None,
     };
 
     execute::apply_config_set(&mut config, execute::ConfigKey::MaxTokens, "4096");

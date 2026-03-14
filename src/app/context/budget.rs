@@ -12,7 +12,7 @@ const SUPPLEMENTARY_RATIO: f64 = 0.10;
 
 /// Estimated tokens per node for budget calculations.
 /// This is a rough heuristic — exact token counts require an API call.
-/// The finalize_context() step handles precise truncation afterwards.
+/// The `finalize_context()` step handles precise truncation afterwards.
 const ESTIMATED_TOKENS_PER_MESSAGE: u32 = 500;
 const ESTIMATED_TOKENS_PER_SUPPLEMENTARY: u32 = 50;
 
@@ -30,9 +30,14 @@ pub struct BudgetAllocation {
 /// Sorts candidates by score within each tier, then includes as many as
 /// fit within the tier's token allocation.
 pub fn allocate(mut candidates: Vec<ScoredCandidate>, max_context_tokens: u32) -> BudgetAllocation {
-    let essential_budget = (max_context_tokens as f64 * ESSENTIAL_RATIO) as u32;
-    let important_budget = (max_context_tokens as f64 * IMPORTANT_RATIO) as u32;
-    let supplementary_budget = (max_context_tokens as f64 * SUPPLEMENTARY_RATIO) as u32;
+    // Truncation and sign loss are acceptable: ratios are positive constants in (0,1)
+    // and max_context_tokens fits in u32, so the products are non-negative and bounded.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let essential_budget = (f64::from(max_context_tokens) * ESSENTIAL_RATIO) as u32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let important_budget = (f64::from(max_context_tokens) * IMPORTANT_RATIO) as u32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let supplementary_budget = (f64::from(max_context_tokens) * SUPPLEMENTARY_RATIO) as u32;
 
     // Sort by score descending within each tier.
     candidates.sort_by(|a, b| {

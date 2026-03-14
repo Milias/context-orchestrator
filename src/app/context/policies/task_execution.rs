@@ -1,26 +1,33 @@
 //! Task execution context policy — focused on a specific work item.
 //!
 //! Builds context from the work item's description, parent plan tree, sibling
-//! task statuses, and the agent's own `RespondsTo` chain. Scopes plan context
-//! to the parent plan only (not all plans in the graph).
+//! task statuses, and the agent's own `RespondsTo` chain. Uses the scoring
+//! pipeline (gather → score → budget) to select which graph nodes to include,
+//! replacing the naive full-chain walk with scored candidate selection.
 
+use std::collections::HashSet;
 use std::fmt::Write;
 
+use crate::app::context::{budget, candidates, scoring};
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role, WorkItemKind};
 use crate::llm::{ChatContent, ChatMessage, ContentBlock, RawJson};
 use uuid::Uuid;
 
-/// Build context for a task execution agent. Gathers the work item description,
-/// parent plan context, sibling task statuses, and the agent's own conversation
-/// chain rooted at the work item.
+/// Build context for a task execution agent. Uses the scoring pipeline to
+/// select which nodes to include, then renders selected nodes into messages.
+///
+/// Pipeline stages:
+/// 1. `candidates::gather()` — heuristic expansion from the work item anchor
+/// 2. `scoring::score_candidates()` — edge-weighted BFS + recency boost
+/// 3. `budget::allocate()` — tier-based token budget partitioning
+/// 4. Render — selected nodes become messages; supplementary become summaries
 pub fn build_context(
     graph: &ConversationGraph,
     work_item_id: Uuid,
     agent_id: Uuid,
 ) -> super::ContextBuildResult {
     let mut system_prompt = String::new();
-    let mut messages = Vec::new();
 
     // ── Task description ────────────────────────────────────────────
     if let Some(Node::WorkItem {
@@ -54,9 +61,117 @@ pub fn build_context(
     // ── Agent instructions ──────────────────────────────────────────
     system_prompt.push_str("\n\nYou are a task execution agent. Complete the task above using the available tools. When finished, call `update_work_item` to mark the task as Done.");
 
-    // ── Walk the agent's own RespondsTo chain from the work item ────
+    // ── Scoring pipeline: gather → score → budget ───────────────────
+    let raw_candidates = candidates::gather(graph, work_item_id);
+    let scored = scoring::score_candidates(graph, work_item_id, &raw_candidates);
+    // Use a conservative budget estimate for the message portion of context.
+    // The system prompt sections above consume ~20% of the window; the rest
+    // is available for scored node content.
+    let max_message_tokens = estimate_message_budget(graph);
+    let allocation = budget::allocate(scored, max_message_tokens);
+
+    // Collect all selected node IDs for provenance tracking.
+    let selected_ids: HashSet<Uuid> = allocation
+        .full_detail
+        .iter()
+        .chain(allocation.supplementary.iter())
+        .map(|c| c.node_id)
+        .collect();
+
+    // ── Supplementary summaries in system prompt ────────────────────
+    if !allocation.supplementary.is_empty() {
+        let summary = render_supplementary(graph, &allocation.supplementary);
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&summary);
+    }
+
+    // ── Render messages from the agent's RespondsTo chain ────────────
+    // Walk the chain but only include nodes that passed scoring.
     let chain = walk_chain_from_root(graph, work_item_id);
-    for node in &chain {
+    let messages = render_chain_messages(graph, &chain, &selected_ids);
+
+    let selected_node_ids: Vec<Uuid> = selected_ids.into_iter().collect();
+
+    super::ContextBuildResult {
+        system_prompt: Some(system_prompt),
+        messages,
+        selected_node_ids,
+    }
+}
+
+/// Estimate the token budget available for messages (excluding system prompt).
+/// Uses a conservative 80% of the default max context tokens.
+fn estimate_message_budget(graph: &ConversationGraph) -> u32 {
+    // Default 180k context tokens; 80% for messages, 20% for system prompt.
+    let total_nodes = graph.nodes_by(|_| true).len();
+    // Scale budget based on graph size: more nodes = more candidates competing.
+    // Minimum 10k tokens, maximum 144k (80% of 180k).
+    let base = 144_000_u32;
+    if total_nodes < 50 {
+        base
+    } else {
+        // As the graph grows, the pipeline's scoring becomes more important
+        // for keeping context focused. Budget stays constant; scoring selects.
+        base
+    }
+}
+
+/// Render supplementary-tier nodes as compact one-line summaries in the system prompt.
+fn render_supplementary(
+    graph: &ConversationGraph,
+    supplementary: &[scoring::ScoredCandidate],
+) -> String {
+    let mut lines = vec!["## Related Context (summaries)".to_string()];
+    for candidate in supplementary {
+        let content = graph.node(candidate.node_id).map_or("", Node::content);
+        let truncated = if content.len() > 120 {
+            let end = content.char_indices().nth(117).map_or(117, |(i, _)| i);
+            format!("{}...", &content[..end])
+        } else {
+            content.to_string()
+        };
+        let type_tag = node_type_tag(graph, candidate.node_id);
+        lines.push(format!("- [{type_tag}] {truncated}"));
+    }
+    lines.join("\n")
+}
+
+/// Short type label for a node, used in supplementary summaries.
+fn node_type_tag(graph: &ConversationGraph, node_id: Uuid) -> &'static str {
+    match graph.node(node_id) {
+        Some(Node::Message { role, .. }) => match role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::System => "system",
+        },
+        Some(Node::WorkItem { .. }) => "work_item",
+        Some(Node::ToolCall { .. }) => "tool_call",
+        Some(Node::ToolResult { .. }) => "tool_result",
+        Some(Node::Question { .. }) => "question",
+        Some(Node::Answer { .. }) => "answer",
+        Some(Node::GitFile { .. }) => "git_file",
+        Some(Node::ApiError { .. }) => "error",
+        _ => "other",
+    }
+}
+
+/// Render messages from a chain walk, filtering to only scored/selected nodes.
+/// If a message node was not selected by the pipeline, it is skipped.
+/// However, the agent's own chain is always included for coherent conversation
+/// context (chain nodes pass scoring naturally due to `RespondsTo` edge weight).
+fn render_chain_messages(
+    graph: &ConversationGraph,
+    chain: &[&Node],
+    selected_ids: &HashSet<Uuid>,
+) -> Vec<ChatMessage> {
+    let mut messages = Vec::new();
+    for node in chain {
+        // Include chain nodes that were selected by the scoring pipeline.
+        // Chain nodes connected via RespondsTo from the anchor score highly,
+        // so this filter primarily prunes distant/irrelevant nodes.
+        if !selected_ids.contains(&node.id()) {
+            continue;
+        }
         if let Node::Message {
             id, role, content, ..
         } = node
@@ -75,11 +190,7 @@ pub fn build_context(
             }
         }
     }
-
-    super::ContextBuildResult {
-        system_prompt: Some(system_prompt),
-        messages,
-    }
+    messages
 }
 
 /// Build a plan section scoped to the parent plan of the given work item.

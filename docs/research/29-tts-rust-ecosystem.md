@@ -79,8 +79,13 @@ Plus `tokenizer.json` (~2 KB) and voice `.bin` files (~1 KB each).
 
 - **Qwen3-TTS**: Streaming-native design with `synthesize_streaming()`. Time-to-first-audio: 444-580ms. Has a Rust implementation (`qwen3-tts-rs`). Larger model, higher resource requirements.
 - **Kitten TTS (KittenML)**: 15M params, runs on Raspberry Pi, CPU-only. Very lightweight but lower quality.
-- **VoiRS**: Pure Rust neural TTS (no ONNX, no FFI). Alpha status (v0.1.0-alpha.2). Supports streaming, WASM, and GPU via wgpu. Worth watching but not production-ready.
+- **VoiRS**: Pure Rust neural TTS. Alpha status (v0.1.0-alpha.2). Supports streaming, WASM, and GPU via wgpu. Now includes Kokoro-82M ONNX model integration with automatic IPA generation for 7 languages (no manual phonemes needed). If VoiRS can run Kokoro without espeak-ng, this changes the espeak-ng dependency calculus. Worth watching closely but alpha quality.
 - **TADA (Hume AI)**: 1B params, fastest LLM-based TTS (RTF 0.09), zero hallucinations. Too large for CPU-only.
+- **NeuTTS Nano (Neuphonic)**: On-device TTS with ONNX support and GGUF quantization, designed for CPUs and edge. Directly competes with Pocket TTS. Worth evaluating if available.
+- **CosyVoice2-0.5B**: 150ms streaming latency, high quality. Recent entrant, CPU feasibility unclear at 0.5B params.
+- **Chatterbox-Turbo (Resemble AI)**: 350M params, MIT license, distilled to single-step decoding, 23 languages, voice cloning. Potentially CPU-feasible for non-real-time use, but 350M is borderline.
+- **Fish Audio S1-mini (0.5B)**: Open-sourced March 2026 with ONNX export. High quality, multilingual, but 0.5B params likely too heavy for CPU real-time.
+- **pocket-tts.c**: A C implementation of Pocket TTS inference ([taf2/pocket-tts.c](https://github.com/taf2/pocket-tts.c)) exists as a reference for non-Python implementations.
 
 ---
 
@@ -106,9 +111,27 @@ The application splits text into sentences and pipelines synthesis with playback
 
 All of these are well below the threshold where a human perceives a delay. The pipeline creates the illusion of continuous streaming speech.
 
-**Progress callbacks**: Some implementations (e.g., sherpa-onnx) provide progress callbacks during synthesis. These may or may not deliver partial audio samples. If they do, sub-sentence streaming becomes possible — start playing audio before the full sentence is done. This is model-dependent and needs verification per implementation.
+**Practical concerns with sentence splitting**: Splitting on `.!?` is naive — abbreviations ("Dr. Smith"), ellipses, bulleted lists, and code blocks break simple regex. A robust splitter needs rules for common abbreviations and markdown structure. Cross-sentence gaps (silence between chunks) may need explicit handling — either insert brief silence or let the model's natural prosody handle boundaries.
 
-**Pocket TTS native streaming**: The Python Pocket TTS library has a true `generate_audio_stream()` that yields audio chunks as the autoregressive loop generates them (every 3 frames initially, then every 12 frames). Each chunk is 1,920 samples × N frames. This is finer-grained than sentence-chunking but requires access to the autoregressive loop internals — only possible with the raw `ort` approach, not through sherpa-onnx's batch API.
+### Level 2: Sub-sentence streaming (autoregressive models only)
+
+Models with autoregressive architectures can yield partial audio during generation:
+
+- **Pocket TTS**: The Python library has `generate_audio_stream()` that yields audio chunks as the FlowLM autoregressive loop runs — every 3 frames initially (~240ms of audio), then every 12 frames. Each chunk is 1,920 samples × N frames at 24kHz. This requires access to the autoregressive loop internals — only possible with the raw `ort` approach (Strategy B), not through sherpa-onnx's batch API.
+- **Qwen3-TTS**: Native `synthesize_streaming()` with configurable chunk frames. Time-to-first-audio: 444-580ms. Rust implementation exists (`qwen3-tts-rs`).
+
+### Level 3: Progress callbacks (implementation-dependent)
+
+Some implementations (e.g., sherpa-onnx) provide progress callbacks during synthesis: `|samples: &[f32], progress: f32| -> bool`. Whether the `samples` parameter contains playable partial audio needs empirical verification — if it does, sub-sentence streaming is possible even through batch APIs.
+
+### Latency context
+
+Time-to-first-audio estimates (on modern laptop-class CPU, ~2024 i7/Ryzen 7):
+- Kokoro: ~100-300ms per short sentence
+- Pocket TTS: ~200-500ms per short sentence
+- Piper: ~50-150ms per short sentence
+
+These are unverified estimates from crate documentation and benchmarks. Actual latency depends heavily on specific CPU, model quantization (FP32 vs INT8), and sentence length. An empirical benchmark on the target hardware is needed before committing.
 
 ---
 
@@ -141,7 +164,7 @@ Unified speech processing library with official Rust bindings. Wraps a C++ backe
 - **Binary size**: 30-50MB with static linking
 - **Also supports**: Speech recognition (ASR), speaker diarization, keyword spotting, audio tagging, voice activity detection
 
-**Note**: `sherpa-rs` (thewh1teagle/sherpa-rs) is **deprecated** as of its latest commit. The official k2-fsa/sherpa-onnx Rust API is the maintained successor.
+**Note on `sherpa-rs`**: Third-party bindings at thewh1teagle/sherpa-rs (v0.6.8) exist separately. One agent's research found a deprecation notice pointing to the official k2-fsa bindings; however, this claim could not be independently verified and the crate remains published on crates.io with recent releases. Both sherpa-rs and the official k2-fsa Rust API are viable — the official API is preferred for long-term maintenance alignment with upstream.
 
 **Key advantage**: Handles all Pocket TTS inference complexity (5 ONNX models, 74 state tensors, ODE solver, KV cache management) in battle-tested C++. You just pass text and get audio back.
 
@@ -157,7 +180,7 @@ Unified speech processing library with official Rust bindings. Wraps a C++ backe
 - **ort version**: v1.16 (older; current is v2.0)
 - **API**: `KokoroTTS::with_config(config)` → `tts.speak(text, &voice)` → `GeneratedAudio { samples: Vec<f32>, sample_rate: u32 }`
 - **Streaming**: None — full utterance only
-- **Languages**: English only (Misaki phoneme conversion hardcoded for US English)
+- **Languages**: English only (Misaki phoneme conversion hardcoded for US English) — note: the Kokoro *model* supports 8 languages, but this crate does not expose them
 - **espeak-ng**: Required. Custom FFI bindings (`#[link(name = "espeak-ng")]`). Link-time failure if missing.
 - **Phoneme pipeline**: Text → espeak-ng IPA → Misaki phonemes → token IDs → ONNX model
 - **Voice format**: `.bin` files containing 256-float style vectors per voice
@@ -179,7 +202,17 @@ Unified speech processing library with official Rust bindings. Wraps a C++ backe
 
 **Assessment**: Most feature-complete Kokoro implementation. The GPL license is the critical concern — it infects any statically linked binary. The streaming and multi-language support are strong, but it's designed as a standalone application, not a library.
 
-### 4.3 `piper-rs`
+### 4.3 Other Kokoro Rust crates
+
+The Rust Kokoro ecosystem is fragmented — several additional implementations exist beyond kokoroxide and kokorox:
+
+- **`kokoro-tts`** ([crates.io](https://crates.io/crates/kokoro-tts)): Another Kokoro Rust wrapper. Not evaluated in depth.
+- **`Kokoros`** ([lucasjinreal/Kokoros](https://github.com/lucasjinreal/Kokoros)): Kokoro CLI + HTTP streaming server in Rust with recent phonemizer updates.
+- **VoiRS** (see Section 1.4): Now supports Kokoro-82M ONNX with its own G2P, potentially avoiding espeak-ng.
+
+kokoroxide and kokorox were selected for detailed analysis as they represent the two ends of the spectrum (minimal library vs. full application). The ecosystem fragmentation itself is a risk signal — no single Kokoro Rust implementation has consolidated community momentum.
+
+### 4.5 `piper-rs`
 
 [github.com/thewh1teagle/piper-rs](https://github.com/thewh1teagle/piper-rs) — Rust bindings for Piper TTS via `ort`.
 
@@ -188,7 +221,7 @@ Unified speech processing library with official Rust bindings. Wraps a C++ backe
 - **Quality**: Lower than Kokoro — Piper uses older VITS architecture
 - **License**: MIT
 
-### 4.4 System TTS crates
+### 4.6 System TTS crates
 
 - **`tts` crate** (v0.26.3): Wraps OS speech APIs (SAPI/WinRT on Windows, Speech Dispatcher on Linux, AVFoundation on macOS/iOS). Not neural, quality varies by OS. No model download needed.
 - **`msedge-tts`**: MSEdge Read Aloud API (requires network)
@@ -207,7 +240,7 @@ Cross-platform audio I/O library. The standard for real-time audio in Rust.
 - **Model**: Callback-based. The audio device calls your closure `|data: &mut [f32]|` on a high-priority thread to fill the output buffer.
 - **Latency**: Configurable. Default ~10ms. Can go lower with tuning.
 - **Thread model**: Callback runs on dedicated OS thread with real-time priority (via rtkit on Linux).
-- **Platforms**: Linux (ALSA/PulseAudio/JACK), macOS (CoreAudio), Windows (WASAPI), Android, iOS, Emscripten
+- **Platforms**: Linux (ALSA/PulseAudio/PipeWire/JACK), macOS (CoreAudio), Windows (WASAPI), Android, iOS, Emscripten. PipeWire is the default audio server on Arch Linux, Fedora, and Ubuntu 24.04+; cpal's PulseAudio backend works through PipeWire's compatibility layer, and native PipeWire support is available via feature flag.
 - **Usage pattern**: Create output stream → callback pulls samples from a shared ring buffer → write silence on underrun
 
 **Best for**: Low-latency streaming playback where you control timing. Ideal for TTS streaming pipeline.
@@ -326,9 +359,13 @@ Any Kokoro-based approach (kokoroxide, kokorox, sherpa-onnx with Kokoro model) r
 - `espeak-rs`: Another wrapper (used by kokorox, triggers GPL via static linking)
 - Custom FFI: kokoroxide writes its own `#[link(name = "espeak-ng")]` bindings
 
-**System dependency**: Must be installed via package manager (`pacman -S espeak-ng`, `apt install espeak-ng libespeak-ng-dev`). Cannot be bundled as a Rust crate dependency.
+**System dependency**: Typically installed via package manager (`pacman -S espeak-ng`, `apt install espeak-ng libespeak-ng-dev`). However, some sys crates (`espeakng-sys`, `espeak-rs-sys`) compile espeak-ng from source at build time, removing the pre-install requirement. Runtime phoneme data files may still need separate distribution depending on the build configuration.
 
-**Pocket TTS does NOT need espeak-ng** — it uses SentencePiece tokenization directly on text. This is a meaningful differentiator.
+**GPL licensing risk**: espeak-ng itself is GPL v3. The FSF's position is that both static and dynamic linking against GPL code triggers copyleft. This means **ALL Kokoro approaches carry GPL risk**, not just kokorox — kokoroxide's custom `#[link(name = "espeak-ng")]` bindings also link against the GPL library. The distinction between kokoroxide (MIT) and kokorox (GPL 3.0) in the comparison matrix reflects the *crate's own license*, not the effective license of a binary linking against espeak-ng. Any binary shipping with espeak-ng linked (statically or dynamically) may be subject to GPL requirements. Consult legal counsel if this matters.
+
+**espeak-ng version pinning risk**: Different OS distributions ship different espeak-ng versions. If Rust FFI bindings target a specific API version, version mismatches can cause link failures or runtime crashes. This is a real deployment pain point.
+
+**Pocket TTS does NOT need espeak-ng** — it uses SentencePiece tokenization (Apache 2.0) directly on text. This is a meaningful differentiator for both technical simplicity and licensing cleanliness.
 
 ---
 
@@ -353,7 +390,8 @@ All approaches need a model cache directory (e.g., `~/.cache/<app>/models/`) and
 | **Model size** | ~200MB INT8 | ~200MB INT8 | 86-326MB | 86-326MB |
 | **Streaming** | Sentence-chunking | Sub-sentence possible | Sentence-chunking | Native WebSocket |
 | **Languages** | Multilingual | Multilingual | English only | 6+ languages |
-| **espeak-ng** | No | No | Yes | Yes |
+| **espeak-ng** | No ¹ | No | Yes | Yes |
+| **GPL risk** | None ¹ | None | **Yes** (espeak-ng link) | **Yes** (espeak-ng link) |
 | **Build deps** | CMake + Clang | ONNX Runtime lib | espeak-ng lib | espeak-ng lib |
 | **Integration effort** | Medium (5-7 days) | High (10-14 days) | Low (3-5 days) | Medium (5-7 days) |
 | **Risk** | Low-Medium | High | Low | Medium (GPL) |
@@ -361,25 +399,82 @@ All approaches need a model cache directory (e.g., `~/.cache/<app>/models/`) and
 | **License** | Apache 2.0 | MIT + CC-BY-4.0 | MIT | **GPL 3.0** |
 | **Maturity** | Production (C++ core) | N/A (custom) | WIP (v0.1.5) | Stable (v0.2.3) |
 
----
-
-## 10. Open Questions for Implementation
-
-1. **sherpa-onnx progress callback**: Does the `|samples: &[f32], progress: f32|` callback deliver actual audio samples that can be played immediately? If so, sub-sentence streaming is possible even through sherpa-onnx. Needs empirical verification.
-
-2. **sherpa-onnx binary size**: What is the actual binary size impact when statically linking sherpa-onnx? The 30-50MB estimate is from sherpa-rs — the official bindings may differ.
-
-3. **cpal vs rodio**: For the specific use case of "push audio chunks from a synthesis thread to speakers," is cpal's lower-level API worth the complexity over rodio's simpler source-based model?
-
-4. **Model quality comparison**: No direct A/B comparison between Pocket TTS and Kokoro on the same text exists in the research. An empirical listening test would be valuable before committing to a model.
-
-5. **SentencePiece in Rust**: The `sentencepiece` crate (FFI) vs `tokenizers` crate (pure Rust, needs model conversion) — which produces identical tokenization to the Python reference? Critical for Pocket TTS quality.
-
-6. **Build time impact**: How much does sherpa-onnx's CMake compilation add to `cargo build` time? For a developer workflow, >60s incremental builds would be painful.
+¹ When using Pocket TTS model. If using Kokoro through sherpa-onnx, espeak-ng IS required and GPL risk applies.
 
 ---
 
-## References
+## 10. Practical Concerns
+
+### Runtime memory
+
+- Loading a 200MB INT8 model set requires at least that much RAM, plus working memory for inference tensors
+- Pocket TTS with 74 state tensors: peak memory during inference could be 500MB-1.5GB (KV caches: 6 layers × ~8MB each for FlowLM, plus Mimi decoder state)
+- Kokoro: single model, lower peak memory (~300-500MB estimated)
+- This is significant for a TUI application already running agent loops, git watchers, and background tasks
+
+### Model loading / startup time
+
+- ONNX model loading involves parsing, graph optimization, and memory allocation
+- For a 200-475MB model set, initial load could take 2-10 seconds
+- Lazy initialization (load on first `/speak` command, not at app startup) avoids penalizing users who don't use TTS
+- Subsequent calls reuse the loaded session (no reload)
+
+### Disk space
+
+- Model files: 86-475MB depending on model and quantization
+- sherpa-onnx binary size increase: ~30-50MB (static linking)
+- ONNX Runtime shared library (if using `load-dynamic`): ~50-150MB
+- Total footprint: potentially 300-700MB. Significant for a developer tool.
+
+### CI/CD impact
+
+- CMake + Clang build dependency for sherpa-onnx means CI runners need these installed
+- `download-binaries` feature in ort downloads ONNX Runtime at build time (network dependency)
+- Model files should NOT be in the repo but need to be available for integration tests
+- Feature-gating (`--no-default-features`) allows CI to skip TTS compilation when not needed
+
+### Headless / containerized operation
+
+- cpal requires audio devices — on headless servers, SSH sessions, or containers, `cpal::default_host().default_output_device()` returns `None`
+- Must handle gracefully: TTS tools return a clear error ("No audio output device found") rather than panicking
+- Alternative: write WAV to file as fallback when no audio device is available
+
+### Effort estimate risk factors
+
+The estimates in the comparison matrix (3-14 days) assume:
+- Developer has prior ONNX Runtime / Rust FFI experience
+- No build system debugging time (CMake + ONNX Runtime cross-compilation issues routinely consume 2-5 extra days)
+- Audio pipeline work (cpal/rodio integration, ring buffer, sample format conversion) adds 2-3 days regardless of backend
+- Model download and caching implementation adds 1-2 days
+- For raw ort + Pocket TTS specifically: the 10-14 day estimate could realistically be 15-25 days including audio pipeline, numerical validation against Python reference, and edge case debugging
+
+### Model obsolescence
+
+The TTS field moves fast. Pocket TTS was released January 2026. By the time integration is complete, a better model may exist. The sherpa-onnx approach (Strategy A) mitigates this via multi-model support. Single-model strategies (B, C) are locked to one model unless refactored.
+
+---
+
+## 11. Open Questions for Implementation
+
+1. **[BLOCKING] sherpa-onnx Rust API Pocket TTS support**: The C++/Python APIs support Pocket TTS, and the Rust `OfflineTtsModelConfig` struct has a `pocket` field — but the completeness and correctness of the Rust Pocket TTS bindings is unverified. If the Rust API doesn't fully expose Pocket TTS (or has bugs), Strategy A's effort estimate is wrong. Must verify by building a minimal Pocket TTS example with the Rust bindings before committing.
+
+2. **sherpa-onnx progress callback**: Does the `|samples: &[f32], progress: f32|` callback deliver actual audio samples that can be played immediately? If so, sub-sentence streaming is possible even through sherpa-onnx. Needs empirical verification.
+
+3. **sherpa-onnx binary size**: What is the actual binary size impact when statically linking sherpa-onnx? The 30-50MB estimate is from sherpa-rs — the official bindings may differ.
+
+4. **cpal vs rodio**: For the specific use case of "push audio chunks from a synthesis thread to speakers," is cpal's lower-level API worth the complexity over rodio's simpler source-based model?
+
+5. **Model quality comparison**: No direct A/B comparison between Pocket TTS and Kokoro on the same text exists in the research. An empirical listening test would be valuable before committing to a model. Important but deferrable — can be resolved after a prototype exists.
+
+6. **SentencePiece in Rust**: The `sentencepiece` crate (FFI) vs `tokenizers` crate (pure Rust, needs model conversion) — which produces identical tokenization to the Python reference? Critical for Pocket TTS quality (raw ort approach only).
+
+7. **Build time impact**: How much does sherpa-onnx's CMake compilation add to `cargo build` time? For a developer workflow, >60s incremental builds would be painful. Incremental builds (no C++ changes) should be fast, but first build could be minutes.
+
+8. **VoiRS espeak-ng elimination**: Does VoiRS's Kokoro-82M integration truly eliminate the espeak-ng dependency via its own G2P? If verified, VoiRS could become a fifth strategy column.
+
+---
+
+## 12. References
 
 - [Pocket TTS blog post (Kyutai, Jan 2026)](https://kyutai.org/blog/2026-01-13-pocket-tts)
 - [KevinAHM/pocket-tts-onnx-export](https://github.com/KevinAHM/pocket-tts-onnx-export) — ONNX export + reference inference
@@ -393,4 +488,8 @@ All approaches need a model cache directory (e.g., `~/.cache/<app>/models/`) and
 - [rodio](https://github.com/RustAudio/rodio) — Audio playback
 - [piper-rs](https://github.com/thewh1teagle/piper-rs) — Piper TTS Rust bindings
 - [qwen3-tts-rs](https://github.com/TrevorS/qwen3-tts-rs) — Streaming TTS example
-- [VoiRS](https://crates.io/crates/voirs) — Pure Rust neural TTS (alpha)
+- [VoiRS](https://crates.io/crates/voirs) — Pure Rust neural TTS (alpha, now with Kokoro-82M ONNX support)
+- [kokoro-tts](https://crates.io/crates/kokoro-tts) — Another Rust Kokoro implementation
+- [Kokoros](https://github.com/lucasjinreal/Kokoros) — Kokoro CLI + HTTP server in Rust
+- [pocket-tts.c](https://github.com/taf2/pocket-tts.c) — C implementation of Pocket TTS inference
+- [sherpa-rs](https://github.com/thewh1teagle/sherpa-rs) — Third-party Rust sherpa-onnx bindings (v0.6.8)

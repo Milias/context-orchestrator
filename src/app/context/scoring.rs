@@ -7,6 +7,7 @@ use crate::graph::{ConversationGraph, EdgeKind};
 
 use super::candidates::Candidate;
 use chrono::Utc;
+use uuid::Uuid;
 
 /// Selection tier based on score. Determines detail level and budget allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -11,7 +11,6 @@ use crate::llm::{ChatConfig, LlmProvider, ToolDefinition};
 use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
 
 use super::streaming::{self as agent_streaming, AgentContext, StreamOutcome, StreamResult};
-use crate::app::context;
 use crate::app::SharedGraph;
 
 use chrono::Utc;
@@ -34,6 +33,10 @@ pub(in crate::app) struct AgentLoopConfig {
     pub agent_id: Uuid,
     /// Context policy determines how the agent builds context and records messages.
     pub policy: crate::app::context::policies::ContextPolicy,
+    /// How to select nodes for the context window (heuristic or LLM-guided).
+    pub context_selection: crate::config::ContextSelectionMode,
+    /// Model override for the meta-LLM selector (LLM-guided mode only).
+    pub context_selector_model: Option<String>,
 }
 
 /// Spawn the agent loop as a persistent background task.
@@ -115,31 +118,16 @@ async fn run_activation(
 ) -> anyhow::Result<ActivationResult> {
     let mut continuation_count: u32 = 0;
     let mut api_error_count: u32 = 0;
+    // Track the parent node for message chaining. Conversational: branch leaf.
+    // Task: work item's chain leaf. Updated after each iteration.
+    let mut parent_id = {
+        let g = graph.read();
+        config.policy.initial_parent(&g)?
+    };
 
     for _ in 0..config.max_tool_loop_iterations {
-        let ctx_phase = Uuid::new_v4();
-        ctx.send(AgentEvent::Progress {
-            phase_id: ctx_phase,
-            phase: AgentPhase::BuildingContext,
-        });
-
-        let context_result = {
-            let g = graph.read();
-            context::extract_messages(&g, &config.policy, config.agent_id)
-        };
-        let (system_prompt, messages) = context::finalize_context(
-            context_result.system_prompt,
-            context_result.messages,
-            provider.as_ref(),
-            &config.model,
-            config.max_context_tokens,
-            &config.tools,
-        )
-        .await?;
-
-        ctx.send(AgentEvent::PhaseCompleted {
-            phase_id: ctx_phase,
-        });
+        let (system_prompt, messages) =
+            super::context_build::build_and_finalize_context(graph, provider, config, ctx).await?;
 
         let loop_config = ChatConfig {
             system_prompt,
@@ -190,7 +178,10 @@ async fn run_activation(
             cleanup_api_errors(graph);
         }
 
-        let assistant_id = apply_iteration_to_graph(graph, &result, &loop_config, ctx)?;
+        let assistant_id =
+            apply_iteration_to_graph(graph, &result, &loop_config, ctx, &config.policy, parent_id)?;
+        // Update parent for next iteration's message chaining.
+        parent_id = assistant_id;
 
         let is_tool_use =
             result.stop_reason == Some(StopReason::ToolUse) && !result.tool_use_records.is_empty();
@@ -228,17 +219,19 @@ async fn run_activation(
 }
 
 /// Add the assistant response and think block to the shared graph.
+/// Uses the policy to determine how to record the message (`add_message` vs `add_reply`).
 fn apply_iteration_to_graph(
     graph: &SharedGraph,
     result: &StreamResult,
     config: &ChatConfig,
     ctx: &AgentContext,
+    policy: &crate::app::context::policies::ContextPolicy,
+    parent_id: Uuid,
 ) -> anyhow::Result<Uuid> {
     let assistant_id = Uuid::new_v4();
 
     {
         let mut g = graph.write();
-        let leaf = g.active_leaf()?;
         let assistant_node = Node::Message {
             id: assistant_id,
             role: Role::Assistant,
@@ -249,7 +242,7 @@ fn apply_iteration_to_graph(
             output_tokens: result.output_tokens,
             stop_reason: result.stop_reason,
         };
-        g.add_message(leaf, assistant_node)?;
+        policy.record_message(&mut g, parent_id, assistant_node)?;
 
         if !result.think_text.is_empty() {
             let think_node = Node::ThinkBlock {
