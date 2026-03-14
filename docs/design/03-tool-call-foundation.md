@@ -72,7 +72,7 @@ Tool arguments use `ToolCallArguments`, a closed enum with `#[serde(tag = "tool_
 
 ```rust
 pub enum ToolCallArguments {
-    Plan { raw_input: String, description: Option<String> },
+    Plan { title: String, description: Option<String> },
     ReadFile { path: String },
     WriteFile { path: String, content: String },
     WebSearch { query: String },

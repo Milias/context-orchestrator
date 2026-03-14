@@ -174,17 +174,6 @@ pub enum ChatContent {
 }
 
 impl ChatContent {
-    /// Extract the text content if this is a `Text` variant.
-    pub fn text_content(&self) -> Option<&str> {
-        match self {
-            Self::Text(s) => Some(s),
-            Self::Blocks(blocks) => blocks.iter().find_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            }),
-        }
-    }
-
     /// Approximate character length for token budget calculations.
     pub fn char_len(&self) -> usize {
         match self {

@@ -36,13 +36,12 @@ fn test_tool_definition_serializes_to_api_schema() {
     assert!(json.contains("\"required\":[\"path\"]"));
 }
 
-/// Catches `ChatMessage::text()` not producing equivalent output to old String construction.
-/// `ChatMessage::text()` must create a Text variant, and `text_content()` must retrieve it.
+/// Catches `ChatMessage::text()` not producing the expected `ChatContent::Text` variant.
 #[test]
 fn test_chat_message_text_backward_compat() {
     let msg = crate::llm::ChatMessage::text("user", "hello world");
     assert_eq!(msg.role, "user");
-    assert_eq!(msg.text_content(), Some("hello world"));
+    assert!(matches!(msg.content, crate::llm::ChatContent::Text(ref s) if s == "hello world"));
 }
 
 /// Catches `ContentBlock` serialization failures for `tool_use`/`tool_result`.

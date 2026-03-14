@@ -59,7 +59,6 @@ pub enum BackgroundTaskKind {
     GitIndex,
     ContextSummarize,
     ToolDiscovery,
-    ToolExtraction,
     AgentPhase,
 }
 

@@ -2,8 +2,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::node::Node;
-use super::ConversationGraph;
-use uuid::Uuid;
 
 /// A timestamped snapshot of a node's state captured before a mutation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,9 +12,11 @@ pub struct NodeSnapshot {
     pub captured_at: DateTime<Utc>,
 }
 
-impl ConversationGraph {
+// User: acceptable use of #[cfg(test)] — only used in assertion-based tests.
+#[cfg(test)]
+impl super::ConversationGraph {
     /// Returns the version history for a node (oldest first), or empty slice if none.
-    pub fn node_history(&self, id: Uuid) -> &[NodeSnapshot] {
+    pub fn node_history(&self, id: uuid::Uuid) -> &[NodeSnapshot] {
         self.history.get(&id).map_or(&[], Vec::as_slice)
     }
 }

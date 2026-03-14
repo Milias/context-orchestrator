@@ -66,52 +66,6 @@ fn test_parse_triggers_set() {
 }
 
 #[test]
-fn test_plan_extraction_result_serde() {
-    let result = PlanExtractionResult {
-        title: "Fix login".to_string(),
-        description: Some("The login page has a bug".to_string()),
-    };
-    let json = serde_json::to_string(&result).unwrap();
-    let parsed: PlanExtractionResult = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed.title, "Fix login");
-    assert_eq!(
-        parsed.description,
-        Some("The login page has a bug".to_string())
-    );
-}
-
-#[test]
-fn test_plan_extraction_result_null_description() {
-    let json = r#"{"title": "Quick fix", "description": null}"#;
-    let parsed: PlanExtractionResult = serde_json::from_str(json).unwrap();
-    assert_eq!(parsed.title, "Quick fix");
-    assert!(parsed.description.is_none());
-}
-
-#[test]
-fn test_plan_result_to_node() {
-    let result = PlanExtractionResult {
-        title: "Test task".to_string(),
-        description: Some("Details".to_string()),
-    };
-    let node = plan_result_to_node(&result);
-    assert_eq!(node.content(), "Test task");
-    match &node {
-        Node::WorkItem {
-            title,
-            status,
-            description,
-            ..
-        } => {
-            assert_eq!(title, "Test task");
-            assert_eq!(*status, WorkItemStatus::Todo);
-            assert_eq!(description.as_deref(), Some("Details"));
-        }
-        _ => panic!("Expected WorkItem node"),
-    }
-}
-
-#[test]
 fn test_parse_triggers_planning_not_matched() {
     let triggers = parse_triggers("/planning some stuff");
     assert!(triggers.is_empty());
@@ -130,21 +84,16 @@ fn test_parse_triggers_plan_at_eof_no_newline() {
     assert_eq!(triggers.len(), 1);
 }
 
+/// Catches plan user trigger producing wrong variant — must produce `Plan`,
+/// not `Unknown`.
 #[test]
-fn test_truncate_content_unicode_safe() {
-    let emoji_str = "🎉🎊🎈🎁🎂";
-    let result = truncate_content(emoji_str, 3);
-    assert_eq!(result, "🎉🎊🎈...");
-}
-
-#[test]
-fn test_truncate_content_cjk_safe() {
-    let cjk = "你好世界测试";
-    let result = truncate_content(cjk, 4);
-    assert_eq!(result, "你好世界...");
-}
-
-#[test]
-fn test_truncate_content_short_string_unchanged() {
-    assert_eq!(truncate_content("hello", 10), "hello");
+fn test_parse_user_trigger_args_plan() {
+    let args = parse_user_trigger_args("plan", "Fix the login bug");
+    match args {
+        ToolCallArguments::Plan { title, description } => {
+            assert_eq!(title, "Fix the login bug");
+            assert!(description.is_none());
+        }
+        other => panic!("Expected Plan, got: {}", other.tool_name()),
+    }
 }

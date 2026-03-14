@@ -48,11 +48,18 @@ pub fn tool_registry() -> &'static [ToolRegistryEntry] {
 }
 
 fn build_registry() -> Vec<ToolRegistryEntry> {
+    let mut tools = config_tools();
+    tools.extend(filesystem_tools());
+    tools
+}
+
+/// Config and planning tools.
+fn config_tools() -> Vec<ToolRegistryEntry> {
     vec![
-        ToolRegistryEntry {
-            name: "set",
-            description: "Set a runtime configuration value (e.g. max_tokens, model)",
-            input_schema: schema(&[
+        entry(
+            "set",
+            "Set a runtime configuration value (e.g. max_tokens, model)",
+            &[
                 prop(
                     "key",
                     SchemaType::String,
@@ -65,32 +72,46 @@ fn build_registry() -> Vec<ToolRegistryEntry> {
                     "New value for the config key",
                     true,
                 ),
-            ]),
-        },
-        ToolRegistryEntry {
-            name: "plan",
-            description: "Create a structured work item from a description",
-            input_schema: schema(&[prop(
-                "raw_input",
-                SchemaType::String,
-                "Free-text description of the work item",
-                true,
-            )]),
-        },
-        ToolRegistryEntry {
-            name: "read_file",
-            description: "Read the contents of a file at the given path",
-            input_schema: schema(&[prop(
+            ],
+        ),
+        entry(
+            "plan",
+            "Create a structured work item from a description",
+            &[
+                prop(
+                    "title",
+                    SchemaType::String,
+                    "Concise title for the work item",
+                    true,
+                ),
+                prop(
+                    "description",
+                    SchemaType::String,
+                    "Detailed description of the work item",
+                    false,
+                ),
+            ],
+        ),
+    ]
+}
+
+/// Filesystem tools: read, write, list, search.
+fn filesystem_tools() -> Vec<ToolRegistryEntry> {
+    vec![
+        entry(
+            "read_file",
+            "Read the contents of a file at the given path",
+            &[prop(
                 "path",
                 SchemaType::String,
                 "Absolute or relative path to the file",
                 true,
-            )]),
-        },
-        ToolRegistryEntry {
-            name: "write_file",
-            description: "Write content to a file, creating parent directories if needed",
-            input_schema: schema(&[
+            )],
+        ),
+        entry(
+            "write_file",
+            "Write content to a file, creating parent directories if needed",
+            &[
                 prop(
                     "path",
                     SchemaType::String,
@@ -103,12 +124,12 @@ fn build_registry() -> Vec<ToolRegistryEntry> {
                     "The full content to write to the file",
                     true,
                 ),
-            ]),
-        },
-        ToolRegistryEntry {
-            name: "list_directory",
-            description: "List files and directories at a given path",
-            input_schema: schema(&[
+            ],
+        ),
+        entry(
+            "list_directory",
+            "List files and directories at a given path",
+            &[
                 prop(
                     "path",
                     SchemaType::String,
@@ -121,12 +142,12 @@ fn build_registry() -> Vec<ToolRegistryEntry> {
                     "If true, list recursively. Defaults to false.",
                     false,
                 ),
-            ]),
-        },
-        ToolRegistryEntry {
-            name: "search_files",
-            description: "Search for a regex pattern across files in the project",
-            input_schema: schema(&[
+            ],
+        ),
+        entry(
+            "search_files",
+            "Search for a regex pattern across files in the project",
+            &[
                 prop(
                     "pattern",
                     SchemaType::String,
@@ -139,9 +160,22 @@ fn build_registry() -> Vec<ToolRegistryEntry> {
                     "Directory to search in. Defaults to cwd.",
                     false,
                 ),
-            ]),
-        },
+            ],
+        ),
     ]
+}
+
+/// Shorthand: build a `ToolRegistryEntry`.
+fn entry(
+    name: &'static str,
+    description: &'static str,
+    props: &[SchemaProperty],
+) -> ToolRegistryEntry {
+    ToolRegistryEntry {
+        name,
+        description,
+        input_schema: schema(props),
+    }
 }
 
 /// Shorthand: build a `SchemaProperty`.
@@ -185,11 +219,9 @@ const VALID_SET_KEYS: &[&str] = &[
 pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult {
     match arguments {
         ToolCallArguments::Set { key, value } => execute_set(key, value),
-        ToolCallArguments::Plan { .. } => ToolExecutionResult {
-            content: ToolResultContent::text(
-                "Plan tool: use /plan <description> to create work items",
-            ),
-            is_error: true,
+        ToolCallArguments::Plan { title, .. } => ToolExecutionResult {
+            content: ToolResultContent::text(format!("Created work item: {title}")),
+            is_error: false,
         },
         ToolCallArguments::ReadFile { path } => read_file::execute(path).await,
         ToolCallArguments::WriteFile { path, content } => write_file::execute(path, content).await,

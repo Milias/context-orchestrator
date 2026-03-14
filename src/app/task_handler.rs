@@ -1,6 +1,6 @@
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
-use crate::graph::{BackgroundTaskKind, EdgeKind, Node, StopReason, TaskStatus};
-use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage, ToolExtractionOutcome};
+use crate::graph::{BackgroundTaskKind, EdgeKind, Node, StopReason, TaskStatus, WorkItemStatus};
+use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
 use crate::tool_executor;
 use crate::tui::{AgentDisplayState, AgentVisualPhase};
 
@@ -67,23 +67,6 @@ impl App {
                     });
                 }
             }
-            TaskMessage::ToolExtractionComplete {
-                trigger_message_id,
-                result,
-            } => match result {
-                ToolExtractionOutcome::Plan(plan) => {
-                    let mut g = self.graph.write();
-                    let node = crate::tools::plan_result_to_node(&plan);
-                    let node_id = g.add_node(node);
-                    let _ = g.add_edge(
-                        node_id,
-                        trigger_message_id,
-                        crate::tools::tool_result_edge_kind(),
-                    );
-                    self.tui_state.status_message =
-                        Some(format!("Work item created: {}", plan.title));
-                }
-            },
             TaskMessage::ToolCallCompleted {
                 tool_call_id,
                 content,
@@ -284,7 +267,7 @@ impl App {
             }
         }
 
-        // Apply `set` config mutation for both user-triggered and LLM-triggered calls.
+        // Apply side-effects for specific tools (both user-triggered and LLM-triggered).
         if !is_error {
             if let Some(Node::ToolCall {
                 arguments: ToolCallArguments::Set { key, value },
@@ -295,6 +278,36 @@ impl App {
                 drop(g);
                 crate::tool_executor::apply_config_set(&mut self.config, &k, &v);
                 g = self.graph.write();
+
+                // Re-check status: agent timeout could have resolved this tool
+                // while the lock was released for config mutation.
+                if let Some(Node::ToolCall { status, .. }) = g.node(tool_call_id) {
+                    if *status == ToolCallStatus::Completed || *status == ToolCallStatus::Failed {
+                        return;
+                    }
+                }
+            }
+
+            if let Some(Node::ToolCall {
+                arguments:
+                    ToolCallArguments::Plan {
+                        title, description, ..
+                    },
+                parent_message_id,
+                ..
+            }) = g.node(tool_call_id)
+            {
+                let (t, d, pm) = (title.clone(), description.clone(), *parent_message_id);
+                let work_item = Node::WorkItem {
+                    id: Uuid::new_v4(),
+                    title: t.clone(),
+                    status: WorkItemStatus::Todo,
+                    description: d,
+                    created_at: Utc::now(),
+                };
+                let wi_id = g.add_node(work_item);
+                let _ = g.add_edge(wi_id, pm, EdgeKind::RelevantTo);
+                self.tui_state.status_message = Some(format!("Work item created: {t}"));
             }
         }
 

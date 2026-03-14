@@ -76,11 +76,12 @@ impl ConversationGraph {
     /// Set the `input_tokens` field on a `Message` node.
     /// Captures a version snapshot before the mutation.
     pub fn set_input_tokens(&mut self, node_id: Uuid, tokens: u32) {
-        let _ = self.mutate_node(node_id, |node| {
-            if let Node::Message { input_tokens, .. } = node {
+        let _ = self.mutate_node(node_id, |node| match node {
+            Node::Message { input_tokens, .. } => {
                 *input_tokens = Some(tokens);
+                Ok(())
             }
-            Ok(())
+            _ => anyhow::bail!("Node {node_id} is not a Message"),
         });
     }
 

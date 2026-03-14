@@ -14,7 +14,7 @@ pub enum ToolCallStatus {
 #[serde(tag = "tool_type")]
 pub enum ToolCallArguments {
     Plan {
-        raw_input: String,
+        title: String,
         description: Option<String>,
     },
     ReadFile {
@@ -63,10 +63,7 @@ impl ToolCallArguments {
     /// e.g. `"read_file: src/main.rs"`.
     pub fn display_summary(&self) -> String {
         match self {
-            Self::Plan { description, .. } => match description {
-                Some(d) => format!("plan: {d}"),
-                None => "plan".to_string(),
-            },
+            Self::Plan { title, .. } => format!("plan: {title}"),
             Self::ReadFile { path } => format!("read_file: {path}"),
             Self::WriteFile { path, .. } => format!("write_file: {path}"),
             Self::ListDirectory { path, .. } => format!("list_directory: {path}"),
@@ -241,16 +238,8 @@ pub fn parse_tool_arguments(name: &str, raw_json: &str) -> ToolCallArguments {
             return parsed;
         }
     }
-    // Plan preserves raw input as fallback; others become Unknown.
-    if name == "plan" {
-        ToolCallArguments::Plan {
-            raw_input: raw_json.to_string(),
-            description: None,
-        }
-    } else {
-        ToolCallArguments::Unknown {
-            tool_name: name.to_string(),
-            raw_json: raw_json.to_string(),
-        }
+    ToolCallArguments::Unknown {
+        tool_name: name.to_string(),
+        raw_json: raw_json.to_string(),
     }
 }

@@ -21,18 +21,6 @@ fn default_system_prompt() -> String {
     "You are a helpful assistant.".to_string()
 }
 
-fn default_background_model() -> String {
-    "claude-opus-4-6".to_string()
-}
-
-fn default_background_max_tokens() -> u32 {
-    1024
-}
-
-fn default_background_max_concurrent() -> usize {
-    2
-}
-
 fn default_max_tool_loop_iterations() -> usize {
     10
 }
@@ -51,12 +39,6 @@ pub struct AppConfig {
     pub max_context_tokens: u32,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
-    #[serde(default = "default_background_model")]
-    pub background_model: String,
-    #[serde(default = "default_background_max_tokens")]
-    pub background_max_tokens: u32,
-    #[serde(default = "default_background_max_concurrent")]
-    pub background_max_concurrent: usize,
     #[serde(default = "default_max_tool_loop_iterations")]
     pub max_tool_loop_iterations: usize,
 }

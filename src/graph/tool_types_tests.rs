@@ -103,7 +103,7 @@ fn test_update_tool_call_status() {
         id: tc_id,
         api_tool_use_id: None,
         arguments: ToolCallArguments::Plan {
-            raw_input: "fix bug".to_string(),
+            title: "fix bug".to_string(),
             description: None,
         },
         status: ToolCallStatus::Pending,

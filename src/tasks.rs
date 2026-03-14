@@ -1,8 +1,6 @@
 use crate::graph::{
     BackgroundTaskKind, GitFileStatus, StopReason, TaskStatus, ToolCallArguments, ToolResultContent,
 };
-use crate::llm::ChatMessage;
-use crate::tools::PlanExtractionResult;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use tokio::sync::mpsc;
@@ -18,21 +16,6 @@ pub struct GitFileSnapshot {
 pub struct ToolSnapshot {
     pub name: String,
     pub description: String,
-}
-
-/// Read-only snapshot of graph context for background tasks.
-/// Cloned from the live graph before spawning — no shared mutable state.
-#[derive(Debug, Clone)]
-pub struct ContextSnapshot {
-    pub messages: Vec<ChatMessage>,
-    pub tools: Vec<ToolSnapshot>,
-    pub trigger_message_id: Uuid,
-}
-
-/// Outcome of a tool extraction background task.
-#[derive(Debug)]
-pub enum ToolExtractionOutcome {
-    Plan(PlanExtractionResult),
 }
 
 // ── Agent loop types ─────────────────────────────────────────────────
@@ -122,10 +105,6 @@ pub enum TaskMessage {
         kind: BackgroundTaskKind,
         status: TaskStatus,
         description: String,
-    },
-    ToolExtractionComplete {
-        trigger_message_id: Uuid,
-        result: ToolExtractionOutcome,
     },
     ToolCallCompleted {
         tool_call_id: Uuid,

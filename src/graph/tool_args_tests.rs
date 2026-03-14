@@ -8,7 +8,7 @@ use crate::graph::tool_types::{
 fn test_tool_call_arguments_tagged_union_serde() {
     let variants = vec![
         ToolCallArguments::Plan {
-            raw_input: "fix".to_string(),
+            title: "fix".to_string(),
             description: Some("desc".to_string()),
         },
         ToolCallArguments::ReadFile {
@@ -69,14 +69,14 @@ fn test_to_input_json_strips_tag() {
     assert_eq!(unknown.to_input_json(), r#"{"key":"val"}"#);
 
     let plan = ToolCallArguments::Plan {
-        raw_input: "fix the bug".to_string(),
+        title: "fix the bug".to_string(),
         description: Some("plan desc".to_string()),
     };
     let plan_json = plan.to_input_json();
     let plan_parsed: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
     assert!(plan_parsed.get("tool_type").is_none());
     assert_eq!(
-        plan_parsed.get("raw_input").unwrap().as_str().unwrap(),
+        plan_parsed.get("title").unwrap().as_str().unwrap(),
         "fix the bug"
     );
 
@@ -196,23 +196,6 @@ fn test_parse_tool_arguments_tagless_search_files() {
             assert_eq!(path.as_deref(), Some("src"));
         }
         other => panic!("Expected SearchFiles, got: {}", other.tool_name()),
-    }
-}
-
-/// Catches plan fallback regression — invalid JSON for plan must still
-/// produce a `Plan` variant with `raw_input`, not `Unknown`.
-#[test]
-fn test_parse_tool_arguments_plan_fallback() {
-    let args = parse_tool_arguments("plan", "not valid json");
-    match args {
-        ToolCallArguments::Plan {
-            raw_input,
-            description,
-        } => {
-            assert_eq!(raw_input, "not valid json");
-            assert!(description.is_none());
-        }
-        other => panic!("Expected Plan fallback, got: {}", other.tool_name()),
     }
 }
 

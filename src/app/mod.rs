@@ -6,9 +6,9 @@ mod think_splitter;
 
 use crate::config::AppConfig;
 use crate::graph::{ConversationGraph, Node, Role};
-use crate::llm::{BackgroundLlmConfig, ChatMessage, LlmProvider};
+use crate::llm::LlmProvider;
 use crate::persistence::{self, ConversationMetadata};
-use crate::tasks::{self, AgentToolResult, ContextSnapshot, TaskMessage};
+use crate::tasks::{self, AgentToolResult, TaskMessage};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
 use crate::tui::{self, AgentDisplayState, TuiState};
@@ -20,7 +20,7 @@ use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -33,7 +33,6 @@ pub struct App {
     graph: SharedGraph,
     metadata: ConversationMetadata,
     provider: Arc<dyn LlmProvider>,
-    background_semaphore: Arc<Semaphore>,
     tui_state: TuiState,
     task_rx: mpsc::UnboundedReceiver<TaskMessage>,
     task_tx: mpsc::UnboundedSender<TaskMessage>,
@@ -58,13 +57,11 @@ impl App {
         provider: Arc<dyn LlmProvider>,
     ) -> Self {
         let (task_tx, task_rx) = mpsc::unbounded_channel();
-        let background_semaphore = Arc::new(Semaphore::new(config.background_max_concurrent));
         Self {
             config,
             graph: Arc::new(RwLock::new(graph)),
             metadata,
             provider,
-            background_semaphore,
             tui_state: TuiState::new(),
             task_rx,
             task_tx,
@@ -72,51 +69,6 @@ impl App {
             cancel_token: None,
             task_tokens: HashMap::new(),
             active_phase_ids: HashSet::new(),
-        }
-    }
-
-    fn snapshot_context(graph: &ConversationGraph, trigger_message_id: Uuid) -> ContextSnapshot {
-        let history = graph
-            .get_branch_history(graph.active_branch())
-            .unwrap_or_default();
-
-        let messages: Vec<ChatMessage> = history
-            .iter()
-            .filter_map(|node| match node {
-                Node::Message { role, content, .. } => {
-                    let api_role = match role {
-                        Role::User => "user",
-                        Role::Assistant => "assistant",
-                        Role::System => return None,
-                    };
-                    Some(ChatMessage::text(api_role, content))
-                }
-                _ => None,
-            })
-            .collect();
-
-        let tools = graph
-            .nodes_by(|n| matches!(n, Node::Tool { .. }))
-            .into_iter()
-            .filter_map(|n| {
-                if let Node::Tool {
-                    name, description, ..
-                } = n
-                {
-                    Some(crate::tasks::ToolSnapshot {
-                        name: name.clone(),
-                        description: description.clone(),
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        ContextSnapshot {
-            messages,
-            tools,
-            trigger_message_id,
         }
     }
 
@@ -286,25 +238,12 @@ impl App {
     }
 
     /// Dispatch user triggers through the same pipeline as LLM tool calls.
-    /// `/plan` uses LLM extraction (argument resolution); all others go through
-    /// `handle_tool_call_dispatched` → `spawn_tool_execution` → `ToolCallCompleted`.
+    /// All triggers go through `handle_tool_call_dispatched` → `spawn_tool_execution` → `ToolCallCompleted`.
     fn dispatch_user_triggers(&mut self, text: &str, user_msg_id: Uuid) {
         for trigger in crate::tools::parse_triggers(text) {
-            if trigger.tool_name == "plan" {
-                let snapshot = Self::snapshot_context(&self.graph.read(), user_msg_id);
-                crate::tools::spawn_plan_extraction(
-                    trigger.args,
-                    snapshot,
-                    Arc::clone(&self.provider),
-                    Arc::clone(&self.background_semaphore),
-                    BackgroundLlmConfig::from_app_config(&self.config),
-                    self.task_tx.clone(),
-                );
-            } else {
-                let args = crate::tools::parse_user_trigger_args(&trigger.tool_name, &trigger.args);
-                let tool_call_id = Uuid::new_v4();
-                self.handle_tool_call_dispatched(tool_call_id, user_msg_id, args, None);
-            }
+            let args = crate::tools::parse_user_trigger_args(&trigger.tool_name, &trigger.args);
+            let tool_call_id = Uuid::new_v4();
+            self.handle_tool_call_dispatched(tool_call_id, user_msg_id, args, None);
         }
     }
 

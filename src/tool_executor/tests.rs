@@ -342,14 +342,18 @@ async fn test_search_files_rejects_escape() {
         .contains("escapes working directory"));
 }
 
-/// Catches plan execution stub returning success before implementation.
-/// Until the plan executor is built, it must return `is_error=true`.
+/// Catches plan execution returning error instead of creating work item.
 #[tokio::test]
-async fn test_execute_plan_stub_returns_error() {
+async fn test_execute_plan_creates_work_item() {
     let args = ToolCallArguments::Plan {
-        raw_input: "fix the login".to_string(),
+        title: "fix the login".to_string(),
         description: None,
     };
     let result = execute_tool(&args).await;
-    assert!(result.is_error);
+    assert!(!result.is_error);
+    assert!(
+        result.content.text_content().contains("Created work item"),
+        "should contain work item confirmation: {}",
+        result.content.text_content()
+    );
 }
