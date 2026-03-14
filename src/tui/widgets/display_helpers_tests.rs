@@ -1,6 +1,9 @@
 use ratatui::prelude::*;
 
-use super::display_helpers::{apply_reveal_fade, dim_style};
+use super::display_helpers::{
+    apply_reveal_fade, compute_styled_height, dim_style, format_scroll_indicator,
+};
+use crate::tui::ScrollMode;
 
 /// Catches panic on UTF-8 boundary when span-splitting multi-byte characters.
 /// Emoji and CJK chars are multi-byte; the split logic must use `char_indices`.
@@ -104,4 +107,26 @@ fn apply_reveal_fade_frontier_is_dimmest() {
             brightnesses[i + 1]
         );
     }
+}
+
+/// Bug: non-empty scroll indicator shown when content fits entirely in the
+/// viewport (`max == 0`), misleading the user into thinking there's more.
+#[test]
+fn scroll_indicator_empty_when_max_zero() {
+    assert!(format_scroll_indicator(0, 0, ScrollMode::Manual).is_empty());
+}
+
+/// Bug: long line counted as a single row instead of wrapping — content
+/// below it is clipped because the viewport height is underestimated.
+#[test]
+fn compute_styled_height_wraps_long_lines() {
+    // A single line of 160 chars at width 80 should occupy 2 visual lines.
+    let long = "a".repeat(160);
+    let text = Text::from(Line::from(long));
+    let h = compute_styled_height(&text, 80, false);
+    // 2 visual lines + 2 for header/border = 4.
+    assert_eq!(
+        h, 4,
+        "160-char line at width 80 should wrap to 2 lines + 2 border"
+    );
 }

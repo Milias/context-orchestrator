@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
+use crate::graph::{ConversationGraph, EdgeKind, Node, Role, WorkItemKind, WorkItemStatus};
 use chrono::Utc;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -88,5 +88,57 @@ fn gather_caps_at_max_candidates() {
         "gather must cap output at MAX_CANDIDATES ({}), got {}",
         MAX_CANDIDATES,
         candidates.len()
+    );
+}
+
+/// Bug: active work items omitted from candidates — the task agent is
+/// unaware of ongoing sibling tasks and may duplicate their work.
+#[test]
+fn gather_includes_active_work_items() {
+    let mut graph = ConversationGraph::new("sys");
+    let root = graph.branch_leaf("main").unwrap();
+
+    let wi = Node::WorkItem {
+        id: Uuid::new_v4(),
+        kind: WorkItemKind::Task,
+        title: "active task".to_string(),
+        description: None,
+        status: WorkItemStatus::Active,
+        completion_confidence: None, // Not proposing completion.
+        created_at: Utc::now(),
+    };
+    let wi_id = wi.id();
+    graph.add_node(wi);
+
+    let candidates = gather(&graph, root);
+    assert!(
+        candidates.iter().any(|c| c.node_id == wi_id),
+        "active WorkItem should appear in candidates"
+    );
+}
+
+/// Bug: done work items included in candidates, bloating the context
+/// with irrelevant completed work that wastes tokens.
+#[test]
+fn gather_excludes_done_work_items() {
+    let mut graph = ConversationGraph::new("sys");
+    let root = graph.branch_leaf("main").unwrap();
+
+    let wi = Node::WorkItem {
+        id: Uuid::new_v4(),
+        kind: WorkItemKind::Task,
+        title: "done task".to_string(),
+        description: None,
+        status: WorkItemStatus::Done,
+        completion_confidence: None, // Not proposing completion.
+        created_at: Utc::now(),
+    };
+    let wi_id = wi.id();
+    graph.add_node(wi);
+
+    let candidates = gather(&graph, root);
+    assert!(
+        !candidates.iter().any(|c| c.node_id == wi_id),
+        "Done WorkItem should NOT appear in candidates"
     );
 }

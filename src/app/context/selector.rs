@@ -93,7 +93,7 @@ pub async fn refine(
 
 /// Render candidates as one-line summaries for the meta-LLM prompt.
 /// Returns the summary text and a mapping from short IDs to full UUIDs.
-fn render_summaries(
+pub(crate) fn render_summaries(
     graph: &ConversationGraph,
     candidates: &[ScoredCandidate],
 ) -> (String, std::collections::HashMap<String, Uuid>) {
@@ -152,7 +152,7 @@ struct SelectionResponse {
 }
 
 /// Parse the meta-LLM's selection response.
-fn parse_selection(
+pub(crate) fn parse_selection(
     response: &str,
     id_map: &std::collections::HashMap<String, Uuid>,
     candidates: &[ScoredCandidate],
@@ -198,3 +198,7 @@ fn fallback(candidates: &[ScoredCandidate]) -> SelectionResult {
         is_fallback: true,
     }
 }
+
+#[cfg(test)]
+#[path = "selector_tests.rs"]
+mod tests;

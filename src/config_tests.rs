@@ -1,4 +1,4 @@
-use super::AppConfig;
+use super::{AppConfig, ContextSelectionMode};
 
 /// Bug: `api_key()` returns `Ok` when neither env var is set,
 /// causing downstream HTTP requests to fail with an opaque 401.
@@ -59,4 +59,28 @@ fn test_api_key_falls_back_to_api_key() {
         context_selector_model: None,
     };
     assert_eq!(config.api_key().unwrap(), "key-only");
+}
+
+/// Bug: `"llm_guided"` rejected by serde deserialization — the LLM-guided
+/// context selection feature is silently disabled, falling back to heuristic.
+#[test]
+fn context_selection_mode_deserializes() {
+    let heuristic: ContextSelectionMode = serde_json::from_str(r#""heuristic""#).unwrap();
+    assert_eq!(heuristic, ContextSelectionMode::Heuristic);
+
+    let llm: ContextSelectionMode = serde_json::from_str(r#""llm_guided""#).unwrap();
+    assert_eq!(llm, ContextSelectionMode::LlmGuided);
+}
+
+/// Bug: default config values accidentally changed — agents use wrong
+/// token limits, model names, or iteration caps.
+#[test]
+fn default_config_values_correct() {
+    // Construct via serde defaults by deserializing an empty env.
+    // We can't call load() (reads real env), so verify the default functions.
+    assert_eq!(super::default_max_tokens(), 16384);
+    assert_eq!(super::default_max_context_tokens(), 180_000);
+    assert_eq!(super::default_model(), "claude-sonnet-4-6");
+    assert_eq!(super::default_max_tool_loop_iterations(), 10);
+    assert_eq!(super::default_max_concurrent_agents(), 3);
 }

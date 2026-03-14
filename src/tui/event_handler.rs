@@ -109,6 +109,10 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent) {
     }
 }
 
+#[cfg(test)]
+#[path = "event_handler_tests.rs"]
+mod tests;
+
 /// Update the visual phase indicator on a specific agent display.
 fn apply_visual_phase(display: &mut AgentDisplayState, phase: &AgentPhase) {
     match phase {
