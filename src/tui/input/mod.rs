@@ -85,16 +85,16 @@ fn handle_chat_panel_key(
 /// Handle keys when a tab's content area is focused.
 /// Up/Down scrolls through the overview's activity stream.
 fn handle_tab_content_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
-    let (offset, max) = match tui_state.nav.active_tab {
-        crate::tui::state::TopTab::Overview => (
-            &mut tui_state.overview_scroll,
-            tui_state.overview_total.saturating_sub(1),
-        ),
-    };
-    match key.code {
-        KeyCode::Up => *offset = offset.saturating_sub(1),
-        KeyCode::Down => *offset = (*offset + 1).min(max),
-        _ => {}
+    match tui_state.nav.active_tab {
+        crate::tui::state::TopTab::Overview => match key.code {
+            KeyCode::Up => tui_state
+                .overview_scroll
+                .scroll_by(-1, tui_state.overview_max),
+            KeyCode::Down => tui_state
+                .overview_scroll
+                .scroll_by(1, tui_state.overview_max),
+            _ => {}
+        },
     }
     Action::None
 }

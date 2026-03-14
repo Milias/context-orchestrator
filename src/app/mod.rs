@@ -117,7 +117,10 @@ impl App {
             }
 
             let agent_active = self.tui_state.agent_display.is_some();
-            let animating = self.tui_state.token_usage.is_animating();
+            let animating = self.tui_state.token_usage.is_animating()
+                || self.tui_state.scroll.is_animating()
+                || self.tui_state.overview_scroll.is_animating()
+                || self.tui_state.recent_scroll.is_animating();
 
             tokio::select! {
                 maybe_event = event_stream.next() => {
@@ -164,6 +167,9 @@ impl App {
                         display.advance_reveal(total);
                     }
                     self.tui_state.token_usage.tick();
+                    self.tui_state.scroll.tick();
+                    self.tui_state.overview_scroll.tick();
+                    self.tui_state.recent_scroll.tick();
                 }
                 _ = sigterm.recv() => {
                     self.shutdown();
@@ -221,38 +227,36 @@ impl App {
             }
             Action::ScrollToBottom => {
                 self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
-                self.tui_state.scroll_offset = u16::MAX;
+                self.tui_state.scroll.snap(u16::MAX);
             }
             Action::None => {}
         }
         Ok(())
     }
 
-    /// Apply a scroll action, clamping immediately to prevent over-scroll
-    /// accumulation. Re-enables autoscroll when the user scrolls to the bottom.
+    /// Apply a scroll action via [`AnimatedScroll`]. The animation eases toward
+    /// the target; `scroll_by` resolves the `u16::MAX` sentinel so the first
+    /// scroll after auto-follow always produces visible movement.
     fn handle_scroll(&mut self, action: &Action, page_size: u16) {
         self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
-        let going_up = matches!(action, Action::ScrollUp | Action::PageUp);
-        if going_up {
+        if matches!(action, Action::ScrollUp | Action::PageUp) {
             if let Some(ref mut d) = self.tui_state.agent_display {
                 d.revealed_chars = usize::MAX;
             }
         }
-        let delta = match action {
-            Action::ScrollUp | Action::ScrollDown => 3,
-            _ => page_size,
+        let delta: i32 = match action {
+            Action::ScrollUp => -3,
+            Action::ScrollDown => 3,
+            Action::PageUp => -i32::from(page_size),
+            _ => i32::from(page_size),
         };
-        let new_offset = if going_up {
-            self.tui_state.scroll_offset.saturating_sub(delta)
-        } else {
-            self.tui_state
-                .scroll_offset
-                .saturating_add(delta)
-                .min(self.tui_state.max_scroll)
-        };
-        self.tui_state.scroll_offset = new_offset;
-        // Re-enable autoscroll when the user scrolls to the bottom.
-        if new_offset >= self.tui_state.max_scroll && self.tui_state.max_scroll > 0 {
+        self.tui_state
+            .scroll
+            .scroll_by(delta, self.tui_state.max_scroll);
+        // Re-enable autoscroll when the target reaches the bottom.
+        if self.tui_state.scroll.target() >= self.tui_state.max_scroll
+            && self.tui_state.max_scroll > 0
+        {
             self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
         }
     }
@@ -269,36 +273,22 @@ impl App {
         let rects = &self.tui_state.panel_rects;
 
         if rects.activity.contains(pos) {
-            // Scroll activity stream.
-            let max = self.tui_state.overview_total.saturating_sub(1);
-            if up {
-                self.tui_state.overview_scroll = self.tui_state.overview_scroll.saturating_sub(3);
-            } else if down {
-                self.tui_state.overview_scroll = (self.tui_state.overview_scroll + 3).min(max);
-            }
+            let delta = if up { -3 } else { 3 };
+            self.tui_state
+                .overview_scroll
+                .scroll_by(delta, self.tui_state.overview_max);
         } else if rects.recent.contains(pos) {
-            // Scroll recent completions.
-            let max = self.tui_state.recent_total.saturating_sub(1);
-            if up {
-                self.tui_state.recent_scroll =
-                    self.tui_state.recent_scroll.saturating_sub(3);
-            } else if down {
-                self.tui_state.recent_scroll =
-                    (self.tui_state.recent_scroll + 3).min(max);
-            }
+            let delta = if up { -3 } else { 3 };
+            self.tui_state
+                .recent_scroll
+                .scroll_by(delta, self.tui_state.recent_max);
         } else if rects.conversation.contains(pos) {
-            // Scroll conversation.
             self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
-            if up {
-                self.tui_state.scroll_offset = self.tui_state.scroll_offset.saturating_sub(3);
-            } else if down {
-                self.tui_state.scroll_offset = self
-                    .tui_state
-                    .scroll_offset
-                    .saturating_add(3)
-                    .min(self.tui_state.max_scroll);
-            }
-            if self.tui_state.scroll_offset >= self.tui_state.max_scroll
+            let delta = if up { -3 } else { 3 };
+            self.tui_state
+                .scroll
+                .scroll_by(delta, self.tui_state.max_scroll);
+            if self.tui_state.scroll.target() >= self.tui_state.max_scroll
                 && self.tui_state.max_scroll > 0
             {
                 self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;

@@ -43,7 +43,7 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent, is_primary: impl Fn
                 };
             }
             if state.scroll_mode == ScrollMode::Auto {
-                state.scroll_offset = u16::MAX;
+                state.scroll.snap(u16::MAX);
             }
         }
         GraphEvent::AgentIterationCommitted {
@@ -76,7 +76,7 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent, is_primary: impl Fn
         // ── User message ────────────────────────────────────────
         GraphEvent::MessageAdded { role, .. } if *role == Role::User => {
             state.scroll_mode = ScrollMode::Auto;
-            state.scroll_offset = u16::MAX;
+            state.scroll.snap(u16::MAX);
         }
 
         // ── Question lifecycle ───────────────────────────────────

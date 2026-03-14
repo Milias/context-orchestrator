@@ -5,7 +5,9 @@
 
 use crate::graph::tool_types::ToolCallStatus;
 use crate::graph::{BackgroundTaskKind, ConversationGraph, Node, TaskStatus};
-use crate::tui::widgets::tool_status::{elapsed, format_duration, tool_call_status_icon, truncate};
+use crate::tui::widgets::tool_status::{
+    elapsed, finished, format_duration, tool_call_status_icon, truncate,
+};
 use crate::tui::{TuiState, SPINNER_FRAMES};
 
 use chrono::Utc;
@@ -213,4 +215,77 @@ pub(super) fn render_running_tasks(
     let max_rows = inner.height as usize;
     lines.truncate(max_rows);
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+/// Render recently completed/failed tool calls, sorted newest first.
+pub(super) fn render_recent_completions(
+    frame: &mut Frame,
+    area: Rect,
+    graph: &ConversationGraph,
+    tui_state: &mut TuiState,
+) {
+    let block = Block::default().title("Recent").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width < 8 {
+        return;
+    }
+
+    let now = Utc::now();
+    let w = inner.width as usize;
+    let max_rows = inner.height as usize;
+    let mut calls: Vec<&Node> = graph.nodes_by(|n| {
+        matches!(
+            n,
+            Node::ToolCall {
+                status: ToolCallStatus::Completed | ToolCallStatus::Failed,
+                ..
+            }
+        )
+    });
+    calls.sort_by_key(|n| std::cmp::Reverse(n.created_at()));
+    // Cast safety: bounded by call count, well within u16.
+    #[allow(clippy::cast_possible_truncation)] // Justified: max_offset ≤ calls.len().
+    let max_offset = calls.len().saturating_sub(max_rows) as u16;
+    tui_state.recent_max = max_offset;
+    tui_state.recent_scroll.apply_max(max_offset);
+    let offset = tui_state.recent_scroll.position() as usize;
+    let calls: Vec<_> = calls.into_iter().skip(offset).take(max_rows).collect();
+
+    let lines: Vec<Line<'_>> = calls
+        .iter()
+        .filter_map(|n| {
+            let Node::ToolCall {
+                status,
+                arguments,
+                created_at,
+                completed_at,
+                ..
+            } = n
+            else {
+                return None;
+            };
+            let (icon, color) = tool_call_status_icon(status);
+            let dur = format_duration(&match completed_at {
+                Some(end) => finished(*end, *created_at),
+                None => elapsed(now, *created_at),
+            });
+            let fixed = 2 + 1 + dur.len();
+            let name = truncate(&arguments.display_summary(), w.saturating_sub(fixed));
+            let pad = w.saturating_sub(fixed + name.chars().count());
+            Some(Line::from(vec![
+                Span::styled(format!("{icon} "), Style::default().fg(color)),
+                Span::styled(name, Style::default().fg(Color::White)),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(dur, Style::default().fg(Color::DarkGray)),
+            ]))
+        })
+        .collect();
+
+    if lines.is_empty() {
+        let empty = Span::styled("(no completions)", Style::default().fg(Color::DarkGray));
+        frame.render_widget(Paragraph::new(empty), inner);
+    } else {
+        frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+    }
 }

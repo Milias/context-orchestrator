@@ -1,3 +1,4 @@
+pub mod animated_scroll;
 pub mod event_handler;
 pub mod input;
 pub mod state;
@@ -166,6 +167,10 @@ impl AnimatedCounter {
     }
 }
 
+pub use animated_scroll::AnimatedScroll;
+
+// ── Token usage display ─────────────────────────────────────────────
+
 /// Lifetime token totals displayed in the status bar.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TokenUsage {
@@ -199,8 +204,8 @@ pub struct TuiState {
     pub input_text: String,
     /// Character-indexed cursor position within `input_text`.
     pub input_cursor: usize,
-    /// Conversation scroll offset (lines from the top).
-    pub scroll_offset: u16,
+    /// Animated conversation scroll (lines from the top).
+    pub scroll: AnimatedScroll,
     /// Informational status message shown in the status bar.
     pub status_message: Option<String>,
     /// Error message displayed right-aligned in red on the status bar.
@@ -228,14 +233,14 @@ pub struct TuiState {
     pub work_selected: usize,
     /// Number of visible items in the Work tab (set each frame by the renderer).
     pub work_visible_count: usize,
-    /// Scroll offset for the activity stream in the overview tab.
-    pub overview_scroll: usize,
-    /// Total event count in the activity stream (set each frame by the renderer).
-    pub overview_total: usize,
-    /// Scroll offset for the recent completions panel.
-    pub recent_scroll: usize,
-    /// Total count for the recent completions panel (set each frame).
-    pub recent_total: usize,
+    /// Animated scroll for the activity stream in the overview tab.
+    pub overview_scroll: AnimatedScroll,
+    /// Maximum scroll offset for the overview activity stream (set each frame).
+    pub overview_max: u16,
+    /// Animated scroll for the recent completions panel.
+    pub recent_scroll: AnimatedScroll,
+    /// Maximum scroll offset for the recent completions panel (set each frame).
+    pub recent_max: u16,
     /// Text of the pending user question. Set by `QuestionRoutedToUser` event,
     /// cleared by `QuestionAnswered` or `QuestionStatusChanged(TimedOut)`.
     /// When `Some`, the input box shows answer mode.
@@ -259,7 +264,7 @@ impl TuiState {
             nav: state::NavigationState::new(),
             input_text: String::new(),
             input_cursor: 0,
-            scroll_offset: u16::MAX,
+            scroll: AnimatedScroll::new(),
             status_message: None,
             error_message: None,
             should_quit: false,
@@ -272,10 +277,10 @@ impl TuiState {
             token_usage: TokenUsage::default(),
             work_selected: 0,
             work_visible_count: 0,
-            overview_scroll: 0,
-            overview_total: 0,
-            recent_scroll: 0,
-            recent_total: 0,
+            overview_scroll: AnimatedScroll::zero(),
+            overview_max: 0,
+            recent_scroll: AnimatedScroll::zero(),
+            recent_max: 0,
             pending_question_text: None,
             panel_rects: state::PanelRects::default(),
         }

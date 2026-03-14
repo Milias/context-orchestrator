@@ -52,7 +52,7 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
     tui_state.panel_rects.activity = cols[0];
 
     // Center: recent tool call completions.
-    render_recent_completions(frame, cols[1], graph, tui_state);
+    agents::render_recent_completions(frame, cols[1], graph, tui_state);
     tui_state.panel_rects.recent = cols[1];
 
     // Right: agent card + running tasks + stats (stacked vertically).
@@ -119,10 +119,12 @@ fn render_activity_stream(
 
     events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
-    // Publish total count and clamp scroll offset.
-    tui_state.overview_total = events.len();
-    let max_offset = events.len().saturating_sub(max_rows);
-    tui_state.overview_scroll = tui_state.overview_scroll.min(max_offset);
+    // Publish max offset and clamp animated scroll.
+    // Cast safety: bounded by event count, well within u16.
+    #[allow(clippy::cast_possible_truncation)] // Justified: max_offset ≤ events.len().
+    let max_offset = events.len().saturating_sub(max_rows) as u16;
+    tui_state.overview_max = max_offset;
+    tui_state.overview_scroll.apply_max(max_offset);
 
     if events.is_empty() {
         let empty = Paragraph::new(Span::styled(
@@ -133,8 +135,9 @@ fn render_activity_stream(
         return;
     }
 
-    // Apply scroll: skip `overview_scroll` items, take `max_rows`.
-    let visible = events.iter().skip(tui_state.overview_scroll).take(max_rows);
+    // Apply scroll: skip to the animated position, take `max_rows`.
+    let offset = tui_state.overview_scroll.position() as usize;
+    let visible = events.iter().skip(offset).take(max_rows);
     let lines: Vec<Line<'_>> = visible.map(|e| render_event_row(e, width)).collect();
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
@@ -265,57 +268,6 @@ fn render_event_row(event: &EventRow, width: usize) -> Line<'static> {
         spans.push(Span::styled(dur.clone(), dim));
     }
     Line::from(spans)
-}
-
-// ── Recent completions ──────────────────────────────────────────────
-
-/// Render recently completed/failed tool calls, sorted newest first.
-fn render_recent_completions(
-    frame: &mut Frame,
-    area: Rect,
-    graph: &ConversationGraph,
-    tui_state: &mut TuiState,
-) {
-    let block = Block::default().title("Recent").borders(Borders::ALL);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height == 0 || inner.width < 8 { return; }
-
-    let now = Utc::now();
-    let w = inner.width as usize;
-    let max_rows = inner.height as usize;
-    let mut calls: Vec<&Node> = graph.nodes_by(|n| matches!(n, Node::ToolCall {
-        status: ToolCallStatus::Completed | ToolCallStatus::Failed, ..
-    }));
-    calls.sort_by_key(|n| std::cmp::Reverse(n.created_at()));
-    tui_state.recent_total = calls.len();
-    tui_state.recent_scroll = tui_state.recent_scroll.min(calls.len().saturating_sub(max_rows));
-    let calls: Vec<_> = calls.into_iter().skip(tui_state.recent_scroll).take(max_rows).collect();
-
-    let lines: Vec<Line<'_>> = calls.iter().filter_map(|n| {
-        let Node::ToolCall { status, arguments, created_at, completed_at, .. } = n else { return None };
-        let (icon, color) = tool_call_status_icon(status);
-        let dur = format_duration(&match completed_at {
-            Some(end) => finished(*end, *created_at),
-            None => elapsed(now, *created_at),
-        });
-        let fixed = 2 + 1 + dur.len();
-        let name = truncate(&arguments.display_summary(), w.saturating_sub(fixed));
-        let pad = w.saturating_sub(fixed + name.chars().count());
-        Some(Line::from(vec![
-            Span::styled(format!("{icon} "), Style::default().fg(color)),
-            Span::styled(name, Style::default().fg(Color::White)),
-            Span::raw(" ".repeat(pad)),
-            Span::styled(dur, Style::default().fg(Color::DarkGray)),
-        ]))
-    }).collect();
-
-    if lines.is_empty() {
-        let empty = Span::styled("(no completions)", Style::default().fg(Color::DarkGray));
-        frame.render_widget(Paragraph::new(empty), inner);
-    } else {
-        frame.render_widget(Paragraph::new(Text::from(lines)), inner);
-    }
 }
 
 // ── Work tree section ────────────────────────────────────────────────

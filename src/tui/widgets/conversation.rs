@@ -47,14 +47,16 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         let max_scroll = total_height.saturating_sub(inner.height);
         // Publish max_scroll so handle_scroll can clamp immediately.
         tui_state.max_scroll = max_scroll;
+        tui_state.scroll.apply_max(max_scroll);
         if tui_state.scroll_mode == crate::tui::ScrollMode::Auto {
-            tui_state.scroll_offset = max_scroll;
-        } else {
-            tui_state.scroll_offset = tui_state.scroll_offset.min(max_scroll);
+            tui_state.scroll.snap(max_scroll);
         }
 
-        let scroll_indicator =
-            format_scroll_indicator(tui_state.scroll_offset, max_scroll, tui_state.scroll_mode);
+        let scroll_indicator = format_scroll_indicator(
+            tui_state.scroll.position(),
+            max_scroll,
+            tui_state.scroll_mode,
+        );
         let mut outer_block = Block::default().title("Conversation").borders(Borders::ALL);
         if !scroll_indicator.is_empty() {
             outer_block = outer_block.title(
@@ -81,7 +83,7 @@ fn render_entries(
     tui_state: &TuiState,
     inner: Rect,
 ) {
-    let scroll = i32::from(tui_state.scroll_offset);
+    let scroll = i32::from(tui_state.scroll.position());
     let viewport_h = i32::from(inner.height);
     let mut y_offset: i32 = -scroll;
 
