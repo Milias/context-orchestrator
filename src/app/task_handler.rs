@@ -276,7 +276,9 @@ impl App {
             {
                 let (k, v) = (key.clone(), value.clone());
                 drop(g);
-                crate::tool_executor::apply_config_set(&mut self.config, &k, &v);
+                if let Ok(config_key) = k.parse::<crate::tool_executor::ConfigKey>() {
+                    crate::tool_executor::apply_config_set(&mut self.config, config_key, &v);
+                }
                 g = self.graph.write();
 
                 // Re-check status: agent timeout could have resolved this tool

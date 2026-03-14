@@ -1,27 +1,29 @@
 pub mod anthropic;
 pub mod error;
 pub mod retry;
+mod sse;
 pub mod tool_types;
 
 pub use tool_types::{ChatContent, ContentBlock, RawJson, ToolDefinition};
 
-use crate::graph::StopReason;
+use crate::graph::{Role, StopReason};
 use async_trait::async_trait;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
+/// A message in the LLM conversation. Serialized directly into Anthropic API requests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String,
+    pub role: Role,
     pub content: ChatContent,
 }
 
 impl ChatMessage {
     /// Convenience constructor for plain-text messages.
-    pub fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn text(role: Role, content: impl Into<String>) -> Self {
         Self {
-            role: role.into(),
+            role,
             content: ChatContent::Text(content.into()),
         }
     }

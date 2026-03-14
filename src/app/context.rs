@@ -25,7 +25,7 @@ pub(super) fn extract_messages(
             } => match role {
                 Role::System => {}
                 Role::User => {
-                    messages.push(ChatMessage::text("user", content));
+                    messages.push(ChatMessage::text(Role::User, content));
                 }
                 Role::Assistant => {
                     let (asst_msg, result_msgs) =
@@ -127,7 +127,7 @@ pub(super) fn build_assistant_message_with_tools(
     }
 
     if tool_use_blocks.is_empty() {
-        return (ChatMessage::text("assistant", text_content), vec![]);
+        return (ChatMessage::text(Role::Assistant, text_content), vec![]);
     }
     let mut blocks = Vec::new();
     if !text_content.is_empty() {
@@ -137,11 +137,11 @@ pub(super) fn build_assistant_message_with_tools(
     }
     blocks.extend(tool_use_blocks);
     let asst = ChatMessage {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: ChatContent::Blocks(blocks),
     };
     let results = ChatMessage {
-        role: "user".to_string(),
+        role: Role::User,
         content: ChatContent::Blocks(result_blocks),
     };
     (asst, vec![results])
@@ -173,7 +173,7 @@ fn truncate_messages(messages: &mut Vec<ChatMessage>, max_tokens: u32, token_cou
 
 fn sanitize_message_boundaries(messages: &mut Vec<ChatMessage>) {
     // Drop orphaned tool_result user messages at the front after truncation.
-    while messages.len() > 1 && messages[0].role == "user" {
+    while messages.len() > 1 && messages[0].role == Role::User {
         let all_results = matches!(&messages[0].content,
             ChatContent::Blocks(b) if b.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. })));
         if all_results {
@@ -184,14 +184,14 @@ fn sanitize_message_boundaries(messages: &mut Vec<ChatMessage>) {
     }
 
     // Drop leading assistant messages — API requires conversation start with user.
-    while messages.len() > 1 && messages[0].role == "assistant" {
+    while messages.len() > 1 && messages[0].role == Role::Assistant {
         messages.remove(0);
     }
 
     // Drop trailing assistant messages with tool_use blocks that lack a following tool_result.
     while messages.len() > 1 {
         let dominated = messages.last().is_some_and(|last| {
-            last.role == "assistant"
+            last.role == Role::Assistant
                 && matches!(&last.content,
                     ChatContent::Blocks(b) if b.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })))
         });

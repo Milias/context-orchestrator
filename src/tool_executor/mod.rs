@@ -207,13 +207,65 @@ pub fn registered_tool_definitions() -> Vec<ToolDefinition> {
         .collect()
 }
 
-/// Known config keys for the `set` tool.
-const VALID_SET_KEYS: &[&str] = &[
-    "max_tokens",
-    "max_context_tokens",
-    "model",
-    "max_tool_loop_iterations",
-];
+// ── ConfigKey ────────────────────────────────────────────────────────
+
+/// Typed runtime configuration keys for the `set` tool.
+/// String parsing happens at the validation boundary; downstream logic
+/// matches on enum variants with exhaustiveness checking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigKey {
+    MaxTokens,
+    MaxContextTokens,
+    Model,
+    MaxToolLoopIterations,
+}
+
+impl ConfigKey {
+    /// All valid variants. Exhaustive match in `FromStr` ensures this stays in sync.
+    const ALL: &[Self] = &[
+        Self::MaxTokens,
+        Self::MaxContextTokens,
+        Self::Model,
+        Self::MaxToolLoopIterations,
+    ];
+
+    /// All valid keys as a comma-separated string, for error messages.
+    fn all_display() -> String {
+        Self::ALL
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+impl std::fmt::Display for ConfigKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MaxTokens => write!(f, "max_tokens"),
+            Self::MaxContextTokens => write!(f, "max_context_tokens"),
+            Self::Model => write!(f, "model"),
+            Self::MaxToolLoopIterations => write!(f, "max_tool_loop_iterations"),
+        }
+    }
+}
+
+impl std::str::FromStr for ConfigKey {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "max_tokens" => Ok(Self::MaxTokens),
+            "max_context_tokens" => Ok(Self::MaxContextTokens),
+            "model" => Ok(Self::Model),
+            "max_tool_loop_iterations" => Ok(Self::MaxToolLoopIterations),
+            _ => Err(format!(
+                "Unknown config key: {s}. Valid keys: {}",
+                Self::all_display()
+            )),
+        }
+    }
+}
 
 /// Execute a tool call and return the result.
 pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult {
@@ -246,33 +298,31 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
     }
 }
 
-/// Validate a `set` command. The actual config mutation happens in the task handler
-/// (which has access to `&mut AppConfig`), not here.
+/// Validate a `set` command. Parses the string key into `ConfigKey` at the boundary.
+/// The actual config mutation happens in the task handler (which has `&mut AppConfig`).
 fn execute_set(key: &str, value: &str) -> ToolExecutionResult {
     if value.is_empty() {
         return set_err(format!("Missing value for {key}"));
     }
-    if !VALID_SET_KEYS.contains(&key) {
-        return set_err(format!(
-            "Unknown config key: {key}. Valid keys: {}",
-            VALID_SET_KEYS.join(", ")
-        ));
-    }
-    if let Err(msg) = validate_set_value(key, value) {
+    let config_key = match key.parse::<ConfigKey>() {
+        Ok(k) => k,
+        Err(msg) => return set_err(msg),
+    };
+    if let Err(msg) = validate_set_value(config_key, value) {
         return set_err(msg);
     }
     ToolExecutionResult {
-        content: ToolResultContent::text(format!("{key} set to {value}")),
+        content: ToolResultContent::text(format!("{config_key} set to {value}")),
         is_error: false,
     }
 }
 
 /// Validate value range for numeric config keys.
-fn validate_set_value(key: &str, value: &str) -> Result<(), String> {
+fn validate_set_value(key: ConfigKey, value: &str) -> Result<(), String> {
     match key {
-        "max_tokens" => validate_u32_range(key, value, 1, 128_000),
-        "max_context_tokens" => validate_u32_range(key, value, 1000, 1_000_000),
-        "max_tool_loop_iterations" => {
+        ConfigKey::MaxTokens => validate_u32_range(key, value, 1, 128_000),
+        ConfigKey::MaxContextTokens => validate_u32_range(key, value, 1000, 1_000_000),
+        ConfigKey::MaxToolLoopIterations => {
             let v = value
                 .parse::<usize>()
                 .map_err(|_| format!("Invalid value for {key}: expected a number"))?;
@@ -281,11 +331,11 @@ fn validate_set_value(key: &str, value: &str) -> Result<(), String> {
             }
             Ok(())
         }
-        _ => Ok(()), // "model" accepts any non-empty string
+        ConfigKey::Model => Ok(()), // accepts any non-empty string
     }
 }
 
-fn validate_u32_range(key: &str, value: &str, min: u32, max: u32) -> Result<(), String> {
+fn validate_u32_range(key: ConfigKey, value: &str, min: u32, max: u32) -> Result<(), String> {
     let v = value
         .parse::<u32>()
         .map_err(|_| format!("Invalid value for {key}: expected a number"))?;
@@ -304,27 +354,26 @@ fn set_err(msg: String) -> ToolExecutionResult {
 
 /// Apply a `set` config mutation. Called from the main event loop where `AppConfig` is mutable.
 /// Session-scoped — does not persist across restarts.
-pub fn apply_config_set(config: &mut crate::config::AppConfig, key: &str, value: &str) {
+pub fn apply_config_set(config: &mut crate::config::AppConfig, key: ConfigKey, value: &str) {
     match key {
-        "max_tokens" => {
+        ConfigKey::MaxTokens => {
             if let Ok(v) = value.parse::<u32>() {
                 config.max_tokens = v;
             }
         }
-        "max_context_tokens" => {
+        ConfigKey::MaxContextTokens => {
             if let Ok(v) = value.parse::<u32>() {
                 config.max_context_tokens = v;
             }
         }
-        "model" => {
+        ConfigKey::Model => {
             config.anthropic_model = value.to_string();
         }
-        "max_tool_loop_iterations" => {
+        ConfigKey::MaxToolLoopIterations => {
             if let Ok(v) = value.parse::<usize>() {
                 config.max_tool_loop_iterations = v;
             }
         }
-        _ => {}
     }
 }
 

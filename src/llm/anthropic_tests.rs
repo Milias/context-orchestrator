@@ -1,5 +1,7 @@
 use super::*;
 use crate::graph::StopReason;
+use crate::llm::sse::parse_sse_event;
+use futures::StreamExt;
 
 #[test]
 fn test_parse_text_delta() {
@@ -119,7 +121,10 @@ async fn test_real_api_call() {
     }
     let app_config = AppConfig::load().unwrap();
     let provider = AnthropicProvider::from_config(&app_config).unwrap();
-    let messages = vec![ChatMessage::text("user", "Say hello in exactly 3 words.")];
+    let messages = vec![ChatMessage::text(
+        crate::graph::Role::User,
+        "Say hello in exactly 3 words.",
+    )];
     let config = ChatConfig {
         model: app_config.anthropic_model.clone(),
         max_tokens: app_config.max_tokens,

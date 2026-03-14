@@ -203,7 +203,7 @@ fn spawn_count_user_tokens(
             }
         };
         if let Some(content) = content {
-            let msg = vec![ChatMessage::text("user", &content)];
+            let msg = vec![ChatMessage::text(Role::User, &content)];
             if let Ok(count) = provider.count_tokens(&msg, &model, None, &[]).await {
                 send(
                     &task_tx,
