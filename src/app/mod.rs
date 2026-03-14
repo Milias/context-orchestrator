@@ -124,7 +124,7 @@ impl App {
                 break;
             }
 
-            let agent_active = self.tui_state.agent_display.is_some();
+            let agent_active = !self.tui_state.agent_displays.is_empty();
             let animating = self.tui_state.token_usage.is_animating()
                 || self.tui_state.scroll.is_animating()
                 || self.tui_state.overview_scroll.is_animating()
@@ -164,7 +164,7 @@ impl App {
                     }
                 }
                 _ = spinner_interval.tick(), if agent_active || animating => {
-                    if let Some(ref mut display) = self.tui_state.agent_display {
+                    for display in self.tui_state.agent_displays.values_mut() {
                         display.spinner_tick = display.spinner_tick.wrapping_add(1);
                         let total = match &display.phase {
                             crate::tui::AgentVisualPhase::Streaming { text, .. } => {
@@ -248,7 +248,7 @@ impl App {
     fn handle_scroll(&mut self, action: &Action, page_size: u16) {
         self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
         if matches!(action, Action::ScrollUp | Action::PageUp) {
-            if let Some(ref mut d) = self.tui_state.agent_display {
+            for d in self.tui_state.agent_displays.values_mut() {
                 d.revealed_chars = usize::MAX;
             }
         }

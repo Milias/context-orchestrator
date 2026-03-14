@@ -12,31 +12,26 @@ use crate::tasks::AgentPhase;
 use super::{AgentDisplayState, AgentVisualPhase, ScrollMode, TuiState};
 
 /// Apply a graph event to the TUI state. Called once per event by the App.
-/// All agent events update the display — no primary/secondary distinction.
+/// All agent events route to per-agent display entries keyed by `agent_id`.
 pub fn apply_event(state: &mut TuiState, event: &GraphEvent) {
     match event {
         // ── Agent lifecycle ──────────────────────────────────────
         GraphEvent::AgentPhaseChanged { agent_id, phase } => {
-            // TODO(Phase 8): route to per-agent display by agent_id.
-            let _ = agent_id;
             state.status_message = Some(phase.to_string());
-            if state.agent_display.is_none() {
-                state.agent_display = Some(AgentDisplayState::default());
-            }
-            apply_visual_phase(state, phase);
+            let display = state.agent_displays.entry(*agent_id).or_default();
+            apply_visual_phase(display, phase);
         }
         GraphEvent::StreamDelta {
             agent_id,
             text,
             is_thinking,
         } => {
-            let _ = agent_id;
-            if let Some(ref mut d) = state.agent_display {
-                d.phase = AgentVisualPhase::Streaming {
-                    text: text.clone(),
-                    is_thinking: *is_thinking,
-                };
-            }
+            let display = state.agent_displays.entry(*agent_id).or_default();
+            display.phase = AgentVisualPhase::Streaming {
+                text: text.clone(),
+                is_thinking: *is_thinking,
+            };
+            state.streaming_agent_id = Some(*agent_id);
             if state.scroll_mode == ScrollMode::Auto {
                 state.scroll.snap(u16::MAX);
             }
@@ -46,23 +41,28 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent) {
             assistant_id,
             stop_reason,
         } => {
-            let _ = agent_id;
             if *stop_reason == Some(StopReason::MaxTokens) {
                 state.error_message =
                     Some("Response truncated — continuing automatically".to_string());
             }
-            if let Some(ref mut d) = state.agent_display {
-                d.revealed_chars = usize::MAX;
-                d.iteration_node_ids.push(*assistant_id);
+            if let Some(display) = state.agent_displays.get_mut(agent_id) {
+                display.revealed_chars = usize::MAX;
+                display.iteration_node_ids.push(*assistant_id);
                 if *stop_reason == Some(StopReason::ToolUse) {
-                    d.phase = AgentVisualPhase::ExecutingTools;
+                    display.phase = AgentVisualPhase::ExecutingTools;
                 }
             }
         }
         GraphEvent::AgentFinished { agent_id } => {
-            let _ = agent_id;
-            state.agent_display = None;
-            state.status_message = None;
+            state.agent_displays.remove(agent_id);
+            // Clear streaming pointer if it was this agent.
+            if state.streaming_agent_id == Some(*agent_id) {
+                state.streaming_agent_id = None;
+            }
+            // Clear status only when no agents remain.
+            if state.agent_displays.is_empty() {
+                state.status_message = None;
+            }
         }
 
         // ── User message ────────────────────────────────────────
@@ -107,30 +107,24 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent) {
     }
 }
 
-/// Update the visual phase indicator based on the agent phase.
-fn apply_visual_phase(state: &mut TuiState, phase: &AgentPhase) {
+/// Update the visual phase indicator on a specific agent display.
+fn apply_visual_phase(display: &mut AgentDisplayState, phase: &AgentPhase) {
     match phase {
         AgentPhase::Receiving => {
-            if let Some(ref mut d) = state.agent_display {
-                d.phase = AgentVisualPhase::Streaming {
-                    text: String::new(),
-                    is_thinking: false,
-                };
-                d.revealed_chars = 0;
-            }
+            display.phase = AgentVisualPhase::Streaming {
+                text: String::new(),
+                is_thinking: false,
+            };
+            display.revealed_chars = 0;
         }
         AgentPhase::ExecutingTools { .. } => {
-            if let Some(ref mut d) = state.agent_display {
-                d.phase = AgentVisualPhase::ExecutingTools;
-            }
+            display.phase = AgentVisualPhase::ExecutingTools;
         }
         AgentPhase::CountingTokens
         | AgentPhase::BuildingContext
         | AgentPhase::Connecting { .. } => {
-            if let Some(ref mut d) = state.agent_display {
-                if !matches!(d.phase, AgentVisualPhase::Streaming { .. }) {
-                    d.phase = AgentVisualPhase::Preparing;
-                }
+            if !matches!(display.phase, AgentVisualPhase::Streaming { .. }) {
+                display.phase = AgentVisualPhase::Preparing;
             }
         }
     }

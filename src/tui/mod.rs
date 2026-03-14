@@ -219,8 +219,11 @@ pub struct TuiState {
     pub render_cache: HashMap<Uuid, CachedRender>,
     /// Autocomplete popup state for `/command` completion.
     pub autocomplete: AutocompleteState,
-    /// Display state for the running agent loop. `None` when idle.
-    pub agent_display: Option<AgentDisplayState>,
+    /// Per-agent display state, keyed by agent ID. Empty when idle.
+    pub agent_displays: HashMap<Uuid, AgentDisplayState>,
+    /// Which agent currently drives the conversation streaming panel.
+    /// Set on each `StreamDelta`; cleared when that agent finishes.
+    pub streaming_agent_id: Option<Uuid>,
     /// Controls whether tool call results are shown inline in the conversation.
     pub tool_display: ToolDisplayMode,
     /// Maximum scroll offset, computed each frame by the conversation widget.
@@ -271,7 +274,8 @@ impl TuiState {
             scroll_mode: ScrollMode::Auto,
             render_cache: HashMap::new(),
             autocomplete: AutocompleteState::default(),
-            agent_display: None,
+            agent_displays: HashMap::new(),
+            streaming_agent_id: None,
             tool_display: ToolDisplayMode::Compact,
             max_scroll: 0,
             token_usage: TokenUsage::default(),

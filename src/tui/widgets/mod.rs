@@ -1,3 +1,4 @@
+mod agent_streaming;
 pub mod conversation;
 pub mod display_helpers;
 pub mod input_box;

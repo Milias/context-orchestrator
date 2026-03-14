@@ -1,11 +1,11 @@
 use crate::graph::{ConversationGraph, EdgeKind, Node, Role};
 use crate::tui::widgets::display_helpers::{
-    apply_reveal_fade, compute_styled_height, display_content, format_scroll_indicator,
+    compute_styled_height, display_content, format_scroll_indicator,
 };
 use crate::tui::widgets::markdown::render_markdown;
 use crate::tui::widgets::message_style::{render_message, render_streaming, MessageRenderParams};
 use crate::tui::widgets::trigger_highlight::highlight_triggers;
-use crate::tui::{AgentVisualPhase, CachedRender, TuiState, CURSOR_FRAMES};
+use crate::tui::{CachedRender, TuiState};
 use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders};
@@ -137,7 +137,7 @@ fn render_entries(
     }
 }
 
-enum MessageEntry<'a> {
+pub(super) enum MessageEntry<'a> {
     Node {
         node: &'a Node,
         prev_created_at: Option<DateTime<Utc>>,
@@ -168,8 +168,8 @@ fn build_entries<'a>(
     let mut entries: Vec<MessageEntry<'a>> = Vec::new();
     let mut last_user_created_at: Option<DateTime<Utc>> = None;
     let spinner_tick = tui_state
-        .agent_display
-        .as_ref()
+        .streaming_agent_id
+        .and_then(|id| tui_state.agent_displays.get(&id))
         .map_or(0, |d| d.spinner_tick);
     let expanded = tui_state.tool_display.is_expanded();
 
@@ -249,13 +249,15 @@ fn build_entries<'a>(
         }
     }
 
-    if let Some(ref display) = tui_state.agent_display {
-        append_agent_display(
+    if let Some(display) = tui_state
+        .streaming_agent_id
+        .and_then(|id| tui_state.agent_displays.get(&id))
+    {
+        entries.push(super::agent_streaming::build_agent_entry(
             display,
             tui_state.status_message.as_ref(),
             msg_content_width,
-            &mut entries,
-        );
+        ));
     }
 
     entries
@@ -286,70 +288,6 @@ fn push_tool_status(
         styled_text: styled,
         height,
     });
-}
-
-fn append_agent_display(
-    display: &crate::tui::AgentDisplayState,
-    status_message: Option<&String>,
-    msg_content_width: usize,
-    entries: &mut Vec<MessageEntry<'_>>,
-) {
-    match &display.phase {
-        AgentVisualPhase::Preparing | AgentVisualPhase::ExecutingTools => {
-            let status = status_message.map_or("Preparing...", String::as_str);
-            let spinner = display.spinner_char();
-            let styled = Text::from(Line::from(vec![
-                Span::styled(format!("{spinner} "), Style::default().fg(Color::Green)),
-                Span::styled(status.to_string(), Style::default().fg(Color::DarkGray)),
-            ]));
-            let height = compute_styled_height(&styled, msg_content_width, false);
-            entries.push(MessageEntry::Streaming {
-                styled_text: styled,
-                height,
-            });
-        }
-        AgentVisualPhase::Streaming { text, is_thinking } => {
-            // Slice text at the revealed character boundary
-            let total_chars = text.chars().count();
-            let reveal_count = display.revealed_chars.min(total_chars);
-            let byte_offset = text
-                .char_indices()
-                .nth(reveal_count)
-                .map_or(text.len(), |(i, _)| i);
-            let revealed = &text[..byte_offset];
-
-            let mut styled = render_markdown(revealed);
-
-            // Apply fade-in gradient when there are unrevealed characters
-            if reveal_count < total_chars {
-                apply_reveal_fade(&mut styled, 8);
-            }
-
-            if *is_thinking && text.is_empty() {
-                let spinner = display.spinner_char();
-                styled.lines.push(Line::styled(
-                    format!("{spinner} Thinking..."),
-                    Style::default().fg(Color::DarkGray).italic(),
-                ));
-            }
-            append_cursor(&mut styled, display.spinner_tick);
-            let height = compute_styled_height(&styled, msg_content_width, false);
-            entries.push(MessageEntry::Streaming {
-                styled_text: styled,
-                height,
-            });
-        }
-    }
-}
-
-fn append_cursor(styled: &mut Text<'static>, tick: usize) {
-    let cursor = CURSOR_FRAMES[tick % CURSOR_FRAMES.len()];
-    let span = Span::styled(cursor, Style::default().fg(Color::Green));
-    if let Some(last_line) = styled.lines.last_mut() {
-        last_line.spans.push(span);
-    } else {
-        styled.lines.push(Line::from(span));
-    }
 }
 
 fn push_node_entry<'a>(

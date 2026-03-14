@@ -14,15 +14,22 @@ use chrono::Utc;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-/// Compute the agent card height based on the number of active tool calls.
+/// Compute the agent card height based on the number of active agents.
+/// Each agent gets 2 lines (phase + detail); borders add 2.
 pub(super) fn agent_card_height(tui_state: &TuiState) -> u16 {
-    match &tui_state.agent_display {
-        Some(_) => 5, // border + phase line + detail line + padding + border
-        None => 3,    // border + "(idle)" + border
+    let count = tui_state.agent_displays.len();
+    if count == 0 {
+        return 3; // border + "(idle)" + border
     }
+    // border(2) + 2 lines per agent + (count-1) spacing lines.
+    let inner = 2 * count + count.saturating_sub(1);
+    // Clamp: u16 bounded by small agent counts.
+    #[allow(clippy::cast_possible_truncation)] // Justified: agent count is small (<10).
+    let h = (inner as u16).saturating_add(2);
+    h.max(5)
 }
 
-/// Render the agent status card.
+/// Render the agent status card showing all active agents.
 pub(super) fn render_agent_card(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
     let block = Block::default().title("Agents").borders(Borders::ALL);
     let inner = block.inner(area);
@@ -32,33 +39,52 @@ pub(super) fn render_agent_card(frame: &mut Frame, area: Rect, tui_state: &TuiSt
         return;
     }
 
-    let Some(display) = &tui_state.agent_display else {
+    if tui_state.agent_displays.is_empty() {
         let idle = Paragraph::new(Span::styled("(idle)", Style::default().fg(Color::DarkGray)));
         frame.render_widget(idle, inner);
         return;
-    };
+    }
 
-    let spinner = display.spinner_char();
     let mut lines: Vec<Line<'_>> = Vec::new();
-
-    // Phase line.
     let phase_text = tui_state.status_message.as_deref().unwrap_or("Working...");
-    lines.push(Line::from(vec![
-        Span::styled(format!("{spinner} "), Style::default().fg(Color::Yellow)),
-        Span::styled("Agent #1", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(
-            format!("  {phase_text}"),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]));
 
-    // Streaming preview or phase detail.
-    match &display.phase {
+    for (idx, (agent_id, display)) in tui_state.agent_displays.iter().enumerate() {
+        if idx > 0 {
+            lines.push(Line::raw(""));
+        }
+        let spinner = display.spinner_char();
+        let short_id = &agent_id.to_string()[..8];
+        lines.push(Line::from(vec![
+            Span::styled(format!("{spinner} "), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("Agent {short_id}"),
+                Style::default().fg(Color::Cyan).bold(),
+            ),
+            Span::styled(
+                format!("  {phase_text}"),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+
+        render_agent_detail(&display.phase, inner.width, &mut lines);
+    }
+
+    let text = Text::from(lines);
+    frame.render_widget(Paragraph::new(text), inner);
+}
+
+/// Append a streaming preview or phase detail line for one agent.
+fn render_agent_detail(
+    phase: &crate::tui::AgentVisualPhase,
+    width: u16,
+    lines: &mut Vec<Line<'_>>,
+) {
+    match phase {
         crate::tui::AgentVisualPhase::Streaming { text, is_thinking } => {
             let label = if *is_thinking { "thinking" } else { "writing" };
             let preview = truncate(
                 text.lines().next_back().unwrap_or(""),
-                inner.width.saturating_sub(4) as usize,
+                width.saturating_sub(4) as usize,
             );
             lines.push(Line::from(vec![
                 Span::styled(
@@ -76,9 +102,6 @@ pub(super) fn render_agent_card(frame: &mut Frame, area: Rect, tui_state: &TuiSt
         }
         crate::tui::AgentVisualPhase::Preparing => {}
     }
-
-    let text = Text::from(lines);
-    frame.render_widget(Paragraph::new(text), inner);
 }
 
 /// Count active items for sizing the Running section.
@@ -141,8 +164,9 @@ pub(super) fn render_running_tasks(
     let now = Utc::now();
     let width = inner.width as usize;
     let spinner_tick = tui_state
-        .agent_display
-        .as_ref()
+        .agent_displays
+        .values()
+        .next()
         .map_or(0, |d| d.spinner_tick);
     let spinner = SPINNER_FRAMES[spinner_tick % SPINNER_FRAMES.len()];
 
