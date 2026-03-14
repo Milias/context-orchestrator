@@ -64,8 +64,7 @@ impl App {
             _ => {}
         }
         // TUI state — every event passes through the TUI handler.
-        let agents = &self.agents;
-        tui::event_handler::apply_event(&mut self.tui_state, event, |id| agents.is_primary(id));
+        tui::event_handler::apply_event(&mut self.tui_state, event);
     }
 
     /// User answered a pending question. Only mutates the graph.
@@ -107,31 +106,25 @@ impl App {
                 self.pending_user_question = Some(question_id);
             }
             QuestionDestination::Llm => {
-                let Some(agent_id) = self.agents.primary_agent_id else {
-                    return;
-                };
-                let mut g = self.graph.write();
-                if !g.try_claim(question_id, agent_id) {
-                    return;
-                }
-                if let Err(e) = g.update_question_status(question_id, QuestionStatus::Claimed) {
-                    tracing::warn!("Failed to claim LLM question {question_id}: {e}");
-                }
+                // In the ephemeral model, LLM-destined questions stay Pending
+                // until the next conversational agent spawns and claims them
+                // during context building. Future: spawn a dedicated question-
+                // response agent here.
+                tracing::debug!("LLM question {question_id} pending — will be claimed by next agent");
             }
             QuestionDestination::Auto => unreachable!("resolved above"),
         }
     }
 
     /// React to a new user message: dispatch `/command` triggers and spawn
-    /// the primary agent if none is running. Existing agents wake from the
-    /// `MessageAdded` event directly (handled in the agent loop).
+    /// an ephemeral conversational agent.
     fn on_user_message(&mut self, node_id: Uuid) {
         let content = {
             let g = self.graph.read();
             g.node(node_id).map_or("", Node::content).to_string()
         };
         self.dispatch_user_triggers(&content, node_id);
-        self.spawn_primary_agent();
+        self.spawn_conversational_agent();
     }
 
     /// Parse `/command` triggers from message text and dispatch each through
@@ -144,14 +137,11 @@ impl App {
         }
     }
 
-    /// Register and spawn the primary agent if none is currently active.
-    fn spawn_primary_agent(&mut self) {
-        if self.agents.primary_agent_id.is_some() {
-            return;
-        }
+    /// Spawn an ephemeral conversational agent for the current user message.
+    /// Each user message gets its own agent — no persistent primary loop.
+    fn spawn_conversational_agent(&mut self) {
         let agent_id = Uuid::new_v4();
         let (tool_rx, cancel_token) = self.agents.register(agent_id);
-        self.agents.primary_agent_id = Some(agent_id);
 
         // Emit an initial phase event for immediate TUI feedback.
         self.graph.read().emit(GraphEvent::AgentPhaseChanged {

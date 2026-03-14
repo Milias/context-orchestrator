@@ -1,9 +1,9 @@
-//! Agent loop: context → LLM stream → tool dispatch → idle → repeat.
+//! Ephemeral agent loop: context building → LLM streaming → tool dispatch.
 //!
-//! Runs as a persistent tokio task. Between activations, idles waiting for
-//! wake events. Exits only on cancellation or shutdown.
+//! Each agent runs as a single tokio task, executes one activation (bounded
+//! inner tool loop), then terminates. No idle/wake cycle — agents are spawned
+//! per-event and die after responding.
 
-use crate::graph::event::GraphEvent;
 use crate::graph::tool::result::ToolResultContent;
 use crate::graph::tool::types::ToolCallStatus;
 use crate::graph::{parse_tool_arguments, EdgeKind, Node, Role, StopReason};
@@ -18,7 +18,7 @@ use chrono::Utc;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -61,20 +61,8 @@ const MAX_CONTINUATIONS: u32 = 3;
 /// Max consecutive API error retries before giving up.
 const MAX_API_ERROR_RETRIES: u32 = 2;
 
-/// Check whether a graph event should wake the agent from idle.
-fn is_wake_event(event: &GraphEvent, agent_id: Uuid) -> bool {
-    match event {
-        GraphEvent::MessageAdded {
-            role: Role::User, ..
-        } => true,
-        GraphEvent::NodeClaimed {
-            agent_id: claimed_for,
-            ..
-        } => *claimed_for == agent_id,
-        _ => false,
-    }
-}
-
+/// Run a single ephemeral agent: one activation, then terminate.
+/// No outer idle/wake loop — agents are spawned per-event and die after responding.
 async fn run_agent_loop(
     graph: &SharedGraph,
     provider: Arc<dyn LlmProvider>,
@@ -83,12 +71,6 @@ async fn run_agent_loop(
     mut tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
     cancel_token: CancellationToken,
 ) -> anyhow::Result<()> {
-    // Subscribe to graph events for wake-on-idle.
-    let mut event_rx = graph
-        .read()
-        .subscribe_events()
-        .unwrap_or_else(|| broadcast::channel(1).1);
-
     let chat_config = ChatConfig {
         model: config.model.clone(),
         max_tokens: config.max_tokens,
@@ -96,37 +78,18 @@ async fn run_agent_loop(
         tools: config.tools.clone(),
     };
 
-    loop {
-        let activation_result = run_activation(
-            graph,
-            &provider,
-            &config,
-            ctx,
-            &mut tool_result_rx,
-            &cancel_token,
-            &chat_config,
-        )
-        .await?;
+    run_activation(
+        graph,
+        &provider,
+        &config,
+        ctx,
+        &mut tool_result_rx,
+        &cancel_token,
+        &chat_config,
+    )
+    .await?;
 
-        if cancel_token.is_cancelled() || activation_result == ActivationResult::Cancelled {
-            return Ok(());
-        }
-
-        ctx.send(AgentEvent::Idle);
-        loop {
-            tokio::select! {
-                result = event_rx.recv() => {
-                    match result {
-                        Ok(ref event) if is_wake_event(event, config.agent_id) => break,
-                        Err(broadcast::error::RecvError::Closed) => return Ok(()),
-                        Err(broadcast::error::RecvError::Lagged(_)) => break,
-                        _ => {} // ignore irrelevant events
-                    }
-                }
-                () = cancel_token.cancelled() => return Ok(()),
-            }
-        }
-    }
+    Ok(())
 }
 
 /// Result of a single activation (one bounded inner loop).

@@ -246,3 +246,106 @@ fn test_think_block_not_in_history() {
     assert!(graph.has_think_block(asst_id));
     assert!(!graph.has_think_block(root_id));
 }
+
+/// Bug: `add_reply` updates the branch pointer, corrupting the conversational
+/// branch when task agents record messages.
+#[test]
+fn test_add_reply_does_not_update_branch() {
+    let mut graph = ConversationGraph::new("System prompt");
+    let root_id = graph.branch_leaf("main").unwrap();
+
+    // add_message updates the branch leaf.
+    let user_msg = Node::Message {
+        id: Uuid::new_v4(),
+        role: Role::User,
+        content: "Hello".to_string(),
+        created_at: Utc::now(),
+        model: None,
+        input_tokens: None,
+        output_tokens: None,
+        stop_reason: None,
+    };
+    let user_id = graph.add_message(root_id, user_msg).unwrap();
+    assert_eq!(graph.branch_leaf("main"), Some(user_id));
+
+    // add_reply does NOT update the branch leaf.
+    let reply = Node::Message {
+        id: Uuid::new_v4(),
+        role: Role::Assistant,
+        content: "Task reply".to_string(),
+        created_at: Utc::now(),
+        model: None,
+        input_tokens: None,
+        output_tokens: None,
+        stop_reason: None,
+    };
+    let reply_id = graph.add_reply(user_id, reply).unwrap();
+
+    // Branch leaf should still be user_id, not reply_id.
+    assert_eq!(
+        graph.branch_leaf("main"),
+        Some(user_id),
+        "add_reply must not advance the branch leaf"
+    );
+    // But the reply IS in the graph with a RespondsTo edge.
+    assert_eq!(graph.responds_to.get(&reply_id), Some(&user_id));
+}
+
+/// Bug: `find_chain_leaf` returns the wrong node because the forward index
+/// is not maintained, causing task agents to append to the wrong parent.
+#[test]
+fn test_find_chain_leaf_walks_forward() {
+    let mut graph = ConversationGraph::new("System prompt");
+    let root_id = graph.branch_leaf("main").unwrap();
+
+    // Build a chain: root → msg1 → msg2 → msg3 (using add_reply)
+    let make_msg = |content: &str| Node::Message {
+        id: Uuid::new_v4(),
+        role: Role::User,
+        content: content.to_string(),
+        created_at: Utc::now(),
+        model: None,
+        input_tokens: None,
+        output_tokens: None,
+        stop_reason: None,
+    };
+    let id1 = graph.add_reply(root_id, make_msg("msg1")).unwrap();
+    let id2 = graph.add_reply(id1, make_msg("msg2")).unwrap();
+    let id3 = graph.add_reply(id2, make_msg("msg3")).unwrap();
+
+    assert_eq!(graph.find_chain_leaf(root_id), id3);
+    assert_eq!(graph.find_chain_leaf(id1), id3);
+    assert_eq!(graph.find_chain_leaf(id2), id3);
+    assert_eq!(graph.find_chain_leaf(id3), id3);
+}
+
+/// Bug: `reply_children` index not built during deserialization, causing
+/// `find_chain_leaf` to return the root instead of the actual leaf.
+#[test]
+fn test_reply_children_survives_serialization() {
+    let mut graph = ConversationGraph::new("System prompt");
+    let root_id = graph.branch_leaf("main").unwrap();
+
+    let msg = Node::Message {
+        id: Uuid::new_v4(),
+        role: Role::User,
+        content: "Hello".to_string(),
+        created_at: Utc::now(),
+        model: None,
+        input_tokens: None,
+        output_tokens: None,
+        stop_reason: None,
+    };
+    let msg_id = graph.add_reply(root_id, msg).unwrap();
+
+    // Serialize and deserialize.
+    let json = serde_json::to_string(&graph).unwrap();
+    let restored: ConversationGraph = serde_json::from_str(&json).unwrap();
+
+    // Forward index should be rebuilt from edges.
+    assert_eq!(
+        restored.find_chain_leaf(root_id),
+        msg_id,
+        "reply_children must be rebuilt during deserialization"
+    );
+}

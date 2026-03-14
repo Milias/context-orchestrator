@@ -42,14 +42,12 @@ fn test_cancel_all_clears_state_and_cancels_tokens() {
     let id2 = Uuid::new_v4();
     let (_, token1) = reg.register(id1);
     let (_, token2) = reg.register(id2);
-    reg.primary_agent_id = Some(id1);
 
     reg.cancel_all();
 
     assert!(token1.is_cancelled(), "token1 should be cancelled");
     assert!(token2.is_cancelled(), "token2 should be cancelled");
-    assert!(!reg.is_primary(id1), "agents map should be empty");
-    assert!(reg.primary_agent_id.is_none(), "primary should be cleared");
+    assert_eq!(reg.active_count(), 0, "agents map should be empty");
 }
 
 /// Bug: `drain_phases` returns stale IDs or fails to clear the set,
@@ -75,22 +73,18 @@ fn test_drain_phases_returns_all_and_clears() {
     assert!(second.is_empty(), "phases should already be drained");
 }
 
-/// Bug: `is_primary` returns true after `remove` — TUI routes display
-/// updates to a dead agent.
+/// Bug: `active_count` not decremented after `remove` — stale count
+/// causes concurrency limit to reject new agents.
 #[test]
-fn test_is_primary_false_after_remove() {
+fn test_active_count_decremented_after_remove() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
     let (_rx, _cancel) = reg.register(agent_id);
-    reg.primary_agent_id = Some(agent_id);
-    assert!(reg.is_primary(agent_id));
+    assert_eq!(reg.active_count(), 1);
 
     reg.remove(agent_id);
 
-    assert!(
-        !reg.is_primary(agent_id),
-        "primary should be cleared after remove"
-    );
+    assert_eq!(reg.active_count(), 0, "count should be 0 after remove");
 }
 
 /// Bug: `route_tool_result` for a tool call whose agent was already

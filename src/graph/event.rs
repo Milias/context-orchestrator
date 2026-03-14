@@ -75,10 +75,8 @@ pub enum GraphEvent {
         assistant_id: Uuid,
         stop_reason: Option<StopReason>,
     },
-    /// Agent loop finished (all iterations complete).
+    /// Agent finished execution and terminated (ephemeral model).
     AgentFinished { agent_id: Uuid },
-    /// Agent entered idle state — waiting for new work events.
-    AgentIdle { agent_id: Uuid },
 
     // ── System events ───────────────────────────────────────────────
     /// A question was routed to the user for answering. TUI should show the prompt.

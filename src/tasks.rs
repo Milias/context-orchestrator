@@ -91,8 +91,6 @@ pub enum AgentEvent {
     /// Non-fatal status message for TUI display (e.g., retry progress).
     /// Do NOT cancel agent.
     StatusMessage(String),
-    /// Agent entered idle state — waiting for new work events.
-    Idle,
     Finished,
     /// Fatal error — agent cannot recover. Triggers cancellation.
     Error(String),

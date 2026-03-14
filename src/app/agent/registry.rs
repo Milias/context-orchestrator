@@ -13,14 +13,12 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// Tracks all active agent loops and routes tool completions.
+/// All agents are ephemeral and equal — no "primary" distinction.
 pub struct AgentRegistry {
     /// Active agent loops keyed by agent ID.
     agents: HashMap<Uuid, AgentHandle>,
     /// Reverse index: `tool_call_id` → `agent_id` for O(1) routing.
     tool_call_owner: HashMap<Uuid, Uuid>,
-    /// ID of the primary conversation agent (for TUI display routing).
-    /// `None` if no conversation agent is running.
-    pub primary_agent_id: Option<Uuid>,
 }
 
 /// Per-agent metadata held by the registry.
@@ -41,8 +39,12 @@ impl AgentRegistry {
         Self {
             agents: HashMap::new(),
             tool_call_owner: HashMap::new(),
-            primary_agent_id: None,
         }
+    }
+
+    /// Number of currently active agents.
+    pub fn active_count(&self) -> usize {
+        self.agents.len()
     }
 
     /// Register a new agent. Returns the tool-result receiver and cancellation
@@ -112,9 +114,6 @@ impl AgentRegistry {
         if existed {
             // Clean up orphaned tool_call_owner entries for this agent.
             self.tool_call_owner.retain(|_, owner| *owner != agent_id);
-            if self.primary_agent_id == Some(agent_id) {
-                self.primary_agent_id = None;
-            }
         }
         existed
     }
@@ -140,19 +139,13 @@ impl AgentRegistry {
             .map_or_else(Vec::new, |h| h.active_phase_ids.drain().collect())
     }
 
-    /// Whether the given agent is the primary conversation agent.
-    pub fn is_primary(&self, agent_id: Uuid) -> bool {
-        self.primary_agent_id == Some(agent_id)
-    }
-
-    /// Clear all agents (for shutdown).
+    /// Cancel and clear all agents (for shutdown).
     pub fn cancel_all(&mut self) {
         for handle in self.agents.values() {
             handle.cancel_token.cancel();
         }
         self.agents.clear();
         self.tool_call_owner.clear();
-        self.primary_agent_id = None;
     }
 }
 

@@ -10,18 +10,15 @@ use crate::graph::{Role, StopReason};
 use crate::tasks::AgentPhase;
 
 use super::{AgentDisplayState, AgentVisualPhase, ScrollMode, TuiState};
-use uuid::Uuid;
 
 /// Apply a graph event to the TUI state. Called once per event by the App.
-/// `is_primary` returns whether the given agent ID is the primary agent
-/// (controls which agent's events update the display).
-pub fn apply_event(state: &mut TuiState, event: &GraphEvent, is_primary: impl Fn(Uuid) -> bool) {
+/// All agent events update the display — no primary/secondary distinction.
+pub fn apply_event(state: &mut TuiState, event: &GraphEvent) {
     match event {
         // ── Agent lifecycle ──────────────────────────────────────
         GraphEvent::AgentPhaseChanged { agent_id, phase } => {
-            if !is_primary(*agent_id) {
-                return;
-            }
+            // TODO(Phase 8): route to per-agent display by agent_id.
+            let _ = agent_id;
             state.status_message = Some(phase.to_string());
             if state.agent_display.is_none() {
                 state.agent_display = Some(AgentDisplayState::default());
@@ -33,9 +30,7 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent, is_primary: impl Fn
             text,
             is_thinking,
         } => {
-            if !is_primary(*agent_id) {
-                return;
-            }
+            let _ = agent_id;
             if let Some(ref mut d) = state.agent_display {
                 d.phase = AgentVisualPhase::Streaming {
                     text: text.clone(),
@@ -51,9 +46,7 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent, is_primary: impl Fn
             assistant_id,
             stop_reason,
         } => {
-            if !is_primary(*agent_id) {
-                return;
-            }
+            let _ = agent_id;
             if *stop_reason == Some(StopReason::MaxTokens) {
                 state.error_message =
                     Some("Response truncated — continuing automatically".to_string());
@@ -66,11 +59,10 @@ pub fn apply_event(state: &mut TuiState, event: &GraphEvent, is_primary: impl Fn
                 }
             }
         }
-        GraphEvent::AgentIdle { agent_id } | GraphEvent::AgentFinished { agent_id } => {
-            if is_primary(*agent_id) {
-                state.agent_display = None;
-                state.status_message = None;
-            }
+        GraphEvent::AgentFinished { agent_id } => {
+            let _ = agent_id;
+            state.agent_display = None;
+            state.status_message = None;
         }
 
         // ── User message ────────────────────────────────────────
