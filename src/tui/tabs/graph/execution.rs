@@ -1,9 +1,9 @@
 //! Execution section tree for the Graph tab.
 //!
 //! Renders assistant messages as tree roots, with tool calls as children
-//! (linked via `Invoked` edges) and tool results as grandchildren (linked
-//! via `Produced` edges). Provides navigable tree with selection,
-//! collapse/expand, and tree-command-style connectors.
+//! (via `Invoked` edges) and tool results as grandchildren (via `Produced`
+//! edges). Provides navigable tree with selection, collapse/expand,
+//! and tree-command-style connectors.
 
 use std::cmp::Reverse;
 
@@ -376,16 +376,15 @@ fn render_flat_item(item: &FlatItem, line_idx: usize, selected_idx: usize) -> Li
     let dim = Style::default().fg(Color::DarkGray);
 
     let mut spans = Vec::new();
-
-    if is_selected {
-        spans.push(Span::styled(
-            "\u{2192} ", // →
-            Style::default().fg(Color::Cyan),
-        ));
-    }
-
     spans.push(Span::styled(item.prefix.clone(), dim));
     spans.extend(item.spans.clone());
+    // Apply background highlight to all spans on the selected line.
+    if is_selected {
+        let bg = Color::Rgb(40, 40, 60);
+        for span in &mut spans {
+            span.style = span.style.bg(bg);
+        }
+    }
 
     Line::from(spans)
 }

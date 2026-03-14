@@ -1,63 +1,63 @@
-//! System tab: stacked collapsible sections showing activity, files, errors,
-//! tools, and stats.
+//! System tab: horizontal split layout showing activity alongside files,
+//! errors, and tools.
 //!
 //! Layout:
 //! ```text
-//! ┌─ Activity ─────────────────────────────────────┐
-//! │  14:32:08 ✓ read_file src/main.rs       0.3s   │
-//! │  14:32:01 A [Assistant] Let me read...         │
-//! ├─ Files ────────────────────────────────────────┤
-//! │  src/                                          │
-//! │    tui/                                        │
-//! │      mod.rs [Modified]                         │
-//! ├─ Errors (0) ───────────────────────────────────┤
-//! ├─ Tools ────────────────────────────────────────┤
-//! │  plan         Create a plan...                 │
-//! ├─ Stats ────────────────────────────────────────┤
-//! │  Tokens: 45.3k in / 12.1k out  Msgs: 47       │
-//! └────────────────────────────────────────────────┘
+//! ┌─ Activity ──────────┬─ Files ──────────────────┐
+//! │  14:32:08 ✓ read_f  │  src/                    │
+//! │  14:32:01 A [Asst]  │    tui/mod.rs [Modified] │
+//! │                     ├─ Errors (0) ─────────────┤
+//! │                     ├─ Tools ──────────────────┤
+//! │                     │  plan    Create a plan…  │
+//! └─────────────────────┴──────────────────────────┘
 //! ```
 //!
-//! The Activity section gets flexible height (`Min(5)`) since it is the
-//! largest. Other sections size to their content. Empty sections (e.g.
-//! Errors with 0 entries) collapse to a single header line.
+//! Left column (~35%): Activity panel (full height).
+//! Right column (~65%): Files, Errors, Tools stacked vertically.
+//! The Tools section gets flexible height via `Min(5)`.
+//! Empty sections (e.g. Errors with 0 entries) collapse to a single header.
 
 mod activity;
 mod files;
 
 use crate::graph::ConversationGraph;
-use crate::tui::widgets::{stats_panel, tools_panel};
+use crate::tui::widgets::tools_panel;
 use crate::tui::TuiState;
 
 use ratatui::prelude::*;
 
-/// Render the System tab with stacked collapsible sections.
+/// Render the System tab with a horizontal split layout.
 ///
-/// Sections: Activity, Files, Errors, Tools, Stats. Each section has a
-/// bordered header. Empty sections collapse to their header only (2 lines
-/// for borders). Activity gets the remaining flexible space.
+/// Left column (~35%): Activity panel (full height).
+/// Right column (~65%): Files, Errors, Tools stacked vertically.
+///
+/// Each section has a bordered header. Empty sections collapse to their
+/// header only (2 lines for borders).
 pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let files_h = files::files_section_height(graph);
     let errors_h = errors_section_height(graph);
-    let tools_h = tools_panel::tools_panel_height();
-    let stats_h: u16 = 9;
 
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(5), // Activity (flexible)
-            Constraint::Length(files_h),
-            Constraint::Length(errors_h),
-            Constraint::Length(tools_h),
-            Constraint::Length(stats_h),
-        ])
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(area);
 
-    activity::render_activity(frame, rows[0], graph, tui_state);
-    files::render_files(frame, rows[1], graph);
-    render_errors(frame, rows[2], graph);
-    tools_panel::render(frame, rows[3]);
-    stats_panel::render(frame, rows[4], graph, tui_state);
+    // Left: Activity (full height).
+    activity::render_activity(frame, cols[0], graph, tui_state);
+
+    // Right: Files + Errors + Tools stacked vertically.
+    let right_stack = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(files_h),
+            Constraint::Length(errors_h),
+            Constraint::Min(5), // Tools gets remaining space.
+        ])
+        .split(cols[1]);
+
+    files::render_files(frame, right_stack[0], graph);
+    render_errors(frame, right_stack[1], graph);
+    tools_panel::render(frame, right_stack[2]);
 }
 
 // ── Errors section ──────────────────────────────────────────────────

@@ -244,7 +244,7 @@ fn render_flat_item(
         + icon.chars().count()
         + 1 // space after icon
         + kind_prefix.chars().count();
-    let title_budget = width.saturating_sub(prefix_width + 2); // reserve for selection arrow
+    let title_budget = width.saturating_sub(prefix_width);
     let title = truncate(&item.title, title_budget);
 
     let base_color = match item.kind {
@@ -265,11 +265,6 @@ fn render_flat_item(
     let dim = Style::default().fg(Color::DarkGray);
     let mut spans = Vec::new();
 
-    if is_selected {
-        spans.push(Span::styled("\u{2192} ", Style::default().fg(Color::Cyan)));
-        // →
-    }
-
     spans.push(Span::styled(item.prefix.clone(), dim));
     spans.push(Span::styled(collapse_indicator, dim));
     spans.push(Span::styled(
@@ -281,6 +276,14 @@ fn render_flat_item(
 
     // Inline badges.
     append_badges(&mut spans, item);
+
+    // Apply background highlight to all spans on the selected line.
+    if is_selected {
+        let bg = Color::Rgb(40, 40, 60);
+        for span in &mut spans {
+            span.style = span.style.bg(bg);
+        }
+    }
 
     Line::from(spans)
 }

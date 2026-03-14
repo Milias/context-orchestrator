@@ -9,15 +9,6 @@ use crate::tui::widgets::tool_status::truncate;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-/// Compute the tools panel height: tool count + 2 borders.
-pub fn tools_panel_height() -> u16 {
-    let count = tool_registry().len();
-    // Cast safety: tool count is small (<20).
-    #[allow(clippy::cast_possible_truncation)] // Justified: tool count is small (<20).
-    let h = (count as u16).saturating_add(2);
-    h
-}
-
 /// Render the tools panel as a name + description table.
 pub fn render(frame: &mut Frame, area: Rect) {
     let block = Block::default().title("Tools").borders(Borders::ALL);

@@ -53,6 +53,8 @@ pub enum Action {
     FollowEdge,
     /// Pop one breadcrumb from the edge inspector trail (Graph tab).
     PopBreadcrumb,
+    /// Start answering the selected question from the QA section (Graph tab).
+    AnswerQuestion,
 }
 
 /// Top-level key dispatcher: global bindings, then per-zone dispatch.

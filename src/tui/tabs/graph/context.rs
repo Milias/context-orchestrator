@@ -316,7 +316,7 @@ fn render_flat_item(
     };
 
     let prefix_width = item.prefix.chars().count() + collapse_indicator.chars().count();
-    let label_budget = width.saturating_sub(prefix_width + 2);
+    let label_budget = width.saturating_sub(prefix_width);
     let label = truncate(&item.label, label_budget);
 
     let (label_color, label_bold) = match item.kind {
@@ -339,13 +339,17 @@ fn render_flat_item(
 
     let mut spans = Vec::new();
 
-    if is_selected {
-        spans.push(Span::styled("\u{2192} ", Style::default().fg(Color::Cyan)));
-    }
-
     spans.push(Span::styled(item.prefix.clone(), dim));
     spans.push(Span::styled(collapse_indicator, dim));
     spans.push(Span::styled(label, label_style));
+
+    // Apply background highlight to all spans on the selected line.
+    if is_selected {
+        let bg = Color::Rgb(40, 40, 60);
+        for span in &mut spans {
+            span.style = span.style.bg(bg);
+        }
+    }
 
     Line::from(spans)
 }

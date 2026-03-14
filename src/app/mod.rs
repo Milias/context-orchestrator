@@ -253,6 +253,9 @@ impl App {
             Action::PopBreadcrumb => {
                 self.handle_graph_pop_breadcrumb();
             }
+            Action::AnswerQuestion => {
+                self.handle_answer_question();
+            }
             Action::None => {}
         }
         Ok(())

@@ -6,8 +6,9 @@
 
 use uuid::Uuid;
 
-use crate::graph::ConversationGraph;
-use crate::tui::state::ExplorerFocus;
+use crate::graph::node::QuestionStatus;
+use crate::graph::{ConversationGraph, Node};
+use crate::tui::state::{ExplorerFocus, FocusZone, GraphSection};
 use crate::tui::tabs::edge_inspector::{DisplayEdge, EdgeInspector};
 use crate::tui::widgets::tool_status::truncate;
 
@@ -26,7 +27,7 @@ fn populate_edges(graph: &ConversationGraph, inspector: &mut EdgeInspector, node
     inspector.edges.clear();
     inspector.selected_edge = 0;
 
-    for (_direction, kind, other_id) in graph.edges_of(node_id) {
+    for (direction, kind, other_id) in graph.edges_of(node_id) {
         let target_summary = graph.node(other_id).map_or_else(
             || "(unknown)".to_string(),
             |n| {
@@ -38,6 +39,7 @@ fn populate_edges(graph: &ConversationGraph, inspector: &mut EdgeInspector, node
         );
 
         inspector.edges.push(DisplayEdge {
+            direction,
             group: kind.group(),
             label: kind.display_label(),
             target_summary,
@@ -143,6 +145,60 @@ impl App {
         if let Some(explorer) = self.tui_state.explorer.get_mut(&section) {
             explorer.selected = 0;
         }
+    }
+
+    /// Start answering the selected question from the QA section.
+    ///
+    /// Resolves the selected node, verifies it is a `Question` in an
+    /// answerable state (`Pending` or `Claimed`), claims it if needed,
+    /// then sets up the TUI answer mode and shifts focus to the chat panel.
+    pub(super) fn handle_answer_question(&mut self) {
+        let section = GraphSection::QA;
+        let mut g = self.graph.write();
+        let Some(node_id) = resolve_selected_node_id(&self.tui_state, section, &g) else {
+            return;
+        };
+
+        let Some(Node::Question {
+            status, content, ..
+        }) = g.node(node_id)
+        else {
+            self.tui_state.error_message = Some("Selected node is not a question".to_string());
+            return;
+        };
+        let (status, content) = (*status, content.clone());
+
+        match status {
+            QuestionStatus::Pending => {
+                // Claim and transition to Claimed (mirrors route_question for User dest).
+                let claim_id = Uuid::new_v4();
+                if !g.try_claim(node_id, claim_id) {
+                    self.tui_state.error_message =
+                        Some("Question already claimed by another agent".to_string());
+                    return;
+                }
+                if let Err(e) = g.update_question_status(node_id, QuestionStatus::Claimed) {
+                    tracing::warn!("Failed to claim question {node_id}: {e}");
+                    self.tui_state.error_message = Some(format!("Failed to claim question: {e}"));
+                    return;
+                }
+            }
+            QuestionStatus::Claimed => {
+                // Already claimed — allow answering (could be our own prior claim).
+            }
+            _ => {
+                self.tui_state.error_message =
+                    Some(format!("Cannot answer question in {status:?} state"));
+                return;
+            }
+        }
+
+        drop(g);
+
+        // Activate answer mode: set the question text and ID, then focus chat.
+        self.tui_state.pending_question_text = Some(content);
+        self.tui_state.nav.focus = FocusZone::ChatPanel;
+        self.pending_user_question = Some(node_id);
     }
 
     /// Pop one breadcrumb from the edge inspector trail.

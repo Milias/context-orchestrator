@@ -310,32 +310,70 @@ fn build_right_status(graph: &ConversationGraph, tui_state: &TuiState) -> String
     parts.join("  ")
 }
 
-/// Build context-aware shortcut hints based on the current focus zone
-/// and whether the search bar is active.
+/// Build context-aware shortcut hints based on the current focus zone,
+/// active tab, and (for the Graph tab) the explorer focus.
 fn build_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'static str)> {
     // Search mode shows its own shortcuts.
     if tui_state.search.is_some() {
         return vec![("Esc", "close"), ("Ctrl+G", "scope"), ("Ctrl+Q", "quit")];
     }
 
-    let mut shortcuts = vec![("Tab", "chat"), ("Ctrl+Q", "quit")];
-
     match tui_state.nav.focus {
         FocusZone::ChatPanel => {
             if tui_state.pending_question_text.is_some() {
-                shortcuts.insert(0, ("Esc", "dismiss"));
-                shortcuts.insert(0, ("Enter", "answer"));
+                vec![
+                    ("Enter", "answer"),
+                    ("Esc", "dismiss"),
+                    ("Tab", "chat"),
+                    ("Ctrl+Q", "quit"),
+                ]
             } else {
-                shortcuts.insert(0, ("Enter", "send"));
+                vec![("Enter", "send"), ("Tab", "chat"), ("Ctrl+Q", "quit")]
             }
         }
-        FocusZone::TabContent => {
-            shortcuts.insert(0, ("/", "search"));
-            shortcuts.insert(0, ("Ctrl+E", "tools"));
-            shortcuts.insert(0, ("Up/Dn", "nav"));
+        FocusZone::TabContent => build_tab_content_shortcuts(tui_state),
+    }
+}
+
+/// Build shortcut hints specific to `TabContent` focus, varying by active tab.
+fn build_tab_content_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'static str)> {
+    use crate::tui::state::{ExplorerFocus, TopTab};
+
+    match tui_state.nav.active_tab {
+        TopTab::Overview | TopTab::System => {
+            vec![
+                ("Up/Dn", "nav"),
+                ("/", "search"),
+                ("Tab", "chat"),
+                ("Ctrl+Q", "quit"),
+            ]
+        }
+        TopTab::Graph => {
+            let section = tui_state.nav.active_graph_section;
+            let focus = tui_state
+                .explorer
+                .get(&section)
+                .map_or(ExplorerFocus::Tree, |e| e.focus);
+            match focus {
+                ExplorerFocus::Tree => vec![
+                    ("[/]", "section"),
+                    ("Space", "toggle"),
+                    ("d", "detail"),
+                    ("/", "search"),
+                    ("Tab", "chat"),
+                    ("Ctrl+Q", "quit"),
+                ],
+                ExplorerFocus::Detail => vec![
+                    ("Up/Dn", "edges"),
+                    ("Enter", "follow"),
+                    ("Esc", "back"),
+                    ("d", "tree"),
+                    ("Tab", "chat"),
+                    ("Ctrl+Q", "quit"),
+                ],
+            }
         }
     }
-    shortcuts
 }
 
 /// Format a token count for compact display in the status bar.

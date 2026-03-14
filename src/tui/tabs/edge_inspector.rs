@@ -6,11 +6,13 @@
 
 use uuid::Uuid;
 
-use crate::graph::EdgeGroup;
+use crate::graph::{EdgeDirection, EdgeGroup};
 
 /// A single edge prepared for display in the inspector panel.
 #[derive(Debug, Clone)]
 pub struct DisplayEdge {
+    /// Whether this edge is outgoing or incoming relative to the inspected node.
+    pub direction: EdgeDirection,
     /// Visual group this edge belongs to.
     pub group: EdgeGroup,
     /// Human-readable label for the edge kind.

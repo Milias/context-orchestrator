@@ -204,13 +204,6 @@ fn render_flat_item(
     let dim = Style::default().fg(Color::DarkGray);
     let mut spans = Vec::new();
 
-    if is_selected {
-        spans.push(Span::styled(
-            "\u{2192} ", // →
-            Style::default().fg(Color::Cyan),
-        ));
-    }
-
     spans.push(Span::styled(item.prefix.clone(), dim));
 
     match &item.kind {
@@ -232,6 +225,14 @@ fn render_flat_item(
         }
         QaKind::Answer => {
             render_answer_spans(&mut spans, &item.content, width);
+        }
+    }
+
+    // Apply background highlight to all spans on the selected line.
+    if is_selected {
+        let bg = Color::Rgb(40, 40, 60);
+        for span in &mut spans {
+            span.style = span.style.bg(bg);
         }
     }
 
@@ -276,8 +277,7 @@ fn render_question_spans(
     let overhead = 2 // "? "
         + badge_text.len() + 2 // " [badge]"
         + dest_text.len() + 1 // " (→dest)"
-        + if has_answers { 2 } else { 0 } // collapse indicator
-        + 2; // selection arrow reserve
+        + if has_answers { 2 } else { 0 }; // collapse indicator
     let content_budget = width.saturating_sub(overhead);
     let truncated = truncate(content, content_budget);
 
@@ -306,8 +306,8 @@ fn render_answer_spans(spans: &mut Vec<Span<'static>>, content: &str, width: usi
         Style::default().fg(Color::Green),
     ));
 
-    // Content budget: width minus icon and selection arrow reserve.
-    let content_budget = width.saturating_sub(4);
+    // Content budget: width minus icon ("A ") and padding.
+    let content_budget = width.saturating_sub(2);
     let truncated = truncate(content, content_budget);
 
     spans.push(Span::styled(truncated, Style::default().fg(Color::White)));

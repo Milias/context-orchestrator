@@ -82,6 +82,10 @@ fn handle_tree_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSectio
         KeyCode::Char('d') => {
             explorer.toggle_focus();
         }
+        KeyCode::Char('a') if section == GraphSection::QA => {
+            // Deferred to caller — needs graph access to verify question state.
+            return Action::AnswerQuestion;
+        }
         _ => {}
     }
 

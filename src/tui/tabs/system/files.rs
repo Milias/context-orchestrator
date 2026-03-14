@@ -60,7 +60,16 @@ pub fn render_files(frame: &mut Frame, area: Rect, graph: &ConversationGraph) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height == 0 || inner.width < 8 || files.is_empty() {
+    if inner.height == 0 || inner.width < 8 {
+        return;
+    }
+
+    if files.is_empty() {
+        let clean = Paragraph::new(Span::styled(
+            "(working directory clean)",
+            Style::default().fg(Color::DarkGray),
+        ));
+        frame.render_widget(clean, inner);
         return;
     }
 

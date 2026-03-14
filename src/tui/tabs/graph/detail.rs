@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
-use crate::graph::ConversationGraph;
+use crate::graph::{ConversationGraph, EdgeDirection};
 use crate::tui::tabs::edge_inspector::{DisplayEdge, EdgeInspector};
 use crate::tui::widgets::tool_status::truncate;
 use crate::tui::TuiState;
@@ -162,15 +162,6 @@ fn render_header(node: &crate::graph::Node, lines: &mut Vec<Line<'_>>) {
     ));
 
     lines.push(Line::from(spans));
-
-    // Second line: first line of content as a preview.
-    let first_line = node.content().lines().next().unwrap_or("");
-    if !first_line.is_empty() {
-        lines.push(Line::from(Span::styled(
-            truncate(first_line, 60),
-            Style::default().fg(Color::White),
-        )));
-    }
 }
 
 /// Render the full content section.
@@ -210,8 +201,8 @@ fn render_content(content: &str, width: usize, budget_lines: usize, lines: &mut 
 ///
 /// Edges are grouped by [`EdgeGroup`] label for visual organization.
 /// Each group header is bold cyan, followed by edge entries showing
-/// `label -> target_summary (short_uuid)`.
-/// The currently selected edge is highlighted for keyboard navigation.
+/// a direction arrow (`->` outgoing, `<-` incoming), label, target
+/// summary, and short UUID. The selected edge uses bold + bg highlight.
 fn render_edges(inspector: &EdgeInspector, width: usize, lines: &mut Vec<Line<'_>>) {
     if inspector.edges.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -241,8 +232,15 @@ fn render_edges(inspector: &EdgeInspector, width: usize, lines: &mut Vec<Line<'_
             let is_selected = idx == inspector.selected_edge;
             let target_short = short_uuid(edge.target_id);
 
-            let edge_text = format!("{} {} ({})", edge.label, edge.target_summary, target_short);
-            let line_budget = width.saturating_sub(4);
+            let dir_arrow = match edge.direction {
+                EdgeDirection::Outgoing => "\u{2192}",
+                EdgeDirection::Incoming => "\u{2190}",
+            };
+            let edge_text = format!(
+                "{dir_arrow} {}: {} ({target_short})",
+                edge.label, edge.target_summary,
+            );
+            let line_budget = width.saturating_sub(3); // "   " indent
             let display_text = truncate(&edge_text, line_budget);
 
             let style = if is_selected {
@@ -254,9 +252,8 @@ fn render_edges(inspector: &EdgeInspector, width: usize, lines: &mut Vec<Line<'_
                 Style::default().fg(Color::DarkGray)
             };
 
-            let prefix = if is_selected { " > " } else { "   " };
             lines.push(Line::from(vec![
-                Span::styled(prefix, style),
+                Span::styled("   ", style),
                 Span::styled(display_text, style),
             ]));
         }
