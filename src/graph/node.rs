@@ -48,7 +48,7 @@ impl std::fmt::Display for Role {
 }
 
 /// Whether a work item is a top-level plan or a task within a plan.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkItemKind {
     Plan,

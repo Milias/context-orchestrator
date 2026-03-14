@@ -74,7 +74,12 @@ fn render_tab_content(
         crate::tui::state::TopTab::Agents => {
             tabs::agents::render(frame, area, graph, tui_state);
         }
-        other => tabs::render_placeholder(frame, area, other),
+        crate::tui::state::TopTab::Work => {
+            tabs::work::render(frame, area, graph, tui_state);
+        }
+        crate::tui::state::TopTab::Activity => {
+            tabs::activity::render(frame, area, graph, tui_state);
+        }
     }
 }
 
