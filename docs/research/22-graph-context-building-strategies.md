@@ -214,6 +214,54 @@ background processing. Include the anchor's community summary in context.
 
 **Phase:** 3+ (requires background community detection and summarization).
 
+#### Strategy J2: Prize-Collecting Steiner Tree (PCST)
+
+Formulate subgraph extraction as an optimization problem: find the connected subgraph
+that maximizes total node prize values minus edge costs. Nodes receive prizes from
+relevance scores (embedding similarity, graph distance, or rating); edges have costs
+proportional to their semantic distance.
+
+PCST naturally discovers "bridge" nodes that connect relevant but distant information,
+preserving graph topology during extraction. The extracted subgraph is then serialized
+for the LLM.
+
+**Source:** G-Retriever (NeurIPS 2024, [arXiv 2402.07630](https://arxiv.org/abs/2402.07630)).
+**Complexity:** NP-hard in general, but approximable with 2-approximation algorithms.
+For our graph sizes (100-10K nodes), exact solvers via `pcst_rs` or heuristics suffice.
+**Phase:** 2+ (requires node prize computation infrastructure).
+
+#### Strategy J3: Steiner Tree Bridge Discovery (AriadneMem)
+
+When an agent needs context from non-adjacent parts of the graph:
+1. Identify terminal nodes (direct dependencies + query-relevant nodes)
+2. Approximate Steiner Tree: find bridge nodes connecting disconnected terminals via
+   `b* = argmax cos(E(query), v_m)` constrained to timestamps between endpoints
+3. DFS path mining: chains up to L=3 hops, node budget 8-25 nodes, prioritized by
+   path length and temporal coherence
+4. Serialize subgraph + paths into context
+
+**Source:** AriadneMem ([arXiv 2603.03290](https://arxiv.org/abs/2603.03290)).
+**Performance:** 15.2% Multi-Hop F1 improvement, 77.8% runtime reduction over
+iterative planning approaches.
+**Relevance:** Bridge tasks connect seemingly unrelated but logically linked work
+items — critical for understanding cross-cutting concerns.
+
+#### Strategy J4: Coarse-to-Fine Exploration (GraphReader)
+
+Agent-driven context expansion in two phases:
+1. **Coarse scan:** Read atomic facts/summaries for all candidate nodes (cheap overview)
+2. **Fine selection:** Selectively load full content of the most relevant nodes
+
+The agent maintains a running notebook, updating notes at each step. Multiple
+exploration paths use majority voting to resolve inconsistencies. Operates on 4K
+token windows but matches GPT-4 128K on benchmarks.
+
+**Source:** GraphReader (EMNLP 2024, [arXiv 2406.14550](https://arxiv.org/abs/2406.14550)).
+**Relevance:** This is a **pull-based** expansion strategy — the agent decides what
+context it needs rather than receiving a pre-built context. Addresses the red team's
+critique about lack of pull-based strategies. Maps to an agent calling a `query()`
+method on the ContextPolicy during execution.
+
 ### 4.3 Stage 3: Scoring
 
 Scoring determines *how important* each expanded node is relative to the anchor.
@@ -272,6 +320,37 @@ When the multi-rater relevance system exists (VISION.md §4.4), incorporate stor
 `Rating` nodes as an additional scoring signal. Developer ratings (confidence 1.0)
 override computed scores. Background rater scores (confidence 0.6-0.8) supplement
 topology-based scoring.
+
+#### Strategy M2: Personalized PageRank
+
+The dominant scoring algorithm in graph-based context extraction. Starting from anchor
+nodes, PPR propagates relevance through the graph topology with a damping factor
+(typically α = 0.85). Each node's score reflects its topological importance *relative
+to the anchor*, not global importance.
+
+**Key property:** Bidirectional PPR achieves O(1/ε) complexity regardless of graph
+size — making it scalable to 100K+ node graphs where BFS-based scoring degrades.
+
+**Implementation:** PPR is a single-pass algorithm that scores all reachable nodes at
+once, addressing the red team's critique about per-node `score()` calls. A `score_batch`
+implementation using PPR replaces N individual shortest-path computations with one
+iterative diffusion. Available in `petgraph` via power iteration or the
+`pagerank::pagerank` crate.
+
+**Source:** Standard algorithm, validated across GraphRAG, Neo4j, and multiple knowledge
+graph retrieval systems as the go-to relevance propagation method.
+
+#### Strategy M3: GNN-Learned Scoring
+
+Train a lightweight GNN (Graph Neural Network) or MLP to score node relevance to a
+query. GNN-RAG scores answer candidates on knowledge graphs, then retrieves shortest
+paths from query entities to top candidates. Outperforms competing approaches by
+8.9-15.5% on multi-hop questions while using 9x fewer tokens.
+
+**Source:** GNN-RAG (ACL 2025, [arXiv 2405.20139](https://arxiv.org/abs/2405.20139)).
+**Phase:** 3+ (requires training data from context usage telemetry).
+**Relevance:** Once we have telemetry on which context sections agents actually
+reference, a lightweight MLP scoring model could replace hand-tuned edge weights.
 
 ### 4.4 Stage 4: Budget Allocation
 
@@ -337,6 +416,58 @@ struct BudgetSection {
 This prevents pathological cases while allowing flexibility. The system prompt always
 gets at least 2000 tokens; conversation history always gets at least 30% of budget.
 
+#### Strategy P2: Knapsack Optimization
+
+Formalize context selection as the 0-1 knapsack problem:
+- **w[i]** = token cost of node i
+- **v[i]** = relevance score from Stage 3
+- **W = L - P - R** where L = total context length, P = prompt tokens, R = reserved
+  response tokens
+
+**Algorithms:**
+- Greedy approximation: O(N log N), select by highest value-to-weight ratio.
+  Practical for real-time context assembly.
+- Dynamic programming: O(N × W), optimal but pseudo-polynomial. Feasible when N
+  and W are bounded (e.g., fewer than 200 candidate nodes with budget ≤ 200K tokens).
+
+**Source:** [LLM Context as Knapsack Problem](https://www.awelm.com/posts/knapsack).
+**Relevance:** Upgrades Strategy O (greedy) from an ad-hoc "sort by score and pack"
+to a formally optimal selection. The value-to-weight ratio naturally penalizes verbose
+nodes — a 500-token message scoring 0.5 has ratio 0.001, while a 50-token summary
+scoring 0.4 has ratio 0.008 and gets selected first.
+
+#### Strategy P3: Dynamic Budget Estimation (TALE)
+
+Instead of static budget proportions, estimate the optimal token budget per task via
+binary search. The TALE framework (ACL 2025) found:
+- An "ideal budget range" exists per task minimizing cost
+- Below the ideal range, token cost actually *increases* (counterintuitive)
+- 68.64% average token reduction with only 2.72% accuracy loss (GPT-4o-mini)
+
+**Source:** [TALE (arXiv 2412.18547)](https://arxiv.org/abs/2412.18547).
+**Implementation:** Use the LLM's own estimate of needed tokens as the upper bound.
+Binary search between minimum viable budget and this upper bound using a quality
+validation signal (task completion rate).
+**Phase:** 3 (requires quality feedback loop).
+
+#### Strategy P4: Priority-Tiered Allocation
+
+Hierarchical budget tiers inspired by production systems:
+
+```
+P0 (never cut):  Task instructions, schema, immediate inputs
+P1 (trim last):  Direct dependency outputs, recent tool results
+P2 (summarize):  Sibling/parallel task outputs
+P3 (if space):   Broader graph context, community summaries
+```
+
+Within each tier, apply knapsack selection (Strategy P2). Monitor for pre-rot
+threshold (~95% for Claude, ~256K effective for 1M advertised) and trigger compression
+before performance degradation.
+
+**Source:** Convergent pattern across LangChain, Anthropic, and production agent
+systems. Claude Code triggers auto-compaction at 95% window capacity.
+
 ### 4.5 Stage 5: Rendering
 
 Rendering determines *how* selected nodes are serialized into the LLM's input format.
@@ -400,9 +531,61 @@ This creates a natural "focus gradient" — the most relevant content is detaile
 peripheral content is summarized, distant content is briefly referenced. Mimics how
 humans describe context: detail at center, broad strokes at periphery.
 
+#### Strategy U: Observation Masking (JetBrains)
+
+Replace older environment observations (tool outputs, file contents) with placeholder
+references, while preserving the agent's own action/reasoning history in full.
+Maintain a rolling window of N recent full observations (optimal: ~10 turns).
+
+**Key finding:** JetBrains/NeurIPS 2025 showed observation masking matched or exceeded
+LLM summarization in 4/5 configurations with ~50% cost reduction. LLM summaries
+obscure stopping signals, causing agents to overshoot.
+
+**Source:** [The Complexity Trap (NeurIPS 2025)](https://github.com/JetBrains-Research/the-complexity-trap).
+**Implementation:** During rendering, nodes older than N turns with `ToolResult` or
+`GitFile` content are replaced with `"[Tool result: read_file src/main.rs — see node {id}]"`.
+The agent can request full content via a `query()` tool call if needed (pull-based).
+**Relevance:** Directly addresses the budget problem — tool results often dominate
+token consumption but are rarely referenced after the turn they were produced.
+
+#### Strategy V: Sequential Accumulation (Chain of Agents)
+
+For long-context tasks, divide work across a chain of worker agents. Each worker
+receives its assigned chunk + a message from the previous worker. Information
+accumulates through the chain. A manager agent synthesizes the final worker's output.
+
+**Source:** Chain of Agents (NeurIPS 2024, [arXiv 2406.02818](https://arxiv.org/abs/2406.02818)).
+**Performance:** Reduces complexity from O(n²) to O(nk) where k = context limit.
+Up to 10% improvement over RAG/full-context baselines; ~100% on inputs >400K tokens.
+**Relevance:** For tasks with many dependencies, instead of packing all dependency
+outputs into one context, chain worker agents that each process one dependency's
+output and pass a compressed summary forward.
+
 ---
 
 ## 5. Industry Approaches — How Others Solve This
+
+### 5.0 The Canonical Framework: Write / Select / Compress / Isolate
+
+LangChain and Anthropic converge on four canonical strategies for agent context:
+
+| Strategy | Description | Example |
+|----------|-------------|---------|
+| **Write** | Persist info outside context for later retrieval | Scratchpads, long-term memories, plan files |
+| **Select** | Pull relevant info into the active window | RAG, grep, knowledge graph retrieval |
+| **Compress** | Reduce tokens while retaining essentials | Compaction (reversible), summarization (lossy) |
+| **Isolate** | Split context across agents for parallelism | Sub-agents with focused context slices |
+
+Priority hierarchy for compression: Raw > Compaction > Summarization. Multi-agent
+isolation uses up to 15x more total tokens but each agent gets a narrow, focused slice.
+
+The "Agent-as-Tool" pattern treats sub-agents as deterministic functions: main agent
+calls `invoke_researcher(goal="...")`, harness spawns a temporary sub-agent loop
+returning structured output. This eliminates management agent complexity and is the
+pattern our `spawn_agent_loop` already follows.
+
+Source: [LangChain Context Engineering](https://blog.langchain.com/context-engineering-for-agents/),
+[Anthropic Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
 
 ### 5.1 LangGraph: Centralized State with Reducer Merging
 
@@ -410,15 +593,22 @@ LangGraph's context model is a single `TypedDict` state object shared by all nod
 Each node reads the full state, does its work, and returns a partial update that
 gets merged via **reducer functions** (e.g., append to list, overwrite key).
 
+**Subgraph isolation:** LangGraph supports private state per subgraph. Parent and
+child graphs can have different state schemas. A wrapper node transforms parent state
+to child state on entry and child results back on exit. Each subgraph gets a unique
+namespace for checkpoint isolation.
+
 **What we can learn:** The reducer pattern for merging partial context updates from
 multiple agents. When Agent A updates tool results and Agent B updates plan state,
-reducers define how to merge without conflicts.
+reducers define how to merge without conflicts. The subgraph isolation pattern maps
+to our per-agent context policies — each agent gets a view (policy), not a copy.
 
-**What doesn't fit:** LangGraph's state is flat (a dictionary), not a graph. Our
-context is richer — it has typed edges, multi-hop relationships, and provenance
-chains that a flat state cannot express.
+**What doesn't fit:** LangGraph's state is flat (a dictionary), not a graph. LangGraph
+0.4+ added structured state with nested schemas, but the fundamental model remains a
+single shared dictionary rather than a typed property graph with multi-hop edges.
 
-Source: [LangGraph State Management](https://sparkco.ai/blog/mastering-langgraph-state-management-in-2025)
+Source: [LangGraph State Management](https://sparkco.ai/blog/mastering-langgraph-state-management-in-2025),
+[LangGraph Subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs)
 
 ### 5.2 Microsoft GraphRAG: Two-Mode Graph Search
 
@@ -516,6 +706,32 @@ pushed to them. This argues for Strategy G (Subgraph Extraction) over Strategy E
 (Ancestor Walk).
 
 Source: [LLM Blackboard Architecture](https://arxiv.org/abs/2507.01701)
+
+### 5.9 Google ADK: Session / State / Memory Separation
+
+Google's Agent Development Kit mandates three distinct context layers:
+- **Session:** Ephemeral, per-conversation interaction history
+- **State:** Persistent key-value store scoped to the agent or session
+- **Memory:** Long-term cross-session knowledge (semantic, episodic)
+
+ADK enforces "minimum required context" — agents start with minimal state and pull
+additional context via tool calls. This validates the pull-based expansion pattern
+(Strategy J4) and the observation masking approach (Strategy U).
+
+Source: [ADK Multi-Agent Patterns](https://developers.googleblog.com/developers-guide-to-multi-agent-patterns-in-adk/)
+
+### 5.10 LEGO-GraphRAG: Optimal Module Combination (VLDB 2025)
+
+LEGO-GraphRAG decomposes graph retrieval into interchangeable modules for subgraph
+extraction and path retrieval, then benchmarks all combinations. **Key finding:**
+structure-based extraction (PPR, k-hop) + semantic-augmented scoring (embedding
+reranking) is the optimal combination — beating pure semantic or pure structural
+approaches alone.
+
+This validates our hybrid approach: graph-native expansion (Strategies F-I) for
+recall, followed by optional embedding-based scoring (per doc 09) for precision.
+
+Source: [LEGO-GraphRAG (VLDB 2025)](https://arxiv.org/abs/2504.00988)
 
 ---
 
@@ -990,32 +1206,122 @@ comparable quality with less complexity, it should be the default for sparse gra
 
 ---
 
-## 12. Sources
+## 12. Key Algorithms Summary
+
+| Algorithm | Use Case | Complexity | Source |
+|-----------|----------|-----------|--------|
+| Topological sort | Dependency ordering | O(V+E) | petgraph |
+| Personalized PageRank | Anchor-relative relevance scoring | O(1/ε) | Standard |
+| Leiden community detection | Hierarchical clustering | Near-linear | GraphRAG |
+| PCST (Prize-Collecting Steiner Tree) | Optimal subgraph extraction | NP-hard (2-approx) | G-Retriever |
+| Approximate Steiner Tree | Bridge node discovery | Polynomial | AriadneMem |
+| DFS path mining | Reasoning chain extraction | O(V+E) per path | AriadneMem |
+| Greedy knapsack | Token budget packing | O(N log N) | General |
+| Binary search budget estimation | Optimal token budget | O(log B) | TALE |
+| Token classification (LLMLingua-2) | Prompt compression | Linear | Microsoft |
+| Observation masking | Long trajectory management | O(1) per step | JetBrains |
+| Map-reduce scoring | Parallel context assessment | O(C × T) | GraphRAG |
+
+---
+
+## 13. Rust Ecosystem
+
+### Graph Libraries
+
+- **petgraph** ([crates.io](https://crates.io/crates/petgraph)): Rust's dominant graph
+  library (2.1M+ downloads). `Graph`/`StableGraph`/`GraphMap` types. BFS/DFS iterators.
+  14 built-in algorithms including `toposort` (O(|V|+|E|)), `Topo` for incremental
+  topological traversal, `filter_map` for subgraph extraction.
+- **daggy** ([crates.io](https://crates.io/crates/daggy)): DAG-specific wrapper around
+  petgraph. Cycle detection, `Walker` trait for safe mutable traversal.
+
+### Agent Frameworks
+
+- **AutoAgents** ([GitHub](https://github.com/auto-agents-framework/auto-agents-framework)):
+  Most mature Rust agent framework. Ractor-based with typed pub/sub. 43.7% lower
+  latency than LangGraph, 84% higher throughput. Builder-pattern agent construction.
+- **Rig** ([rig.rs](https://rig.rs)): Builder-pattern agent construction with static and
+  dynamic (RAG'd) context. Strong embedding/vector store integrations.
+- **graph-flow / rs-graph-llm**: LangGraph-inspired workflow execution with `Context`
+  key-value store and PostgreSQL session persistence.
+- **GraphRAG-rs**: Full Rust GraphRAG with Leiden community detection, HNSW indexing,
+  and LightRAG integration.
+
+### Tokenization
+
+- **tiktoken-rs** ([crates.io](https://crates.io/crates/tiktoken-rs)): OpenAI tiktoken
+  for Rust. Token counting and encoding.
+- **bpe** ([crates.io](https://crates.io/crates/bpe)): Novel BPE algorithms for
+  performance/accuracy.
+
+### Relevance to Implementation
+
+Our `ConversationGraph` currently uses `HashMap<Uuid, Node>` + `Vec<Edge>` (custom).
+petgraph would add: BFS/DFS iterators for expansion, topological sort for dependency
+ordering, and `filter_map` for subgraph extraction — all needed for Strategies F-I.
+Migration to petgraph's `StableGraph` (stable indices across serialization) is viable
+but requires converting our `Uuid`-based node identity to petgraph's `NodeIndex` system,
+which the MVP explicitly deferred (doc MVP.md §6: "petgraph earns its place when we need
+algorithms").
+
+---
+
+## 14. Sources
 
 ### Context Construction in Multi-Agent Systems
 - [LangGraph State Management (2025)](https://sparkco.ai/blog/mastering-langgraph-state-management-in-2025) — Centralized state with reducer merging
-- [LangGraph Architecture](https://medium.com/@shuv.sdr/langgraph-architecture-and-design-280c365aaf2c) — Directed graph state passing between nodes
-- [AutoGen Multi-Agent Conversation](https://microsoft.github.io/autogen/0.2/docs/Use-Cases/agent_chat/) — Message filtering and context transforms
+- [LangGraph Subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs) — Namespace-isolated child graph state
+- [LangChain Context Engineering](https://blog.langchain.com/context-engineering-for-agents/) — Write/Select/Compress/Isolate framework
+- [AutoGen v0.4 Architecture](https://www.microsoft.com/en-us/research/articles/autogen-v0-4-reimagining-the-foundation-of-agentic-ai-for-scale-extensibility-and-robustness/) — Event-driven Memory protocol
+- [AutoGen 0.2 AgentChat](https://microsoft.github.io/autogen/0.2/docs/Use-Cases/agent_chat/) — Message filtering and context transforms
 - [CrewAI Memory System](https://docs.crewai.com/concepts/memory) — Composite scoring (semantic 0.5 + recency 0.3 + importance 0.2)
+- [CrewAI Flows](https://docs.crewai.com/en/concepts/flows) — Event-driven state machine with @start/@listen/@router
 - [Temporal Event History](https://docs.temporal.io/encyclopedia/event-history) — Event-replay state reconstruction
 - [Dagster Asset Materialization](https://docs.dagster.io/guides/build/assets/) — Upstream/downstream staleness detection
+- [Google ADK Multi-Agent Patterns](https://developers.googleblog.com/developers-guide-to-multi-agent-patterns-in-adk/) — Session/State/Memory separation
+- [DSPy](https://dspy.ai/) — Programmatic context optimization via GEPA
 
 ### Graph-Based Retrieval
 - [Microsoft GraphRAG](https://microsoft.github.io/graphrag/) — Local Search (entity fan-out) and Global Search (community summaries)
+- [LazyGraphRAG](https://www.microsoft.com/en-us/research/blog/lazygraphrag-setting-a-new-standard-for-quality-and-cost/) — 700x cheaper query cost via deferred summarization
+- [LEGO-GraphRAG (VLDB 2025)](https://arxiv.org/abs/2504.00988) — Structure + semantic is the optimal combination
 - [Graphiti/Zep Paper (arXiv 2501.13956)](https://arxiv.org/abs/2501.13956) — 71.2% accuracy at 1.6K tokens vs. 60.2% at 115K
 - [Neo4j Knowledge Graph + LLM Multi-Hop Reasoning](https://neo4j.com/blog/genai/knowledge-graph-llm-multi-hop-reasoning/) — 54.2% average accuracy improvement
-- [Context Graphs for AI](https://medium.com/@adnanmasood/context-graphs-a-practical-guide-to-governed-context-for-llms-agents-and-knowledge-systems-c49610c8ff27) — Governed queryable memory layer
+- [Context Graphs for AI](https://www.cloudraft.io/blog/context-graph-for-ai-agents) — Traversal patterns, hybrid retrieval
+
+### Papers — Subgraph Extraction and Scoring
+- [G-Retriever / PCST (NeurIPS 2024)](https://arxiv.org/abs/2402.07630) — Prize-Collecting Steiner Tree for optimal subgraph extraction
+- [SubgraphRAG (ICLR 2025)](https://arxiv.org/abs/2410.20724) — Size-constrained extraction with DDE scoring
+- [GNN-RAG (ACL 2025)](https://arxiv.org/abs/2405.20139) — GNN-learned relevance scoring, 9x fewer tokens
+- [AriadneMem (2025)](https://arxiv.org/abs/2603.03290) — Steiner Tree bridge discovery + DFS path mining
+- [GraphReader (EMNLP 2024)](https://arxiv.org/abs/2406.14550) — Coarse-to-fine graph exploration agent
+- [Chain of Agents (NeurIPS 2024)](https://arxiv.org/abs/2406.02818) — Sequential accumulation, O(nk)
+- [HiAgent (ACL 2025)](https://arxiv.org/abs/2408.09559) — Hierarchical working memory with subgoal chunking
+
+### Papers — Token Budget and Compression
+- [TALE / Token-Budget-Aware Reasoning (ACL 2025)](https://arxiv.org/abs/2412.18547) — 68.64% token reduction via binary search
+- [LLMLingua-2 (ACL 2024)](https://arxiv.org/abs/2403.12968) — Token classification compression
+- [The Complexity Trap (NeurIPS 2025)](https://github.com/JetBrains-Research/the-complexity-trap) — Observation masking beats LLM summarization
+- [LLM Context as Knapsack Problem](https://www.awelm.com/posts/knapsack) — Formal 0-1 knapsack formulation
 
 ### Memory and Context Systems
 - [Letta Sleep-Time Compute](https://www.letta.com/blog/sleep-time-compute) — Tiered memory with idle-time processing
 - [Mem0 Architecture (arXiv 2504.19413)](https://arxiv.org/abs/2504.19413) — Layered episodic/semantic/procedural memory
-- [LangMem SDK](https://blog.langchain.com/langmem-sdk-launch/) — Episodic memory preserving successful interactions
+- [Graph-Based Agent Memory Survey (2026)](https://arxiv.org/abs/2602.05665) — Taxonomy, storage structures, retrieval algorithms
 - [LLM Blackboard Architecture (arXiv 2507.01701)](https://arxiv.org/abs/2507.01701) — Shared blackboard outperforms direct messaging
 
 ### Context Engineering
 - [Anthropic Context Engineering Guide](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — Right information at the right moment
 - [Context Rot (Chroma Research)](https://research.trychroma.com/context-rot) — Focused 300 tokens outperform unfocused 113K
-- [LLMLingua Prompt Compression](https://www.freecodecamp.org/news/how-to-compress-your-prompts-and-reduce-llm-costs/) — Up to 20x compression with negligible accuracy loss
+- [Event Sourcing for Agentic AI (Akka)](https://akka.io/blog/event-sourcing-the-backbone-of-agentic-ai) — Durable events, CQRS, inter-agent communication
+
+### Rust Ecosystem
+- [petgraph](https://crates.io/crates/petgraph) — Graph library (2.1M+ downloads)
+- [daggy](https://crates.io/crates/daggy) — DAG-specific wrapper
+- [AutoAgents](https://github.com/auto-agents-framework/auto-agents-framework) — Ractor-based agent framework
+- [Rig](https://rig.rs) — Builder-pattern agent construction
+- [tiktoken-rs](https://crates.io/crates/tiktoken-rs) — Token counting
+- [Awesome-GraphMemory](https://github.com/DEEP-PolyU/Awesome-GraphMemory) — Resource collection
 
 ### Internal References
 - `src/app/context.rs:7-55` — Current `extract_messages` pipeline
@@ -1026,6 +1332,7 @@ comparable quality with less complexity, it should be the default for sparse gra
 - `docs/VISION.md` §3.2 — Context construction (6 steps)
 - `docs/VISION.md` §4.1-4.8 — Core ideas (graph, compaction, background, relevance, pinning)
 - `docs/research/07-inter-agent-communication.md` — GraphCoordinator, three-layer architecture
+- `docs/research/09-embedding-based-connection-suggestions.md` — Embedding pipeline, Phase 1 embeddings
 - `docs/research/19-llm-memory-management.md` — Memory nodes and context injection
 - `docs/research/20-kubernetes-inspired-agent-scheduling.md` — Agent labels, Filter+Score
 - `docs/research/21-graph-scheduler-qa-relationships.md` — Q/A edges, self-scheduling
