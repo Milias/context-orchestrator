@@ -90,4 +90,3 @@ fn test_parse_tool_arguments_invalid_json_falls_back() {
         "malformed JSON should produce Unknown"
     );
 }
-
