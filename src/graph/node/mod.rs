@@ -1,175 +1,14 @@
+//! Graph node types, supporting enums, and edge types.
+
+mod enums;
+
+pub use enums::*;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
-
-// ── Enums ────────────────────────────────────────────────────────────
-
-/// The reason the LLM stopped generating output.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum StopReason {
-    EndTurn,
-    MaxTokens,
-    ToolUse,
-}
-
-impl StopReason {
-    /// Convert an API stop reason string (e.g. `"end_turn"`) into a typed enum.
-    /// Returns `None` for unknown/future values.
-    pub fn from_api(s: &str) -> Option<Self> {
-        match s {
-            "end_turn" => Some(Self::EndTurn),
-            "max_tokens" => Some(Self::MaxTokens),
-            "tool_use" => Some(Self::ToolUse),
-            _ => None,
-        }
-    }
-}
-
-/// The role of a message sender in a conversation.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Role {
-    User,
-    Assistant,
-    System,
-}
-
-impl std::fmt::Display for Role {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::User => write!(f, "user"),
-            Self::Assistant => write!(f, "assistant"),
-            Self::System => write!(f, "system"),
-        }
-    }
-}
-
-/// Whether a work item is a top-level plan or a task within a plan.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkItemKind {
-    Plan,
-    #[default]
-    Task,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkItemStatus {
-    Todo,
-    Active,
-    Done,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum GitFileStatus {
-    Tracked,
-    Modified,
-    Staged,
-    Untracked,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BackgroundTaskKind {
-    GitIndex,
-    ContextSummarize,
-    ToolDiscovery,
-    AgentPhase,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Stopped,
-}
-
-/// Routing destination for a question.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum QuestionDestination {
-    User,
-    Llm,
-    Auto,
-}
-
-/// Lifecycle state machine for `Question` nodes.
-///
-/// ```text
-/// Pending ──try_claim()──→ Claimed ──add_answer()──→ Answered (if !requires_approval)
-///    │                        │
-///    ├──timeout──→ TimedOut   └──add_answer()──→ PendingApproval
-///                                                    │
-///                                  accept──→ Answered │
-///                                  reject──→ Rejected ──→ Pending (re-claimable)
-/// ```
-///
-/// Transitions are validated by `update_question_status()` in `mutation.rs`.
-/// Invalid transitions (e.g., `Pending` → `Answered`) return `Err`.
-/// `Rejected` is transient — it immediately transitions back to `Pending`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum QuestionStatus {
-    /// Awaiting routing/claiming by a backend.
-    Pending,
-    /// Claimed by an agent or backend; answer in progress.
-    Claimed,
-    /// Answer produced but requires user approval before resolving.
-    PendingApproval,
-    /// Terminal: question fully resolved.
-    Answered,
-    /// Transient: user rejected the proposed answer. Returns to `Pending`.
-    Rejected,
-    /// Terminal: question expired without an answer.
-    TimedOut,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EdgeKind {
-    RespondsTo,
-    SubtaskOf,
-    RelevantTo,
-    /// Plan-to-plan dependency: `from` depends on `to` completing first.
-    DependsOn,
-    Tracks,
-    Indexes,
-    Provides,
-    ThinkingOf,
-    Invoked,
-    Produced,
-    /// `ToolCall` → `Question`: provenance of who asked.
-    Asks,
-    /// `Answer` → `Question`: resolution link.
-    Answers,
-    /// `Question` → any node: what the question references.
-    About,
-    /// `Answer` → any node: what the answer caused.
-    Triggers,
-    /// `Answer` → `Answer`: newer answer replaces older for the same question.
-    Supersedes,
-    /// Any node → agent UUID: coordination lock preventing double-execution.
-    ClaimedBy,
-    /// `ApiError` → branch leaf: records when the error occurred in the conversation.
-    OccurredDuring,
-}
-
-// ── Edge ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Edge {
-    pub from: Uuid,
-    pub to: Uuid,
-    pub kind: EdgeKind,
-}
 
 // ── Node ─────────────────────────────────────────────────────────────
 
@@ -273,9 +112,33 @@ pub enum Node {
         message: String,
         created_at: DateTime<Utc>,
     },
+    /// Records a context construction operation. Makes context building
+    /// observable and enables LLM-guided selection via `SelectedFor` edges.
+    ContextBuildingRequest {
+        id: Uuid,
+        /// What triggered this context build.
+        trigger: ContextTrigger,
+        /// Which context policy was used.
+        policy: ContextPolicyKind,
+        /// Current lifecycle status.
+        status: ContextBuildStatus,
+        /// Number of candidate nodes considered.
+        candidates_count: u32,
+        /// Number of nodes selected for the context window.
+        selected_count: u32,
+        /// Total tokens in the rendered context.
+        token_count: Option<u32>,
+        /// Agent that will consume this context.
+        agent_id: Uuid,
+        created_at: DateTime<Utc>,
+        /// When the context was fully built.
+        #[serde(default)]
+        built_at: Option<DateTime<Utc>>,
+    },
 }
 
 impl Node {
+    /// Unique identifier for this node.
     pub fn id(&self) -> Uuid {
         match self {
             Node::Message { id, .. }
@@ -289,10 +152,12 @@ impl Node {
             | Node::ToolResult { id, .. }
             | Node::Question { id, .. }
             | Node::Answer { id, .. }
-            | Node::ApiError { id, .. } => *id,
+            | Node::ApiError { id, .. }
+            | Node::ContextBuildingRequest { id, .. } => *id,
         }
     }
 
+    /// Primary content of this node for display purposes.
     pub fn content(&self) -> &str {
         match self {
             Node::Message { content, .. }
@@ -307,9 +172,14 @@ impl Node {
             Node::Tool { name, .. } => name,
             Node::BackgroundTask { description, .. } => description,
             Node::ToolCall { arguments, .. } => arguments.tool_name(),
+            Node::ContextBuildingRequest { policy, .. } => match policy {
+                ContextPolicyKind::Conversational => "context:conversational",
+                ContextPolicyKind::TaskExecution => "context:task_execution",
+            },
         }
     }
 
+    /// Token count from provider token counting (input tokens for messages).
     pub fn input_tokens(&self) -> Option<u32> {
         match self {
             Node::Message { input_tokens, .. } => *input_tokens,
@@ -317,6 +187,7 @@ impl Node {
         }
     }
 
+    /// Token count from LLM output.
     pub fn output_tokens(&self) -> Option<u32> {
         match self {
             Node::Message { output_tokens, .. } => *output_tokens,
@@ -324,6 +195,7 @@ impl Node {
         }
     }
 
+    /// When this node was created.
     pub fn created_at(&self) -> DateTime<Utc> {
         match self {
             Node::Message { created_at, .. }
@@ -335,11 +207,13 @@ impl Node {
             | Node::BackgroundTask { created_at, .. }
             | Node::Question { created_at, .. }
             | Node::Answer { created_at, .. }
-            | Node::ApiError { created_at, .. } => *created_at,
+            | Node::ApiError { created_at, .. }
+            | Node::ContextBuildingRequest { created_at, .. } => *created_at,
             Node::GitFile { updated_at, .. } | Node::Tool { updated_at, .. } => *updated_at,
         }
     }
 
+    /// Model name for assistant messages, `None` otherwise.
     pub fn model(&self) -> Option<&str> {
         match self {
             Node::Message { model, .. } => model.as_deref(),
@@ -362,5 +236,5 @@ impl Node {
 }
 
 #[cfg(test)]
-#[path = "node_tests.rs"]
+#[path = "../node_tests.rs"]
 mod node_tests;

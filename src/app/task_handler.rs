@@ -267,7 +267,13 @@ impl App {
         );
         // User-triggered tool calls have no owning agent — use CWD (no worktree).
         let token = CancellationToken::new();
-        tool_executor::spawn_tool_execution(tool_call_id, arguments, self.task_tx.clone(), token, None);
+        tool_executor::spawn_tool_execution(
+            tool_call_id,
+            arguments,
+            self.task_tx.clone(),
+            token,
+            None,
+        );
     }
 
     /// Handle tool completion: update graph status, add result, apply side-effects.

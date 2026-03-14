@@ -22,6 +22,7 @@ pub fn role_label(node: &Node) -> &'static str {
         Node::Question { .. } => "question",
         Node::Answer { .. } => "answer",
         Node::ApiError { .. } => "error",
+        Node::ContextBuildingRequest { .. } => "context",
     }
 }
 
@@ -37,11 +38,12 @@ pub fn role_color(node: &Node) -> Color {
         Node::Tool { .. } | Node::ToolCall { .. } => Color::Magenta,
         Node::ToolResult { .. } => Color::Cyan,
         Node::Answer { .. } => Color::Green,
-        // ThinkBlock nodes are filtered out before rendering; arm is required for exhaustiveness.
+        // ThinkBlock and ContextBuildingRequest nodes are not rendered; arms for exhaustiveness.
         Node::ApiError { .. } => Color::Red,
-        Node::SystemDirective { .. } | Node::BackgroundTask { .. } | Node::ThinkBlock { .. } => {
-            Color::DarkGray
-        }
+        Node::SystemDirective { .. }
+        | Node::BackgroundTask { .. }
+        | Node::ThinkBlock { .. }
+        | Node::ContextBuildingRequest { .. } => Color::DarkGray,
     }
 }
 

@@ -7,7 +7,11 @@ use std::path::Path;
 
 const MAX_LIST_ENTRIES: usize = 1000;
 
-pub async fn execute(path: &str, recursive: bool, working_dir: Option<&Path>) -> ToolExecutionResult {
+pub async fn execute(
+    path: &str,
+    recursive: bool,
+    working_dir: Option<&Path>,
+) -> ToolExecutionResult {
     let resolved_path = if path.is_empty() { "." } else { path };
     let validated = match security::validate_path(resolved_path, working_dir).await {
         Ok(v) => v,

@@ -10,7 +10,11 @@ const BINARY_CHECK_BYTES: usize = 8192;
 const MAX_SEARCH_FILE_BYTES: u64 = 10_000_000; // 10 MB
 const MAX_DIRS_VISITED: usize = 5_000;
 
-pub async fn execute(pattern: &str, path: Option<&str>, working_dir: Option<&Path>) -> ToolExecutionResult {
+pub async fn execute(
+    pattern: &str,
+    path: Option<&str>,
+    working_dir: Option<&Path>,
+) -> ToolExecutionResult {
     let re = match regex::Regex::new(pattern) {
         Ok(r) => r,
         Err(e) => {

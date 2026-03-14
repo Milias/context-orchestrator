@@ -62,7 +62,8 @@ pub fn build_context(
             | Node::ToolResult { .. }
             | Node::Question { .. }
             | Node::Answer { .. }
-            | Node::ApiError { .. } => {}
+            | Node::ApiError { .. }
+            | Node::ContextBuildingRequest { .. } => {}
         }
     }
 

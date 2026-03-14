@@ -76,7 +76,13 @@ async fn test_spawn_execution_sends_completion() {
     let args = ToolCallArguments::ReadFile {
         path: path.to_str().unwrap().to_string(),
     };
-    spawn_tool_execution(tc_id, args, tx, tokio_util::sync::CancellationToken::new(), None);
+    spawn_tool_execution(
+        tc_id,
+        args,
+        tx,
+        tokio_util::sync::CancellationToken::new(),
+        None,
+    );
 
     let msg = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
         .await
