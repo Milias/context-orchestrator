@@ -65,12 +65,4 @@ impl ExplorerState {
             .saturating_add(delta);
         self.selected = usize::try_from(new_pos.max(0)).unwrap_or(0).min(max_index);
     }
-
-    /// Switch focus between Tree and Detail sub-panels.
-    pub fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
-            ExplorerFocus::Tree => ExplorerFocus::Detail,
-            ExplorerFocus::Detail => ExplorerFocus::Tree,
-        };
-    }
 }

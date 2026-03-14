@@ -54,7 +54,6 @@ pub fn handle_graph_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
 /// - `Space`: toggle collapse/expand on current node
 /// - `Enter`/`l`/`Right`: expand collapsed node or switch focus to detail
 /// - `h`/`Left`: collapse expanded node or move to parent (no-op at root)
-/// - `d`: toggle focus to the detail sub-panel
 fn handle_tree_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSection) -> Action {
     let Some(explorer) = tui_state.explorer.get_mut(&section) else {
         return Action::None;
@@ -79,9 +78,6 @@ fn handle_tree_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSectio
             // Deferred to caller — needs graph access to resolve selected UUID.
             return Action::CollapseNode;
         }
-        KeyCode::Char('d') => {
-            explorer.toggle_focus();
-        }
         KeyCode::Char('a') if section == GraphSection::QA => {
             // Deferred to caller — needs graph access to verify question state.
             return Action::AnswerQuestion;
@@ -99,7 +95,6 @@ fn handle_tree_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSectio
 /// - `Down`/`j`: select next edge
 /// - `Enter`/`l`/`Right`: follow the selected edge
 /// - `Esc`/`h`/`Left`: return focus to tree (or pop breadcrumb)
-/// - `d`: toggle focus back to the tree sub-panel
 fn handle_detail_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSection) -> Action {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
@@ -127,11 +122,6 @@ fn handle_detail_key(key: KeyEvent, tui_state: &mut TuiState, section: GraphSect
                 }
             } else {
                 return Action::PopBreadcrumb;
-            }
-        }
-        KeyCode::Char('d') => {
-            if let Some(explorer) = tui_state.explorer.get_mut(&section) {
-                explorer.toggle_focus();
             }
         }
         _ => {}

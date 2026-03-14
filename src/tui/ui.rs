@@ -358,7 +358,7 @@ fn build_tab_content_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'sta
                 ExplorerFocus::Tree => vec![
                     ("[/]", "section"),
                     ("Space", "toggle"),
-                    ("d", "detail"),
+                    ("Enter", "detail"),
                     ("/", "search"),
                     ("Tab", "chat"),
                     ("Ctrl+Q", "quit"),
@@ -367,7 +367,6 @@ fn build_tab_content_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'sta
                     ("Up/Dn", "edges"),
                     ("Enter", "follow"),
                     ("Esc", "back"),
-                    ("d", "tree"),
                     ("Tab", "chat"),
                     ("Ctrl+Q", "quit"),
                 ],
