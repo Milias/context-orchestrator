@@ -341,7 +341,7 @@ fn test_update_work_item_nonexistent_returns_error() {
     );
 }
 
-/// Helper: add a task under a plan and return (plan_id, task_id).
+/// Helper: add a task under a plan and return (`plan_id`, `task_id`).
 fn add_plan_with_task(graph: &mut ConversationGraph) -> (Uuid, Uuid) {
     let plan_id = add_plan(graph, "Test Plan");
     let task_id = Uuid::new_v4();
@@ -396,7 +396,7 @@ fn test_high_confidence_auto_accepts_done() {
 
 /// Bug: `update_work_item` with confidence="moderate" transitions to Done instead
 /// of staying Active and routing for review. Moderate confidence means the agent
-/// is uncertain — the work should stay Active with a CompletionProposed event
+/// is uncertain — the work should stay Active with a `CompletionProposed` event
 /// emitted so a reviewer can verify. If it auto-transitions, unfinished work
 /// gets marked complete.
 #[test]

@@ -78,7 +78,7 @@ fn distant_edge_scores_lower_than_responds_to() {
 /// Bug: recency boost makes a recent node score higher than an older node at
 /// the same graph distance, but both must still be included (not dropped
 /// entirely). Two nodes at 1 minute and 10 minutes old, both directly connected
-/// to the anchor via RespondsTo, must both appear in the scored output. If the
+/// to the anchor via `RespondsTo`, must both appear in the scored output. If the
 /// older node is excluded, agents lose recent conversation context.
 #[test]
 fn old_node_still_scored_not_excluded() {

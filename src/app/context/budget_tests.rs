@@ -3,7 +3,7 @@ use super::*;
 use crate::app::context::scoring::{ScoredCandidate, SelectionTier};
 use uuid::Uuid;
 
-/// Bug: `allocate` exceeds max_context_tokens by not enforcing tier budgets.
+/// Bug: `allocate` exceeds `max_context_tokens` by not enforcing tier budgets.
 /// If 100 Essential candidates each estimated at 500 tokens are submitted
 /// with a 10,000-token budget, the Essential tier (60% = 6,000 tokens) should
 /// fit at most 12 candidates. If the budget is not enforced, all 100 would be
@@ -12,6 +12,8 @@ use uuid::Uuid;
 fn essential_tier_respects_budget_cap() {
     let max_tokens: u32 = 10_000;
     // Essential budget = 60% of 10,000 = 6,000. At 500 tokens/message, max 12 nodes.
+    // Truncation is intentional: we want the integer floor of the division.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let essential_budget_nodes = ((f64::from(max_tokens) * 0.60) / 500.0) as usize;
 
     let candidates: Vec<ScoredCandidate> = (0..100)

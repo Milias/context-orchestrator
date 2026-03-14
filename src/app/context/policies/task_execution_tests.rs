@@ -22,7 +22,7 @@ fn graph_with_message() -> (ConversationGraph, Uuid) {
     (graph, msg_id)
 }
 
-/// Helper: add a plan to the graph with a RelevantTo edge to the parent message.
+/// Helper: add a plan to the graph with a `RelevantTo` edge to the parent message.
 fn add_plan(graph: &mut ConversationGraph, title: &str, parent_msg: Uuid) -> Uuid {
     let id = Uuid::new_v4();
     graph.add_node(Node::WorkItem {
