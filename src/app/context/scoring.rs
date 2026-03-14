@@ -128,3 +128,7 @@ pub fn score_candidates(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "scoring_tests.rs"]
+mod tests;

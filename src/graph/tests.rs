@@ -351,3 +351,75 @@ fn test_reply_children_survives_serialization() {
         "reply_children must be rebuilt during deserialization"
     );
 }
+
+/// Bug: `add_reply` chain doesn't build `reply_children` index correctly when
+/// nodes are added to different parents (forking). If two agents reply to the
+/// same root in parallel, each building its own chain, the `reply_children`
+/// index must track both forks independently. A broken index would cause
+/// `find_chain_leaf` to follow the wrong fork or miss one entirely, making
+/// task agents unable to find their own conversation history.
+#[test]
+fn forked_reply_chains_maintain_independent_paths() {
+    let mut graph = ConversationGraph::new("System prompt");
+    let root_id = graph.branch_leaf("main").unwrap();
+
+    let make_msg = |content: &str| Node::Message {
+        id: Uuid::new_v4(),
+        role: Role::User,
+        content: content.to_string(),
+        created_at: Utc::now(),
+        model: None,
+        input_tokens: None,
+        output_tokens: None,
+        stop_reason: None,
+    };
+
+    // Fork A: root → a1 → a2
+    let a1 = graph.add_reply(root_id, make_msg("a1")).unwrap();
+    let a2 = graph.add_reply(a1, make_msg("a2")).unwrap();
+
+    // Fork B: root → b1 → b2 → b3
+    let b1 = graph.add_reply(root_id, make_msg("b1")).unwrap();
+    let b2 = graph.add_reply(b1, make_msg("b2")).unwrap();
+    let b3 = graph.add_reply(b2, make_msg("b3")).unwrap();
+
+    // Root should have exactly two children (a1, b1) — the two fork heads.
+    let root_children = graph.reply_children_of(root_id);
+    assert_eq!(
+        root_children.len(),
+        2,
+        "root should have 2 fork children, got {}",
+        root_children.len()
+    );
+    assert!(
+        root_children.contains(&a1),
+        "root children should contain a1"
+    );
+    assert!(
+        root_children.contains(&b1),
+        "root children should contain b1"
+    );
+
+    // Fork A chain: a1 → a2, a2 is leaf.
+    assert_eq!(graph.reply_children_of(a1), &[a2]);
+    assert!(graph.reply_children_of(a2).is_empty());
+
+    // Fork B chain: b1 → b2 → b3, b3 is leaf.
+    assert_eq!(graph.reply_children_of(b1), &[b2]);
+    assert_eq!(graph.reply_children_of(b2), &[b3]);
+    assert!(graph.reply_children_of(b3).is_empty());
+
+    // find_chain_leaf from a1 should reach a2 (not b3).
+    assert_eq!(
+        graph.find_chain_leaf(a1),
+        a2,
+        "find_chain_leaf from a1 should reach a2, not cross into fork B"
+    );
+
+    // find_chain_leaf from b1 should reach b3 (not a2).
+    assert_eq!(
+        graph.find_chain_leaf(b1),
+        b3,
+        "find_chain_leaf from b1 should reach b3, not cross into fork A"
+    );
+}

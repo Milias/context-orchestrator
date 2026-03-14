@@ -340,3 +340,93 @@ fn test_update_work_item_nonexistent_returns_error() {
         "should return error for non-existent ID, got: {content}"
     );
 }
+
+/// Helper: add a task under a plan and return (plan_id, task_id).
+fn add_plan_with_task(graph: &mut ConversationGraph) -> (Uuid, Uuid) {
+    let plan_id = add_plan(graph, "Test Plan");
+    let task_id = Uuid::new_v4();
+    graph.add_node(Node::WorkItem {
+        id: task_id,
+        kind: WorkItemKind::Task,
+        title: "Test Task".to_string(),
+        status: WorkItemStatus::Active,
+        description: None,
+        completion_confidence: None,
+        created_at: Utc::now(),
+    });
+    let _ = graph.add_edge(task_id, plan_id, EdgeKind::SubtaskOf);
+    (plan_id, task_id)
+}
+
+/// Bug: `update_work_item` with confidence="high" does not auto-accept completion,
+/// leaving the task in Active state and emitting a review event when it should
+/// transition to Done immediately. High-confidence completions from agents that
+/// have verified their work should bypass review.
+#[test]
+fn test_high_confidence_auto_accepts_done() {
+    let (mut graph, msg_id) = graph_with_message();
+    let (_plan_id, task_id) = add_plan_with_task(&mut graph);
+
+    let content = apply_tool_call(
+        &mut graph,
+        msg_id,
+        ToolCallArguments::UpdateWorkItem {
+            id: task_id,
+            status: Some(WorkItemStatus::Done),
+            description: None,
+            confidence: Some("high".to_string()),
+        },
+    );
+
+    assert!(
+        !content.contains("Proposed") && !content.contains("Awaiting review"),
+        "high confidence should auto-accept, not propose review, got: {content}"
+    );
+
+    if let Some(Node::WorkItem { status, .. }) = graph.node(task_id) {
+        assert_eq!(
+            *status,
+            WorkItemStatus::Done,
+            "high-confidence Done should transition immediately to Done"
+        );
+    } else {
+        panic!("task node should exist");
+    }
+}
+
+/// Bug: `update_work_item` with confidence="moderate" transitions to Done instead
+/// of staying Active and routing for review. Moderate confidence means the agent
+/// is uncertain — the work should stay Active with a CompletionProposed event
+/// emitted so a reviewer can verify. If it auto-transitions, unfinished work
+/// gets marked complete.
+#[test]
+fn test_moderate_confidence_stays_active_and_proposes() {
+    let (mut graph, msg_id) = graph_with_message();
+    let (_plan_id, task_id) = add_plan_with_task(&mut graph);
+
+    let content = apply_tool_call(
+        &mut graph,
+        msg_id,
+        ToolCallArguments::UpdateWorkItem {
+            id: task_id,
+            status: Some(WorkItemStatus::Done),
+            description: None,
+            confidence: Some("moderate".to_string()),
+        },
+    );
+
+    assert!(
+        content.contains("Proposed") || content.contains("Awaiting review"),
+        "moderate confidence should propose completion for review, got: {content}"
+    );
+
+    if let Some(Node::WorkItem { status, .. }) = graph.node(task_id) {
+        assert_eq!(
+            *status,
+            WorkItemStatus::Active,
+            "moderate-confidence Done should NOT transition to Done — must stay Active for review"
+        );
+    } else {
+        panic!("task node should exist");
+    }
+}

@@ -276,3 +276,7 @@ fn walk_chain_from_root(graph: &ConversationGraph, root_id: Uuid) -> Vec<&Node> 
     }
     chain
 }
+
+#[cfg(test)]
+#[path = "task_execution_tests.rs"]
+mod tests;

@@ -82,3 +82,7 @@ pub(crate) fn build_assistant_message_with_tools(
     };
     (asst, vec![results])
 }
+
+#[cfg(test)]
+#[path = "message_builder_tests.rs"]
+mod tests;

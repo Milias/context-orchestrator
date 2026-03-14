@@ -80,3 +80,7 @@ pub fn allocate(mut candidates: Vec<ScoredCandidate>, max_context_tokens: u32) -
         supplementary,
     }
 }
+
+#[cfg(test)]
+#[path = "budget_tests.rs"]
+mod tests;

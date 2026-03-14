@@ -147,3 +147,7 @@ fn walk_responds_to_children(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "candidates_tests.rs"]
+mod tests;
