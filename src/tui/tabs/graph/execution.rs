@@ -8,7 +8,10 @@
 use std::cmp::Reverse;
 
 use chrono::Utc;
-use ratatui::{prelude::*, widgets::{Block, Borders, Paragraph}};
+use ratatui::{
+    prelude::*,
+    widgets::{Block, Borders, Paragraph},
+};
 use uuid::Uuid;
 
 use crate::graph::{tool_types::ToolCallStatus, ConversationGraph, EdgeKind, Node, Role};

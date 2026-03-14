@@ -7,7 +7,6 @@
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::tui::animated_scroll::AnimatedScroll;
 use crate::tui::state::ExplorerFocus;
 
 /// Per-section state for tree+detail navigation in the Graph tab.
@@ -17,14 +16,6 @@ use crate::tui::state::ExplorerFocus;
 /// [`GraphSection`](crate::tui::state::GraphSection).
 #[derive(Debug)]
 pub struct ExplorerState {
-    /// Animated scroll for the tree panel.
-    pub tree_scroll: AnimatedScroll,
-    /// Maximum scroll offset for tree panel (set each frame).
-    pub tree_max: u16,
-    /// Animated scroll for the detail panel.
-    pub detail_scroll: AnimatedScroll,
-    /// Maximum scroll offset for detail panel (set each frame).
-    pub detail_max: u16,
     /// Index of the selected item in the flattened tree.
     pub selected: usize,
     /// Total visible items (set each frame by the renderer).
@@ -39,10 +30,6 @@ impl ExplorerState {
     /// Create a new explorer state with everything at zero/default.
     pub fn new() -> Self {
         Self {
-            tree_scroll: AnimatedScroll::zero(),
-            tree_max: 0,
-            detail_scroll: AnimatedScroll::zero(),
-            detail_max: 0,
             selected: 0,
             visible_count: 0,
             collapsed: HashSet::new(),

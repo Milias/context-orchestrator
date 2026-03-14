@@ -29,7 +29,12 @@ fn populate_edges(graph: &ConversationGraph, inspector: &mut EdgeInspector, node
     for (_direction, kind, other_id) in graph.edges_of(node_id) {
         let target_summary = graph.node(other_id).map_or_else(
             || "(unknown)".to_string(),
-            |n| truncate(n.content().lines().next().unwrap_or(""), EDGE_SUMMARY_MAX_LEN),
+            |n| {
+                truncate(
+                    n.content().lines().next().unwrap_or(""),
+                    EDGE_SUMMARY_MAX_LEN,
+                )
+            },
         );
 
         inspector.edges.push(DisplayEdge {

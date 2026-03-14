@@ -95,15 +95,6 @@ impl TreePrefix {
     fn width(&self) -> usize {
         self.ancestors.len() * CHARS_PER_DEPTH
     }
-
-    /// Total width in characters of the prefix at the given depth.
-    ///
-    /// Each depth level contributes 4 characters, plus 4 for the item's
-    /// own connector.
-    pub fn rendered_width(depth: usize) -> usize {
-        // `depth` ancestor columns + 1 own connector column.
-        (depth + 1) * CHARS_PER_DEPTH
-    }
 }
 
 impl Default for TreePrefix {
