@@ -11,8 +11,8 @@ pub use tool::types as tool_types;
 
 pub use history::NodeSnapshot;
 pub use node::{
-    BackgroundTaskKind, Edge, EdgeKind, GitFileStatus, Node, Role, StopReason, TaskStatus,
-    WorkItemKind, WorkItemStatus,
+    BackgroundTaskKind, Edge, EdgeDirection, EdgeGroup, EdgeKind, GitFileStatus, Node, Role,
+    StopReason, TaskStatus, WorkItemKind, WorkItemStatus,
 };
 pub use tool::result::ToolResultContent;
 pub use tool::types::{parse_tool_arguments, ToolCallArguments};
@@ -292,6 +292,32 @@ impl ConversationGraph {
             .collect()
     }
 
+    /// Find all nodes this node points to via edges of the given kind.
+    /// Returns node IDs where an edge `(source) --[kind]--> (target)` exists.
+    /// Complement of `sources_by_edge` which finds incoming edges.
+    pub fn targets_by_edge(&self, source: Uuid, kind: EdgeKind) -> Vec<Uuid> {
+        self.edges
+            .iter()
+            .filter(|e| e.from == source && e.kind == kind)
+            .map(|e| e.to)
+            .collect()
+    }
+
+    /// Find ALL edges involving a node (both incoming and outgoing).
+    /// Returns `(direction, edge_kind, other_node_id)` triples.
+    pub fn edges_of(&self, node_id: Uuid) -> Vec<(EdgeDirection, EdgeKind, Uuid)> {
+        let mut result = Vec::new();
+        for edge in &self.edges {
+            if edge.from == node_id {
+                result.push((EdgeDirection::Outgoing, edge.kind, edge.to));
+            }
+            if edge.to == node_id {
+                result.push((EdgeDirection::Incoming, edge.kind, edge.from));
+            }
+        }
+        result
+    }
+
     /// Look up a node by id.
     pub fn node(&self, id: Uuid) -> Option<&Node> {
         self.nodes.get(&id)
@@ -312,26 +338,19 @@ impl ConversationGraph {
     /// Find the parent of a node via a `SubtaskOf` edge, if any.
     /// Returns the target of the first `SubtaskOf` edge from this node.
     pub fn parent_of(&self, child_id: Uuid) -> Option<Uuid> {
-        self.edges
-            .iter()
-            .find(|e| e.from == child_id && e.kind == EdgeKind::SubtaskOf)
-            .map(|e| e.to)
+        self.targets_by_edge(child_id, EdgeKind::SubtaskOf).into_iter().next()
     }
 
     /// Find all plans that `plan_id` depends on (via `DependsOn` edges).
     /// Returns prerequisite plan IDs.
     pub fn dependencies_of(&self, plan_id: Uuid) -> Vec<Uuid> {
-        self.edges
-            .iter()
-            .filter(|e| e.from == plan_id && e.kind == EdgeKind::DependsOn)
-            .map(|e| e.to)
-            .collect()
+        self.targets_by_edge(plan_id, EdgeKind::DependsOn)
     }
 
     /// Check if there's a path from `start` to `target` following `DependsOn` edges.
     /// Used for cycle detection before adding a new dependency.
     pub fn has_dependency_path(&self, start: Uuid, target: Uuid) -> bool {
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = HashSet::new();
         let mut stack = vec![start];
         while let Some(current) = stack.pop() {
             if current == target {
@@ -357,31 +376,24 @@ impl ConversationGraph {
 
     /// Check if a node has an associated `ThinkBlock` linked via `ThinkingOf`.
     pub fn has_think_block(&self, node_id: Uuid) -> bool {
-        self.edges
-            .iter()
-            .any(|e| e.to == node_id && e.kind == EdgeKind::ThinkingOf)
+        !self.sources_by_edge(node_id, EdgeKind::ThinkingOf).is_empty()
     }
 }
 
 #[cfg(test)]
 mod tests;
-
 #[cfg(test)]
 #[path = "mutation_tests.rs"]
 mod mutation_tests;
-
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod history_tests;
-
 #[cfg(test)]
 #[path = "question_tests.rs"]
 mod question_tests;
-
 #[cfg(test)]
 #[path = "event_tests.rs"]
 mod event_tests;
-
 #[cfg(test)]
 #[path = "coordination_tests.rs"]
 mod coordination_tests;

@@ -98,6 +98,7 @@ fn handle_tab_content_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
                 .scroll_by(1, tui_state.overview_max),
             _ => {}
         },
+        crate::tui::state::TopTab::Graph | crate::tui::state::TopTab::System => {}
     }
     Action::None
 }

@@ -229,6 +229,82 @@ pub enum EdgeKind {
     ConsumedBy,
 }
 
+/// Direction of an edge relative to a given node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeDirection {
+    /// This node is the source (from).
+    Outgoing,
+    /// This node is the target (to).
+    Incoming,
+}
+
+/// Semantic grouping of edge types for the detail panel display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EdgeGroup {
+    /// Structural relationships: `SubtaskOf`, `DependsOn`, `RespondsTo`, `Invoked`, `Produced`.
+    Structure,
+    /// Question/answer relationships: `Asks`, `Answers`, `Triggers`, `Supersedes`, `About`.
+    QA,
+    /// Reference relationships: `RelevantTo`, `Tracks`, `Indexes`, `Provides`.
+    References,
+    /// Coordination relationships: `ClaimedBy`, `OccurredDuring`, `SelectedFor`, `ConsumedBy`.
+    Coordination,
+}
+
+impl EdgeGroup {
+    /// Display label for section headers in the detail panel.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Structure => "STRUCTURE",
+            Self::QA => "Q&A",
+            Self::References => "REFS",
+            Self::Coordination => "COORD",
+        }
+    }
+}
+
+impl EdgeKind {
+    /// Human-readable label for display in the detail panel.
+    /// Written from the perspective of the node being inspected.
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::RespondsTo => "replies to",
+            Self::SubtaskOf => "part of",
+            Self::DependsOn => "depends on",
+            Self::Invoked => "invoked by",
+            Self::Produced => "produced by",
+            Self::RelevantTo => "relevant to",
+            Self::About => "about",
+            Self::Tracks => "tracks",
+            Self::Indexes => "indexes",
+            Self::Provides => "provides",
+            Self::Asks => "asks",
+            Self::Answers => "answers",
+            Self::Triggers => "triggers",
+            Self::Supersedes => "supersedes",
+            Self::ClaimedBy => "claimed by",
+            Self::OccurredDuring => "occurred during",
+            Self::SelectedFor => "selected for",
+            Self::ConsumedBy => "consumed by",
+            Self::ThinkingOf => "thinking of",
+        }
+    }
+
+    /// Semantic group this edge belongs to.
+    pub fn group(self) -> EdgeGroup {
+        match self {
+            Self::RespondsTo | Self::SubtaskOf | Self::DependsOn
+            | Self::Invoked | Self::Produced | Self::ThinkingOf => EdgeGroup::Structure,
+            Self::Asks | Self::Answers | Self::Triggers
+            | Self::Supersedes | Self::About => EdgeGroup::QA,
+            Self::RelevantTo | Self::Tracks | Self::Indexes
+            | Self::Provides => EdgeGroup::References,
+            Self::ClaimedBy | Self::OccurredDuring | Self::SelectedFor
+            | Self::ConsumedBy => EdgeGroup::Coordination,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
     pub from: uuid::Uuid,

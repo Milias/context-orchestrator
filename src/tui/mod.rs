@@ -1,6 +1,7 @@
 pub mod animated_scroll;
 pub mod event_handler;
 pub mod input;
+pub mod search;
 pub mod state;
 pub mod tabs;
 pub mod ui;
@@ -250,6 +251,12 @@ pub struct TuiState {
     pub pending_question_text: Option<String>,
     /// Cached panel rectangles from last render for mouse hit-testing.
     pub panel_rects: state::PanelRects,
+    /// Per-section explorer state for the Graph tab, keyed by section.
+    pub explorer: HashMap<state::GraphSection, tabs::explorer::ExplorerState>,
+    /// Active search state. `None` when the search bar is closed.
+    pub search: Option<search::SearchState>,
+    /// Edge inspector for following edges between nodes.
+    pub edge_inspector: tabs::edge_inspector::EdgeInspector,
 }
 
 #[derive(Debug)]
@@ -287,6 +294,12 @@ impl TuiState {
             recent_max: 0,
             pending_question_text: None,
             panel_rects: state::PanelRects::default(),
+            explorer: state::GraphSection::all()
+                .iter()
+                .map(|&section| (section, tabs::explorer::ExplorerState::new()))
+                .collect(),
+            search: None,
+            edge_inspector: tabs::edge_inspector::EdgeInspector::new(),
         }
     }
 }

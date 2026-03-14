@@ -68,6 +68,7 @@ fn render_tab_content(
         crate::tui::state::TopTab::Overview => {
             tabs::overview::render(frame, area, graph, tui_state);
         }
+        crate::tui::state::TopTab::Graph | crate::tui::state::TopTab::System => {}
     }
 }
 

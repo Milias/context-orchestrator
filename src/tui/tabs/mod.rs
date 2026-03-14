@@ -2,8 +2,13 @@
 //!
 //! Each tab fills the left content area and has its own rendering logic.
 //! The tab bar at the top shows all tabs with the active one highlighted.
-//! Currently a single `overview` tab combines agents, work, and stats.
+//! `overview` combines agents, work, and stats. `graph` provides the
+//! interactive graph explorer. `edge_inspector` and `explorer` hold
+//! per-section navigation state for the graph tab.
 
 pub mod agents;
+pub mod edge_inspector;
+pub mod explorer;
+pub mod graph;
 pub mod overview;
 pub mod work;
