@@ -14,7 +14,7 @@ use ratatui::prelude::*;
 pub(super) struct WorkTreeItem {
     title: String,
     kind: WorkItemKind,
-    status: WorkItemStatus,
+    pub(super) status: WorkItemStatus,
     deps: Vec<String>,
     children: Vec<WorkTreeItem>,
 }

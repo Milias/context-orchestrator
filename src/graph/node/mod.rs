@@ -160,6 +160,25 @@ impl Node {
         }
     }
 
+    /// Short type badge for the detail panel header (e.g. `"MSG"`, `"WORK"`, `"TC"`).
+    pub fn type_badge(&self) -> &'static str {
+        match self {
+            Node::Message { .. } => "MSG",
+            Node::SystemDirective { .. } => "SYS",
+            Node::WorkItem { .. } => "WORK",
+            Node::GitFile { .. } => "FILE",
+            Node::Tool { .. } => "TOOL",
+            Node::BackgroundTask { .. } => "BG",
+            Node::ThinkBlock { .. } => "THINK",
+            Node::ToolCall { .. } => "TC",
+            Node::ToolResult { .. } => "TR",
+            Node::Question { .. } => "Q",
+            Node::Answer { .. } => "A",
+            Node::ApiError { .. } => "ERR",
+            Node::ContextBuildingRequest { .. } => "CTX",
+        }
+    }
+
     /// Primary content of this node for display purposes.
     pub fn content(&self) -> &str {
         match self {
@@ -235,6 +254,34 @@ impl Node {
     /// Whether this message was truncated due to `max_tokens`.
     pub fn is_truncated(&self) -> bool {
         self.stop_reason() == Some(StopReason::MaxTokens)
+    }
+
+    /// Human-readable status label for nodes that carry a lifecycle state.
+    /// Returns `None` for nodes without a status field.
+    pub fn status_label(&self) -> Option<&'static str> {
+        match self {
+            Node::WorkItem { status, .. } => Some(match status {
+                WorkItemStatus::Todo => "Todo",
+                WorkItemStatus::Active => "Active",
+                WorkItemStatus::Done => "Done",
+            }),
+            Node::BackgroundTask { status, .. } => Some(match status {
+                TaskStatus::Pending => "Pending",
+                TaskStatus::Running => "Running",
+                TaskStatus::Completed => "Completed",
+                TaskStatus::Failed => "Failed",
+                TaskStatus::Stopped => "Stopped",
+            }),
+            Node::Question { status, .. } => Some(match status {
+                QuestionStatus::Pending => "Pending",
+                QuestionStatus::Claimed => "Claimed",
+                QuestionStatus::PendingApproval => "PendingApproval",
+                QuestionStatus::Answered => "Answered",
+                QuestionStatus::Rejected => "Rejected",
+                QuestionStatus::TimedOut => "TimedOut",
+            }),
+            _ => None,
+        }
     }
 }
 

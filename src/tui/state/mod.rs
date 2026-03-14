@@ -83,7 +83,8 @@ pub enum ExplorerFocus {
 }
 
 /// Which half of the screen owns keyboard focus.
-/// Tab toggles between them; conversation panel visibility follows focus.
+/// Tab toggles between them. The conversation panel is always visible
+/// regardless of focus; this only controls keyboard routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusZone {
     /// Left side -- tab-specific monitoring/management panels.
@@ -124,18 +125,12 @@ pub struct NavigationState {
 
 impl NavigationState {
     /// Create navigation state with sensible defaults.
-    /// Starts focused on the chat panel (conversation visible).
+    /// Starts focused on the chat panel (conversation always visible).
     pub fn new() -> Self {
         Self {
             active_tab: TopTab::Overview,
             focus: FocusZone::ChatPanel,
             active_graph_section: GraphSection::default(),
         }
-    }
-
-    /// Whether the right conversation panel should be rendered.
-    /// True when the chat panel is focused.
-    pub fn conversation_visible(&self) -> bool {
-        self.focus == FocusZone::ChatPanel
     }
 }
