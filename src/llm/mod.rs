@@ -70,6 +70,9 @@ pub trait LlmProvider: Send + Sync {
 }
 
 #[cfg(test)]
+pub mod mock;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

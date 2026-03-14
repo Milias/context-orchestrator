@@ -10,3 +10,7 @@ mod types_tests;
 #[cfg(test)]
 #[path = "args_tests.rs"]
 mod args_tests;
+
+#[cfg(test)]
+#[path = "name_tests.rs"]
+mod name_tests;

@@ -130,3 +130,7 @@ fn build_assistant_message_with_tools(
     };
     (asst, vec![results])
 }
+
+#[cfg(test)]
+#[path = "conversational_tests.rs"]
+mod tests;

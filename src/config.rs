@@ -67,3 +67,7 @@ impl AppConfig {
             })
     }
 }
+
+#[cfg(test)]
+#[path = "config_tests.rs"]
+mod tests;

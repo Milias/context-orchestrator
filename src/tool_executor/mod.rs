@@ -340,3 +340,7 @@ pub fn spawn_tool_execution(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "execute_tests.rs"]
+mod execute_tests;

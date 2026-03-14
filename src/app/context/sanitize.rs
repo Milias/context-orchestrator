@@ -32,7 +32,11 @@ pub async fn finalize_context(
 }
 
 /// Remove oldest messages until the token budget is satisfied.
-fn truncate_messages(messages: &mut Vec<ChatMessage>, max_tokens: u32, token_count: u32) {
+pub(crate) fn truncate_messages(
+    messages: &mut Vec<ChatMessage>,
+    max_tokens: u32,
+    token_count: u32,
+) {
     let total_chars: usize = messages.iter().map(|m| m.content.char_len()).sum();
     let ratio = f64::from(max_tokens) / f64::from(token_count);
     // Truncation/sign-loss/precision-loss are acceptable here: total_chars and ratio
@@ -60,7 +64,7 @@ fn truncate_messages(messages: &mut Vec<ChatMessage>, max_tokens: u32, token_cou
 /// - Drop orphaned tool result user messages at the front
 /// - Drop leading assistant messages (API requires user first)
 /// - Drop trailing assistant messages with uncompleted tool uses
-pub fn sanitize_message_boundaries(messages: &mut Vec<ChatMessage>) {
+pub(crate) fn sanitize_message_boundaries(messages: &mut Vec<ChatMessage>) {
     // Drop orphaned tool_result user messages at the front after truncation.
     while messages.len() > 1 && messages[0].role == Role::User {
         let all_results = matches!(&messages[0].content,
@@ -91,3 +95,7 @@ pub fn sanitize_message_boundaries(messages: &mut Vec<ChatMessage>) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sanitize_tests.rs"]
+mod tests;

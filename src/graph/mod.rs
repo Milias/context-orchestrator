@@ -341,3 +341,7 @@ mod question_tests;
 #[cfg(test)]
 #[path = "event_tests.rs"]
 mod event_tests;
+
+#[cfg(test)]
+#[path = "coordination_tests.rs"]
+mod coordination_tests;

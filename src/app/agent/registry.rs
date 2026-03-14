@@ -180,3 +180,7 @@ impl Default for AgentRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod tests;

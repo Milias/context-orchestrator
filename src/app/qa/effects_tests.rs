@@ -1,4 +1,4 @@
-use crate::graph::node::{QuestionDestination, QuestionStatus};
+use crate::graph::node::QuestionDestination;
 use crate::graph::tool::types::{ToolCallArguments, ToolCallStatus};
 use crate::graph::{ConversationGraph, EdgeKind, Node};
 use chrono::Utc;

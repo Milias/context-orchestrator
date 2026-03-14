@@ -97,3 +97,83 @@ fn test_parse_user_trigger_args_plan() {
         other => panic!("Expected Plan, got: {}", other.tool_name()),
     }
 }
+
+/// Bug: `/set` trigger parsed into wrong variant — key/value
+/// not split correctly (both end up in `key`).
+#[test]
+fn test_parse_user_trigger_args_set_splits_key_value() {
+    let args = parse_user_trigger_args("set", "model claude-opus");
+    match args {
+        ToolCallArguments::Set { key, value } => {
+            assert_eq!(key, "model");
+            assert_eq!(value, "claude-opus");
+        }
+        other => panic!("Expected Set, got: {}", other.tool_name()),
+    }
+}
+
+/// Bug: `/ask` trigger with explicit destination parsed incorrectly —
+/// destination not recognized, defaults silently to `User`.
+#[test]
+fn test_parse_user_trigger_args_ask_llm() {
+    use crate::graph::node::QuestionDestination;
+    let args = parse_user_trigger_args("ask", "llm Should we use JWT?");
+    match args {
+        ToolCallArguments::Ask {
+            question,
+            destination,
+            ..
+        } => {
+            assert_eq!(destination, QuestionDestination::Llm);
+            assert_eq!(question, "Should we use JWT?");
+        }
+        other => panic!("Expected Ask, got: {}", other.tool_name()),
+    }
+}
+
+/// Bug: `/ask` with user destination doesn't parse the question text.
+#[test]
+fn test_parse_user_trigger_args_ask_user() {
+    use crate::graph::node::QuestionDestination;
+    let args = parse_user_trigger_args("ask", "user What JWT library?");
+    match args {
+        ToolCallArguments::Ask {
+            question,
+            destination,
+            ..
+        } => {
+            assert_eq!(destination, QuestionDestination::User);
+            assert_eq!(question, "What JWT library?");
+        }
+        other => panic!("Expected Ask, got: {}", other.tool_name()),
+    }
+}
+
+/// Bug: unrecognized tool name does not fall through to `Unknown` —
+/// panics or returns wrong variant.
+#[test]
+fn test_parse_user_trigger_args_unknown_tool() {
+    let args = parse_user_trigger_args("nonexistent", "some args");
+    match args {
+        ToolCallArguments::Unknown {
+            tool_name,
+            raw_json,
+        } => {
+            assert_eq!(tool_name, "nonexistent");
+            assert_eq!(raw_json, "some args");
+        }
+        other => panic!("Expected Unknown, got: {}", other.tool_name()),
+    }
+}
+
+/// Bug: `/read_file` trigger does not preserve path with spaces.
+#[test]
+fn test_parse_user_trigger_args_read_file() {
+    let args = parse_user_trigger_args("read_file", "src/my file.rs");
+    match args {
+        ToolCallArguments::ReadFile { path } => {
+            assert_eq!(path, "src/my file.rs");
+        }
+        other => panic!("Expected ReadFile, got: {}", other.tool_name()),
+    }
+}
