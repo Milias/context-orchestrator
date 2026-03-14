@@ -6,7 +6,10 @@
 //! one-line summary headers. Sub-modules handle tree drawing, the work
 //! tree, and the node detail panel.
 
+mod context;
 mod detail;
+mod execution;
+mod qa;
 pub mod tree_lines;
 mod work;
 
@@ -93,9 +96,17 @@ fn render_expanded_section(
             let selected_id = work::render(frame, panels[0], graph, tui_state);
             detail::render(frame, panels[1], graph, selected_id, tui_state);
         }
-        // QA, Execution, Context are stubs: show placeholder in tree area.
-        _ => {
-            render_stub_content(frame, panels[0], section);
+        GraphSection::QA => {
+            let selected_id = qa::render(frame, panels[0], graph, tui_state);
+            detail::render(frame, panels[1], graph, selected_id, tui_state);
+        }
+        GraphSection::Execution => {
+            let selected_id = execution::render(frame, panels[0], graph, tui_state);
+            detail::render(frame, panels[1], graph, selected_id, tui_state);
+        }
+        GraphSection::Context => {
+            let selected_id = context::render(frame, panels[0], graph, tui_state);
+            detail::render(frame, panels[1], graph, selected_id, tui_state);
         }
     }
 }
@@ -129,13 +140,6 @@ fn render_collapsed_header(
         Span::styled(format!(" ({summary})"), Style::default().fg(Color::Rgb(80, 80, 100))),
     ]);
     frame.render_widget(Paragraph::new(line), area);
-}
-
-/// Placeholder content for unimplemented sections.
-fn render_stub_content(frame: &mut Frame, area: Rect, section: GraphSection) {
-    let msg = format!("{} section — coming soon", section.label());
-    let p = Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)));
-    frame.render_widget(p, area);
 }
 
 /// Compute a summary string for a collapsed section header.
