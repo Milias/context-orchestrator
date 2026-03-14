@@ -439,16 +439,19 @@ Source: [GraphRAG Indexing Architecture](https://microsoft.github.io/graphrag/)
 
 ### 5.3 AutoGen: Message-Passing with Context Filtering
 
-AutoGen 0.4's `AgentChat` layer manages per-agent context through:
+AutoGen 0.2's `AgentChat` layer manages per-agent context through:
 - **Message filtering:** Agents subscribe to message types they care about
-- **Context transforms:** Middleware that can summarize, filter, or restructure
-  messages before an agent sees them
+- **Context transforms:** `TransformMessages` middleware that can summarize, filter,
+  or restructure messages before an agent sees them
 - **Memory modules:** Pluggable memory (chat history, summarization, RAG)
+
+AutoGen 0.4 redesigned its architecture with a `Memory` protocol and event-driven
+agents, replacing the 0.2 `TransformMessages` approach with per-agent memory stores.
 
 **What we can learn:** The middleware/transform pattern — context building as a
 pipeline of composable transforms rather than a monolithic function.
 
-Source: [AutoGen Architecture](https://microsoft.github.io/autogen/0.2/docs/Use-Cases/agent_chat/)
+Source: [AutoGen 0.2 Architecture](https://microsoft.github.io/autogen/0.2/docs/Use-Cases/agent_chat/)
 
 ### 5.4 CrewAI: Composite Scoring for Memory Retrieval
 
@@ -470,7 +473,7 @@ workflow context.
 (doc 07) maintains an event log, context can be rebuilt by replaying events that
 affect the anchor's neighborhood — enabling time-travel context construction.
 
-Source: [Temporal Workflow State](https://docs.temporal.io/encyclopedia/workflow-message-passing)
+Source: [Temporal Event History](https://docs.temporal.io/encyclopedia/event-history)
 
 ### 5.6 Dagster: Asset-Centric Materialization
 
@@ -492,7 +495,7 @@ Letta organizes context into three tiers:
 - **Recall Memory:** Recent interaction history, auto-managed
 
 The "sleep-time compute" innovation processes memories during idle periods, improving
-retrieval quality by up to 18% on benchmarks.
+accuracy by up to 18% on math reasoning benchmarks (Stateful AIME).
 
 **What we can learn:** The three-tier model maps to our rendering strategy. High-score
 nodes go into the system prompt (Core), medium-score nodes are available via tool
@@ -994,7 +997,7 @@ comparable quality with less complexity, it should be the default for sparse gra
 - [LangGraph Architecture](https://medium.com/@shuv.sdr/langgraph-architecture-and-design-280c365aaf2c) — Directed graph state passing between nodes
 - [AutoGen Multi-Agent Conversation](https://microsoft.github.io/autogen/0.2/docs/Use-Cases/agent_chat/) — Message filtering and context transforms
 - [CrewAI Memory System](https://docs.crewai.com/concepts/memory) — Composite scoring (semantic 0.5 + recency 0.3 + importance 0.2)
-- [Temporal Workflow Message Passing](https://docs.temporal.io/encyclopedia/workflow-message-passing) — Event-replay state reconstruction
+- [Temporal Event History](https://docs.temporal.io/encyclopedia/event-history) — Event-replay state reconstruction
 - [Dagster Asset Materialization](https://docs.dagster.io/guides/build/assets/) — Upstream/downstream staleness detection
 
 ### Graph-Based Retrieval
