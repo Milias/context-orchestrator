@@ -5,12 +5,11 @@
 //! panel is hidden, uses a 3-column layout; otherwise a stacked layout.
 
 use crate::graph::tool_types::ToolCallStatus;
-use crate::graph::{ConversationGraph, Node};
-use crate::tui::ui::format_token_count;
+use crate::graph::{BackgroundTaskKind, ConversationGraph, Node, TaskStatus};
 use crate::tui::widgets::tool_status::{
     elapsed, finished, format_duration, tool_call_status_icon, truncate,
 };
-use crate::tui::TuiState;
+use crate::tui::{TuiState, SPINNER_FRAMES};
 
 use chrono::Utc;
 use ratatui::prelude::*;
@@ -25,30 +24,26 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
     }
 }
 
-/// Standard layout: agent card on top, recent completions + stats on bottom.
+/// Standard layout: agent card + running tasks + recent completions + stats.
 fn render_standard(
     frame: &mut Frame,
     area: Rect,
     graph: &ConversationGraph,
     tui_state: &mut TuiState,
 ) {
+    let running_h = running_tasks_height(graph);
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(agent_card_height(tui_state)),
+            Constraint::Length(running_h),
             Constraint::Min(3),
         ])
         .split(area);
 
     render_agent_card(frame, vertical[0], tui_state);
-
-    let bottom = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(vertical[1]);
-
-    render_recent_completions(frame, bottom[0], graph, tui_state);
-    render_stats(frame, bottom[1], graph, tui_state);
+    render_running_tasks(frame, vertical[1], graph, tui_state);
+    render_recent_completions(frame, vertical[2], graph, tui_state);
 }
 
 /// Compact layout for narrow terminals: everything stacked.
@@ -58,16 +53,19 @@ fn render_compact(
     graph: &ConversationGraph,
     tui_state: &mut TuiState,
 ) {
+    let running_h = running_tasks_height(graph);
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(agent_card_height(tui_state)),
+            Constraint::Length(running_h),
             Constraint::Min(3),
         ])
         .split(area);
 
     render_agent_card(frame, vertical[0], tui_state);
-    render_recent_completions(frame, vertical[1], graph, tui_state);
+    render_running_tasks(frame, vertical[1], graph, tui_state);
+    render_recent_completions(frame, vertical[2], graph, tui_state);
 }
 
 /// Compute the agent card height based on the number of active tool calls.
@@ -135,6 +133,142 @@ fn render_agent_card(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
 
     let text = Text::from(lines);
     frame.render_widget(Paragraph::new(text), inner);
+}
+
+/// Count active items for sizing the Running section.
+fn running_tasks_height(graph: &ConversationGraph) -> u16 {
+    let count = count_running(graph);
+    if count == 0 {
+        return 0; // Hide the section entirely when nothing is running.
+    }
+    // border (2) + items. Clamp to 10 rows max.
+    let n: u16 = u16::try_from(count).unwrap_or(u16::MAX);
+    n.saturating_add(2).min(10)
+}
+
+/// Count running background tasks (non-AgentPhase) + active tool calls.
+fn count_running(graph: &ConversationGraph) -> usize {
+    let bg = graph
+        .nodes_by(|n| {
+            matches!(
+                n,
+                Node::BackgroundTask {
+                    status: TaskStatus::Running,
+                    kind,
+                    ..
+                } if *kind != BackgroundTaskKind::AgentPhase
+            )
+        })
+        .len();
+    let tc = graph
+        .nodes_by(|n| {
+            matches!(
+                n,
+                Node::ToolCall {
+                    status: ToolCallStatus::Pending | ToolCallStatus::Running,
+                    ..
+                }
+            )
+        })
+        .len();
+    bg + tc
+}
+
+/// Render active background tasks and tool calls.
+fn render_running_tasks(
+    frame: &mut Frame,
+    area: Rect,
+    graph: &ConversationGraph,
+    tui_state: &TuiState,
+) {
+    if area.height < 3 {
+        return;
+    }
+    let block = Block::default().title("Running").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width < 8 {
+        return;
+    }
+
+    let now = Utc::now();
+    let width = inner.width as usize;
+    let spinner_tick = tui_state
+        .agent_display
+        .as_ref()
+        .map_or(0, |d| d.spinner_tick);
+    let spinner = SPINNER_FRAMES[spinner_tick % SPINNER_FRAMES.len()];
+
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Background tasks (non-AgentPhase, Running).
+    for node in graph.nodes_by(|n| {
+        matches!(
+            n,
+            Node::BackgroundTask {
+                status: TaskStatus::Running,
+                kind,
+                ..
+            } if *kind != BackgroundTaskKind::AgentPhase
+        )
+    }) {
+        if let Node::BackgroundTask {
+            description,
+            created_at,
+            ..
+        } = node
+        {
+            let dur = format_duration(&elapsed(now, *created_at));
+            let name = truncate(description, width.saturating_sub(4 + dur.len()));
+            let pad = width.saturating_sub(2 + name.chars().count() + 1 + dur.len());
+            lines.push(Line::from(vec![
+                Span::styled(format!("{spinner} "), Style::default().fg(Color::Cyan)),
+                Span::styled(name, Style::default().fg(Color::White)),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(dur, Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    // Active tool calls (Pending/Running).
+    for node in graph.nodes_by(|n| {
+        matches!(
+            n,
+            Node::ToolCall {
+                status: ToolCallStatus::Pending | ToolCallStatus::Running,
+                ..
+            }
+        )
+    }) {
+        if let Node::ToolCall {
+            status,
+            arguments,
+            created_at,
+            ..
+        } = node
+        {
+            let (icon, color) = if *status == ToolCallStatus::Running {
+                (spinner, Color::Yellow)
+            } else {
+                tool_call_status_icon(status)
+            };
+            let dur = format_duration(&elapsed(now, *created_at));
+            let summary = arguments.display_summary();
+            let name = truncate(&summary, width.saturating_sub(4 + dur.len()));
+            let pad = width.saturating_sub(2 + name.chars().count() + 1 + dur.len());
+            lines.push(Line::from(vec![
+                Span::styled(format!("{icon} "), Style::default().fg(color)),
+                Span::styled(name, Style::default().fg(Color::Magenta)),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(dur, Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    let max_rows = inner.height as usize;
+    lines.truncate(max_rows);
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 /// Render a list of recent tool call completions from the graph.
@@ -221,80 +355,3 @@ fn render_recent_completions(
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
-/// Render stats panel with token usage, message count, and service status.
-fn render_stats(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
-    let block = Block::default().title("Stats").borders(Borders::ALL);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 || inner.width < 8 {
-        return;
-    }
-
-    let input_tok = tui_state.token_usage.input.current;
-    let output_tok = tui_state.token_usage.output.current;
-
-    let msg_count = graph.nodes_by(|n| matches!(n, Node::Message { .. })).len();
-    let tool_count = graph.nodes_by(|n| matches!(n, Node::ToolCall { .. })).len();
-
-    let dim = Style::default().fg(Color::DarkGray);
-    let val = Style::default().fg(Color::White);
-
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("Tokens: ", dim),
-            Span::styled(
-                format!(
-                    "{}in / {}out",
-                    format_token_count(input_tok),
-                    format_token_count(output_tok)
-                ),
-                val,
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Messages: ", dim),
-            Span::styled(msg_count.to_string(), val),
-        ]),
-        Line::from(vec![
-            Span::styled("Tools: ", dim),
-            Span::styled(tool_count.to_string(), val),
-        ]),
-    ];
-
-    // Service status.
-    if inner.height as usize > lines.len() + 1 {
-        lines.push(Line::raw(""));
-        let services = [
-            ("Git index", crate::graph::BackgroundTaskKind::GitIndex),
-            (
-                "Tool disc.",
-                crate::graph::BackgroundTaskKind::ToolDiscovery,
-            ),
-        ];
-        for (label, kind) in services {
-            let status = graph
-                .nodes_by(|n| matches!(n, Node::BackgroundTask { kind: k, .. } if *k == kind))
-                .last()
-                .map(|n| {
-                    if let Node::BackgroundTask { status, .. } = n {
-                        *status
-                    } else {
-                        crate::graph::TaskStatus::Pending
-                    }
-                });
-            let (icon, color) = match status {
-                Some(crate::graph::TaskStatus::Completed) => ("✓", Color::Green),
-                Some(crate::graph::TaskStatus::Running) => ("⟳", Color::Cyan),
-                Some(crate::graph::TaskStatus::Failed) => ("✗", Color::Red),
-                _ => ("○", Color::DarkGray),
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(label, dim),
-            ]));
-        }
-    }
-
-    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
-}
