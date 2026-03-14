@@ -8,10 +8,11 @@ use crate::config::AppConfig;
 use crate::graph::{ConversationGraph, Node, Role};
 use crate::llm::LlmProvider;
 use crate::persistence::{self, ConversationMetadata};
+use crate::storage::TokenStore;
 use crate::tasks::{self, AgentToolResult, TaskMessage};
 use crate::tui::input::{self, Action};
 use crate::tui::ui;
-use crate::tui::{self, AgentDisplayState, TuiState};
+use crate::tui::{self, AgentDisplayState, AnimatedCounter, TuiState};
 
 use chrono::Utc;
 use crossterm::event::{Event, EventStream, KeyEventKind};
@@ -47,6 +48,9 @@ pub struct App {
     /// Node IDs of currently running agent phases (`BackgroundTask` nodes).
     /// Multiple phases can be active simultaneously (e.g. token counting + context building).
     active_phase_ids: HashSet<Uuid>,
+    /// Async analytics store for persistent token tracking.
+    /// `None` if the analytics DB could not be opened (non-fatal).
+    token_store: Option<TokenStore>,
 }
 
 impl App {
@@ -55,6 +59,7 @@ impl App {
         graph: ConversationGraph,
         metadata: ConversationMetadata,
         provider: Arc<dyn LlmProvider>,
+        token_store: Option<TokenStore>,
     ) -> Self {
         let (task_tx, task_rx) = mpsc::unbounded_channel();
         Self {
@@ -69,10 +74,13 @@ impl App {
             cancel_token: None,
             task_tokens: HashMap::new(),
             active_phase_ids: HashSet::new(),
+            token_store,
         }
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
+        self.seed_token_usage().await;
+
         let mut terminal = tui::setup_terminal()?;
         let mut event_stream = EventStream::new();
         let mut spinner_interval = tokio::time::interval(Duration::from_millis(80));
@@ -99,6 +107,7 @@ impl App {
             }
 
             let agent_active = self.tui_state.agent_display.is_some();
+            let animating = self.tui_state.token_usage.is_animating();
 
             tokio::select! {
                 maybe_event = event_stream.next() => {
@@ -154,10 +163,11 @@ impl App {
                 Some(task_msg) = self.task_rx.recv() => {
                     self.handle_task_message(task_msg);
                 }
-                _ = spinner_interval.tick(), if agent_active => {
+                _ = spinner_interval.tick(), if agent_active || animating => {
                     if let Some(ref mut display) = self.tui_state.agent_display {
                         display.spinner_tick = display.spinner_tick.wrapping_add(1);
                     }
+                    self.tui_state.token_usage.tick();
                 }
                 _ = sigterm.recv() => {
                     if let Some(ref token) = self.cancel_token {
@@ -245,6 +255,24 @@ impl App {
             let tool_call_id = Uuid::new_v4();
             self.handle_tool_call_dispatched(tool_call_id, user_msg_id, args, None);
         }
+    }
+
+    /// Seed the status-bar token counters from the analytics DB.
+    /// Sets both `current` and `target` to the same value so there is
+    /// no counting animation on startup.
+    async fn seed_token_usage(&mut self) {
+        let Some(ref store) = self.token_store else {
+            return;
+        };
+        let totals = store.lifetime_totals().await.unwrap_or_default();
+        self.tui_state.token_usage.input = AnimatedCounter {
+            current: totals.input,
+            target: totals.input,
+        };
+        self.tui_state.token_usage.output = AnimatedCounter {
+            current: totals.output,
+            target: totals.output,
+        };
     }
 
     pub(super) fn save(&self) -> anyhow::Result<()> {

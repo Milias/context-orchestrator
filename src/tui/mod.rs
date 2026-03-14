@@ -168,6 +168,62 @@ impl ToolDisplayMode {
     }
 }
 
+// ── Token usage display ─────────────────────────────────────────────
+
+/// A counter that animates toward a target value with ease-out motion.
+///
+/// Each [`tick`](Self::tick) advances `current` by 25% of the remaining
+/// distance (minimum 1). A 10 000-token jump reaches its target in
+/// roughly 15 ticks (~1.2 s at 80 ms per tick).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AnimatedCounter {
+    /// The value currently shown in the UI.
+    pub current: u64,
+    /// The value we are animating toward.
+    pub target: u64,
+}
+
+impl AnimatedCounter {
+    /// Advance the displayed value one step toward the target.
+    pub fn tick(&mut self) {
+        if self.current < self.target {
+            let step = ((self.target - self.current) / 4).max(1);
+            self.current = (self.current + step).min(self.target);
+        } else if self.current > self.target {
+            // Snap immediately — decreasing totals are unexpected but must not
+            // cause an infinite animation loop.
+            self.current = self.target;
+        }
+    }
+
+    /// Returns `true` while the displayed value differs from the target.
+    pub fn is_animating(&self) -> bool {
+        self.current != self.target
+    }
+}
+
+/// Lifetime token totals displayed in the status bar.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TokenUsage {
+    /// Input (prompt) tokens.
+    pub input: AnimatedCounter,
+    /// Output (completion) tokens.
+    pub output: AnimatedCounter,
+}
+
+impl TokenUsage {
+    /// Returns `true` while either counter is still animating.
+    pub fn is_animating(&self) -> bool {
+        self.input.is_animating() || self.output.is_animating()
+    }
+
+    /// Advance both counters one step.
+    pub fn tick(&mut self) {
+        self.input.tick();
+        self.output.tick();
+    }
+}
+
 // ── TUI state ────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -197,6 +253,8 @@ pub struct TuiState {
     pub active_task_ids: Vec<Uuid>,
     /// Controls whether tool call results are shown inline in the conversation.
     pub tool_display: ToolDisplayMode,
+    /// Lifetime token usage displayed in the status bar (animated).
+    pub token_usage: TokenUsage,
 }
 
 #[derive(Debug)]
@@ -227,6 +285,7 @@ impl TuiState {
             task_selection: None,
             active_task_ids: Vec::new(),
             tool_display: ToolDisplayMode::Compact,
+            token_usage: TokenUsage::default(),
         }
     }
 }
@@ -260,3 +319,7 @@ pub fn restore_terminal(
     terminal.show_cursor()?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "token_usage_tests.rs"]
+mod token_usage_tests;

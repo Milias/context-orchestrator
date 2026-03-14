@@ -1,6 +1,7 @@
 use crate::graph::{
     BackgroundTaskKind, GitFileStatus, StopReason, TaskStatus, ToolCallArguments, ToolResultContent,
 };
+use crate::storage::TokenTotals;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use tokio::sync::mpsc;
@@ -112,6 +113,10 @@ pub enum TaskMessage {
         is_error: bool,
     },
     Agent(AgentEvent),
+    /// Fresh lifetime token totals from the analytics DB.
+    TokenTotalsUpdated(TokenTotals),
+    /// Non-fatal analytics error to display in the status bar.
+    AnalyticsError(String),
 }
 
 pub fn spawn_git_watcher(tx: mpsc::UnboundedSender<TaskMessage>) {

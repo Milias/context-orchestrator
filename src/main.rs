@@ -4,6 +4,7 @@ mod graph;
 mod llm;
 mod migration;
 mod persistence;
+mod storage;
 mod tasks;
 mod tool_executor;
 mod tools;
@@ -107,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
         original_hook(panic_info);
     }));
 
-    let app = App::new(config, graph, metadata, Arc::new(provider));
+    let token_store = storage::TokenStore::open_default().await.ok();
+    let app = App::new(config, graph, metadata, Arc::new(provider), token_store);
     app.run().await
 }

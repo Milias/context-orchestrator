@@ -1,5 +1,6 @@
 use crate::graph::tool_types::{ToolCallArguments, ToolCallStatus, ToolResultContent};
 use crate::graph::{BackgroundTaskKind, EdgeKind, Node, StopReason, TaskStatus, WorkItemStatus};
+use crate::storage::{TokenDirection, TokenEvent};
 use crate::tasks::{AgentEvent, AgentPhase, AgentToolResult, TaskMessage};
 use crate::tool_executor;
 use crate::tui::{AgentDisplayState, AgentVisualPhase};
@@ -80,6 +81,13 @@ impl App {
                 }
             }
             TaskMessage::Agent(event) => self.handle_agent_event(event),
+            TaskMessage::TokenTotalsUpdated(totals) => {
+                self.tui_state.token_usage.input.target = totals.input;
+                self.tui_state.token_usage.output.target = totals.output;
+            }
+            TaskMessage::AnalyticsError(msg) => {
+                self.tui_state.error_message = Some(format!("Analytics: {msg}"));
+            }
         }
     }
 
@@ -119,6 +127,12 @@ impl App {
             }
             AgentEvent::UserTokensCounted { node_id, count } => {
                 self.graph.write().set_input_tokens(node_id, count);
+                self.spawn_token_record(TokenEvent {
+                    conversation_id: self.metadata.id.clone(),
+                    direction: TokenDirection::Input,
+                    tokens: count,
+                    model: None,
+                });
             }
             AgentEvent::StreamDelta { text, is_thinking } => {
                 if let Some(ref mut d) = self.tui_state.agent_display {
@@ -131,18 +145,7 @@ impl App {
             AgentEvent::IterationCommitted {
                 assistant_id,
                 stop_reason,
-            } => {
-                if stop_reason == Some(StopReason::MaxTokens) {
-                    self.tui_state.error_message =
-                        Some("Response truncated — continuing automatically".to_string());
-                }
-                if let Some(ref mut d) = self.tui_state.agent_display {
-                    d.iteration_node_ids.push(assistant_id);
-                    if stop_reason == Some(StopReason::ToolUse) {
-                        d.phase = AgentVisualPhase::ExecutingTools;
-                    }
-                }
-            }
+            } => self.handle_iteration_committed(assistant_id, stop_reason),
             AgentEvent::ToolCallDispatched {
                 tool_call_id,
                 arguments,
@@ -323,6 +326,61 @@ impl App {
         drop(g);
 
         self.task_tokens.remove(&tool_call_id);
+    }
+
+    /// Process an assistant iteration committed by the agent loop.
+    fn handle_iteration_committed(&mut self, assistant_id: Uuid, stop_reason: Option<StopReason>) {
+        if stop_reason == Some(StopReason::MaxTokens) {
+            self.tui_state.error_message =
+                Some("Response truncated — continuing automatically".to_string());
+        }
+        if let Some(ref mut d) = self.tui_state.agent_display {
+            d.iteration_node_ids.push(assistant_id);
+            if stop_reason == Some(StopReason::ToolUse) {
+                d.phase = AgentVisualPhase::ExecutingTools;
+            }
+        }
+        // Record output tokens from the assistant message the agent just committed.
+        if let Some(tokens) = self
+            .graph
+            .read()
+            .node(assistant_id)
+            .and_then(Node::output_tokens)
+        {
+            self.spawn_token_record(TokenEvent {
+                conversation_id: self.metadata.id.clone(),
+                direction: TokenDirection::Output,
+                tokens,
+                model: Some(self.config.anthropic_model.clone()),
+            });
+        }
+    }
+
+    /// Spawn a background task to record a token event and refresh lifetime totals.
+    ///
+    /// The write + query runs on the `tokio_rusqlite` background thread.
+    /// Fresh totals are sent back via [`TaskMessage::TokenTotalsUpdated`],
+    /// which triggers the animated counter update in the status bar.
+    fn spawn_token_record(&self, event: TokenEvent) {
+        let Some(store) = self.token_store.clone() else {
+            return;
+        };
+        let tx = self.task_tx.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = store.record(&event).await {
+                let _ = tx.send(TaskMessage::AnalyticsError(format!("{e}")));
+                return;
+            }
+            match store.lifetime_totals().await {
+                Ok(totals) => {
+                    let _ = tx.send(TaskMessage::TokenTotalsUpdated(totals));
+                }
+                Err(e) => {
+                    let _ = tx.send(TaskMessage::AnalyticsError(format!("{e}")));
+                }
+            }
+        });
     }
 
     /// Cancel a running task by its graph node ID.
