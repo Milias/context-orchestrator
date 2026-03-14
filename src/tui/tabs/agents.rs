@@ -17,7 +17,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 /// Render the Agents tab content into the given area.
-pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     if area.width < 40 {
         render_compact(frame, area, graph, tui_state);
     } else {
@@ -26,7 +26,12 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
 }
 
 /// Standard layout: agent card on top, recent completions + stats on bottom.
-fn render_standard(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
+fn render_standard(
+    frame: &mut Frame,
+    area: Rect,
+    graph: &ConversationGraph,
+    tui_state: &mut TuiState,
+) {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -37,18 +42,22 @@ fn render_standard(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui
 
     render_agent_card(frame, vertical[0], tui_state);
 
-    // Bottom: recent completions + stats side by side.
     let bottom = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
         .split(vertical[1]);
 
-    render_recent_completions(frame, bottom[0], graph);
+    render_recent_completions(frame, bottom[0], graph, tui_state);
     render_stats(frame, bottom[1], graph, tui_state);
 }
 
 /// Compact layout for narrow terminals: everything stacked.
-fn render_compact(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &TuiState) {
+fn render_compact(
+    frame: &mut Frame,
+    area: Rect,
+    graph: &ConversationGraph,
+    tui_state: &mut TuiState,
+) {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -58,7 +67,7 @@ fn render_compact(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_
         .split(area);
 
     render_agent_card(frame, vertical[0], tui_state);
-    render_recent_completions(frame, vertical[1], graph);
+    render_recent_completions(frame, vertical[1], graph, tui_state);
 }
 
 /// Compute the agent card height based on the number of active tool calls.
@@ -129,7 +138,12 @@ fn render_agent_card(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
 }
 
 /// Render a list of recent tool call completions from the graph.
-fn render_recent_completions(frame: &mut Frame, area: Rect, graph: &ConversationGraph) {
+fn render_recent_completions(
+    frame: &mut Frame,
+    area: Rect,
+    graph: &ConversationGraph,
+    tui_state: &mut TuiState,
+) {
     let block = Block::default().title("Recent").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -153,7 +167,18 @@ fn render_recent_completions(frame: &mut Frame, area: Rect, graph: &Conversation
         )
     });
     tool_calls.sort_by_key(|n| std::cmp::Reverse(n.created_at()));
-    tool_calls.truncate(max_items);
+
+    // Publish total and clamp scroll.
+    tui_state.agents_total = tool_calls.len();
+    let max_offset = tool_calls.len().saturating_sub(max_items);
+    tui_state.agents_scroll = tui_state.agents_scroll.min(max_offset);
+
+    // Apply scroll window.
+    let tool_calls: Vec<_> = tool_calls
+        .into_iter()
+        .skip(tui_state.agents_scroll)
+        .take(max_items)
+        .collect();
 
     let mut lines: Vec<Line<'_>> = Vec::new();
     for node in tool_calls {

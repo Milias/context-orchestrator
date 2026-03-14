@@ -97,7 +97,10 @@ fn handle_tab_content_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
             &mut tui_state.activity_scroll,
             tui_state.activity_total.saturating_sub(1),
         ),
-        crate::tui::state::TopTab::Agents => return Action::None,
+        crate::tui::state::TopTab::Agents => (
+            &mut tui_state.agents_scroll,
+            tui_state.agents_total.saturating_sub(1),
+        ),
     };
     match key.code {
         KeyCode::Up => *offset = offset.saturating_sub(1),

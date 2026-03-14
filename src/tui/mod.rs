@@ -228,6 +228,10 @@ pub struct TuiState {
     pub activity_scroll: usize,
     /// Total event count in the Activity tab (set each frame by the renderer).
     pub activity_total: usize,
+    /// Scroll offset for the Agents tab (recent completions overflow).
+    pub agents_scroll: usize,
+    /// Total line count in the Agents tab (set each frame by the renderer).
+    pub agents_total: usize,
 }
 
 #[derive(Debug)]
@@ -260,6 +264,8 @@ impl TuiState {
             work_visible_count: 0,
             activity_scroll: 0,
             activity_total: 0,
+            agents_scroll: 0,
+            agents_total: 0,
         }
     }
 }

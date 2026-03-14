@@ -51,10 +51,7 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
     }
 
     // Apply scroll: skip `activity_scroll` items, take `max_rows`.
-    let visible = events
-        .iter()
-        .skip(tui_state.activity_scroll)
-        .take(max_rows);
+    let visible = events.iter().skip(tui_state.activity_scroll).take(max_rows);
     let lines: Vec<Line<'_>> = visible.map(|e| render_event_row(e, width)).collect();
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
