@@ -105,7 +105,8 @@ pub fn parse_user_trigger_args(tool_name: &str, args: &str) -> ToolCallArguments
         ToolName::AddTask
         | ToolName::UpdateWorkItem
         | ToolName::AddDependency
-        | ToolName::WebSearch => ToolCallArguments::Unknown {
+        | ToolName::WebSearch
+        | ToolName::Answer => ToolCallArguments::Unknown {
             tool_name: tool_name.to_string(),
             raw_json: args.to_string(),
         },

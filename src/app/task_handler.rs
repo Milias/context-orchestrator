@@ -160,16 +160,10 @@ impl App {
                 for pid in phase_ids {
                     self.complete_phase(pid);
                 }
-                let entry_mode = self.agents.remove(agent_id);
+                self.agents.remove(agent_id);
                 if is_primary {
                     self.tui_state.agent_display = None;
                     self.tui_state.status_message = None;
-                }
-                // Log what this agent was doing for debugging.
-                if let Some(super::agent::AgentEntryMode::AnswerQuestion { question_id }) =
-                    entry_mode
-                {
-                    tracing::debug!("Question agent finished for {question_id}");
                 }
                 // Release claims held by this agent (identified by ClaimedBy edge target).
                 self.graph

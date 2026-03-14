@@ -13,17 +13,18 @@ pub mod sanitize;
 
 use crate::graph::ConversationGraph;
 use crate::llm::{ChatMessage, LlmProvider, ToolDefinition};
+use uuid::Uuid;
 
 /// Extract messages from the conversation graph using the `ConversationalPolicy`.
 /// Synchronous — no API calls. Caller should hold a read lock on the shared graph.
 ///
-/// This is the compatibility entry point that produces identical output to the
-/// original monolithic `extract_messages()` function.
+/// `agent_id` is passed through to the context policy so it can surface
+/// agent-specific state (e.g. claimed questions in the Q/A section).
 pub fn extract_messages(
     graph: &ConversationGraph,
-    _tools: &[ToolDefinition],
+    agent_id: Option<Uuid>,
 ) -> (Option<String>, Vec<ChatMessage>) {
-    policies::conversational::build_messages(graph)
+    policies::conversational::build_messages(graph, agent_id)
 }
 
 /// Count tokens and truncate messages if needed. Async — calls the LLM provider API.

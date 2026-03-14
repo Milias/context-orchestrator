@@ -27,7 +27,7 @@ fn graph_with_user_message(sys: &str, user_text: &str) -> ConversationGraph {
 #[test]
 fn test_system_directive_goes_to_system_prompt() {
     let graph = graph_with_user_message("You are helpful", "Hello");
-    let (system_prompt, messages) = super::build_messages(&graph);
+    let (system_prompt, messages) = super::build_messages(&graph, None);
 
     assert_eq!(system_prompt.as_deref(), Some("You are helpful"));
     // Messages should not contain the system directive text.
@@ -56,7 +56,7 @@ fn test_plain_assistant_produces_text_content() {
     };
     graph.add_message(leaf, asst).unwrap();
 
-    let (_, messages) = super::build_messages(&graph);
+    let (_, messages) = super::build_messages(&graph, None);
     let asst_msg = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
     assert!(
         matches!(&asst_msg.content, ChatContent::Text(t) if t == "Hello back!"),
@@ -94,7 +94,7 @@ fn test_running_tool_call_excluded_from_messages() {
         Some("toolu_running".to_string()),
     );
 
-    let (_, messages) = super::build_messages(&graph);
+    let (_, messages) = super::build_messages(&graph, None);
 
     // The assistant message should be plain text (no ToolUse blocks).
     let asst_msg = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
@@ -144,7 +144,7 @@ fn test_completed_tool_call_included_in_messages() {
         .unwrap();
     graph.add_tool_result(tc_id, ToolResultContent::text("fn main() {}"), false);
 
-    let (_, messages) = super::build_messages(&graph);
+    let (_, messages) = super::build_messages(&graph, None);
 
     // Should have: user msg, assistant with ToolUse, user with ToolResult.
     assert!(
@@ -170,7 +170,7 @@ fn test_completed_tool_call_included_in_messages() {
 #[test]
 fn test_user_message_preserved() {
     let graph = graph_with_user_message("sys", "Hello world");
-    let (_, messages) = super::build_messages(&graph);
+    let (_, messages) = super::build_messages(&graph, None);
 
     assert!(!messages.is_empty(), "should have at least one message");
     assert_eq!(messages[0].role, Role::User);

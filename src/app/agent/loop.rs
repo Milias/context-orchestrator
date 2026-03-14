@@ -21,16 +21,6 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-/// How the agent loop was triggered — determines context and post-loop behavior.
-#[derive(Debug, Clone)]
-pub(in crate::app) enum AgentEntryMode {
-    /// Standard: respond to a user message in the conversation.
-    UserMessage,
-    /// Answer a graph question. After the loop finishes, the last assistant
-    /// message content becomes an `Answer` node via `graph.add_answer()`.
-    AnswerQuestion { question_id: Uuid },
-}
-
 /// Full configuration for spawning an agent loop.
 pub(in crate::app) struct AgentLoopConfig {
     pub graph: SharedGraph,
@@ -40,8 +30,7 @@ pub(in crate::app) struct AgentLoopConfig {
     pub max_context_tokens: u32,
     pub max_tool_loop_iterations: usize,
     pub tools: Vec<ToolDefinition>,
-    pub entry_mode: AgentEntryMode,
-    /// The anchor node ID (user message or question ID).
+    /// The anchor node ID (user message).
     pub anchor_id: Uuid,
     pub agent_id: Uuid,
 }
@@ -53,7 +42,6 @@ pub(in crate::app) fn spawn_agent_loop(
     tool_result_rx: mpsc::UnboundedReceiver<AgentToolResult>,
     cancel_token: CancellationToken,
 ) {
-    let entry_mode = config.entry_mode.clone();
     let agent_id = config.agent_id;
     let ctx = AgentContext { agent_id, task_tx };
     let graph = Arc::clone(&config.graph);
@@ -72,27 +60,6 @@ pub(in crate::app) fn spawn_agent_loop(
         .await;
         if let Err(e) = &result {
             ctx.send(AgentEvent::Error(e.to_string()));
-        }
-        // If answering a question, create the Answer node from the last assistant message.
-        if let AgentEntryMode::AnswerQuestion { question_id } = entry_mode {
-            if result.is_ok() {
-                let mut g = graph.write();
-                let answer_text = g
-                    .get_branch_history(g.active_branch())
-                    .unwrap_or_default()
-                    .iter()
-                    .rev()
-                    .find_map(|n| match n {
-                        Node::Message {
-                            role: Role::Assistant,
-                            content,
-                            ..
-                        } => Some(content.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| "No answer produced.".to_string());
-                let _ = g.add_answer(question_id, answer_text);
-            }
         }
         ctx.send(AgentEvent::Finished);
     });
@@ -139,7 +106,7 @@ async fn run_agent_loop(
 
         let (system_prompt, messages) = {
             let g = graph.read();
-            context::extract_messages(&g, &config.tools)
+            context::extract_messages(&g, Some(config.agent_id))
         };
         let (system_prompt, messages) = context::finalize_context(
             system_prompt,

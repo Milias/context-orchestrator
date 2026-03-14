@@ -7,10 +7,8 @@ use crate::graph::event::GraphEvent;
 use crate::graph::node::{QuestionDestination, QuestionStatus};
 use crate::graph::Node;
 
-use std::sync::Arc;
 use uuid::Uuid;
 
-use super::agent;
 use super::App;
 
 impl App {
@@ -89,24 +87,30 @@ impl App {
     }
 
     /// Route a pending question to its destination backend.
-    /// Claims the question via `ClaimedBy` edge, then transitions status.
+    ///
+    /// - **User**: Claims with a fresh UUID (TUI owns the answer), shows prompt.
+    /// - **Llm**: Claims with the primary agent's ID so the agent sees the question
+    ///   in its next context build and answers via the `answer` tool.
+    /// - **Auto**: Resolves to User for now (heuristic deferred).
     fn route_question(&mut self, question_id: Uuid, destination: QuestionDestination) {
         let dest = match destination {
             QuestionDestination::Auto => QuestionDestination::User,
             other => other,
         };
 
-        let agent_id = Uuid::new_v4();
-        let mut g = self.graph.write();
-
-        if !g.try_claim(question_id, agent_id) {
-            return; // Already claimed by another handler.
-        }
-        let _ = g.update_question_status(question_id, QuestionStatus::Claimed);
-        drop(g);
-
         match dest {
             QuestionDestination::User => {
+                // TUI owns the answer — claim with a standalone UUID.
+                let claim_id = Uuid::new_v4();
+                let mut g = self.graph.write();
+                if !g.try_claim(question_id, claim_id) {
+                    return;
+                }
+                if let Err(e) = g.update_question_status(question_id, QuestionStatus::Claimed) {
+                    tracing::warn!("Failed to claim user question {question_id}: {e}");
+                    return;
+                }
+                drop(g);
                 self.pending_user_question = Some(question_id);
                 let g = self.graph.read();
                 let content = g
@@ -116,37 +120,23 @@ impl App {
                 self.tui_state.status_message = Some(format!("Question: {content}"));
             }
             QuestionDestination::Llm => {
-                self.spawn_question_agent(question_id);
+                // Claim for the primary agent. It will see the question in its
+                // context on the next iteration and answer via the `answer` tool.
+                let Some(agent_id) = self.agents.primary_agent_id else {
+                    // No agent running — leave Pending. check_ready_work() will
+                    // route it when an agent starts.
+                    return;
+                };
+                let mut g = self.graph.write();
+                if !g.try_claim(question_id, agent_id) {
+                    return;
+                }
+                if let Err(e) = g.update_question_status(question_id, QuestionStatus::Claimed) {
+                    tracing::warn!("Failed to claim LLM question {question_id}: {e}");
+                }
             }
             QuestionDestination::Auto => unreachable!("resolved above"),
         }
-    }
-
-    /// Spawn an agent loop to answer an LLM-destined question.
-    /// Respects `max_concurrent_agents`; if at capacity, the question stays
-    /// Claimed and will be picked up when a slot opens via `check_ready_work`.
-    fn spawn_question_agent(&mut self, question_id: Uuid) {
-        if self.agents.active_count() >= self.config.max_concurrent_agents {
-            return;
-        }
-        let agent_id = Uuid::new_v4();
-        let entry_mode = agent::AgentEntryMode::AnswerQuestion { question_id };
-        let (tool_rx, cancel_token) = self.agents.register(agent_id, entry_mode.clone());
-
-        let loop_config = agent::AgentLoopConfig {
-            graph: Arc::clone(&self.graph),
-            provider: Arc::clone(&self.provider),
-            model: self.config.anthropic_model.clone(),
-            max_tokens: self.config.max_tokens,
-            max_context_tokens: self.config.max_context_tokens,
-            max_tool_loop_iterations: self.config.max_tool_loop_iterations,
-            tools: crate::tool_executor::registered_tool_definitions(),
-            entry_mode,
-            anchor_id: question_id,
-            agent_id,
-        };
-
-        agent::spawn_agent_loop(loop_config, self.task_tx.clone(), tool_rx, cancel_token);
     }
 
     /// Check for ready work after an agent finishes or a dependency resolves.

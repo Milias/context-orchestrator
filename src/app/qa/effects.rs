@@ -36,6 +36,10 @@ pub fn apply(graph: &mut ConversationGraph, tool_call_id: Uuid) -> Option<ToolRe
             *about_node_id,
             requires_approval.unwrap_or(false),
         )),
+        ToolCallArguments::Answer {
+            question_id,
+            content,
+        } => Some(apply_answer(graph, *question_id, content)),
         _ => None,
     }
 }
@@ -78,6 +82,21 @@ fn apply_ask(
     ToolResultContent::text(format!(
         "Created question (id: {question_id}). Routing to {destination:?} backend."
     ))
+}
+
+/// Create an `Answer` node via `graph.add_answer()`, which validates Claimed status,
+/// wires the `Answers` edge, and transitions the question to Answered/PendingApproval.
+fn apply_answer(
+    graph: &mut ConversationGraph,
+    question_id: Uuid,
+    content: &str,
+) -> ToolResultContent {
+    match graph.add_answer(question_id, content.to_string()) {
+        Ok(answer_id) => ToolResultContent::text(format!(
+            "Answer created (id: {answer_id}) for question {question_id}."
+        )),
+        Err(e) => ToolResultContent::text(format!("Answer failed: {e}")),
+    }
 }
 
 #[cfg(test)]

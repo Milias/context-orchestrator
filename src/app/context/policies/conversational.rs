@@ -10,8 +10,11 @@ use crate::llm::{ChatContent, ChatMessage, ContentBlock, RawJson};
 use uuid::Uuid;
 
 /// Build the full message list from the graph, matching the original
-/// `extract_messages()` output exactly. Includes plan section injection.
-pub fn build_messages(graph: &ConversationGraph) -> (Option<String>, Vec<ChatMessage>) {
+/// `extract_messages()` output exactly. Includes plan and Q/A section injection.
+pub fn build_messages(
+    graph: &ConversationGraph,
+    agent_id: Option<Uuid>,
+) -> (Option<String>, Vec<ChatMessage>) {
     let history = graph
         .get_branch_history(graph.active_branch())
         .unwrap_or_default();
@@ -55,6 +58,15 @@ pub fn build_messages(graph: &ConversationGraph) -> (Option<String>, Vec<ChatMes
         let prompt = system_prompt.get_or_insert_with(String::new);
         prompt.push_str("\n\n");
         prompt.push_str(&plan_section);
+    }
+
+    // Inject pending Q/A context for the agent.
+    if let Some(agent_id) = agent_id {
+        if let Some(qa_section) = crate::app::qa::context::build_qa_section(graph, agent_id) {
+            let prompt = system_prompt.get_or_insert_with(String::new);
+            prompt.push_str("\n\n");
+            prompt.push_str(&qa_section);
+        }
     }
 
     (system_prompt, messages)

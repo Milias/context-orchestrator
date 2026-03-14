@@ -175,34 +175,50 @@ fn plan_tools() -> Vec<ToolRegistryEntry> {
     ]
 }
 
-/// Q/A tools: ask questions routed to user, LLM, or auto.
+/// Q/A tools: ask questions and provide answers.
 fn qa_tools() -> Vec<ToolRegistryEntry> {
-    vec![entry(
-        ToolName::Ask,
-        "Ask a question to the user, an LLM, or auto-route. Returns a question UUID. \
-         The answer arrives asynchronously and resolves any DependsOn edges.",
-        &[
-            prop("question", SchemaType::String, "The question to ask", true),
-            prop(
-                "destination",
-                SchemaType::String,
-                "Who answers: user, llm, or auto",
-                true,
-            ),
-            prop(
-                "about_node_id",
-                SchemaType::String,
-                "UUID of a node this question is about (optional)",
-                false,
-            ),
-            prop(
-                "requires_approval",
-                SchemaType::Boolean,
-                "If true, LLM answers require user approval before resolving (default: false)",
-                false,
-            ),
-        ],
-    )]
+    vec![
+        entry(
+            ToolName::Ask,
+            "Ask a question to the user, an LLM, or auto-route. Returns a question UUID. \
+             The answer arrives asynchronously and resolves any DependsOn edges.",
+            &[
+                prop("question", SchemaType::String, "The question to ask", true),
+                prop(
+                    "destination",
+                    SchemaType::String,
+                    "Who answers: user, llm, or auto",
+                    true,
+                ),
+                prop(
+                    "about_node_id",
+                    SchemaType::String,
+                    "UUID of a node this question is about (optional)",
+                    false,
+                ),
+                prop(
+                    "requires_approval",
+                    SchemaType::Boolean,
+                    "If true, LLM answers require user approval before resolving (default: false)",
+                    false,
+                ),
+            ],
+        ),
+        entry(
+            ToolName::Answer,
+            "Answer a pending question that has been claimed by you. \
+             The question must be in Claimed status.",
+            &[
+                prop(
+                    "question_id",
+                    SchemaType::String,
+                    "UUID of the question to answer",
+                    true,
+                ),
+                prop("content", SchemaType::String, "The answer text", true),
+            ],
+        ),
+    ]
 }
 
 /// Filesystem tools: read, write, list, search.

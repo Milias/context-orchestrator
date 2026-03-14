@@ -23,6 +23,7 @@ pub enum ToolName {
     WebSearch,
     Set,
     Ask,
+    Answer,
 }
 
 impl ToolName {
@@ -38,6 +39,7 @@ impl ToolName {
     const WEB_SEARCH: &str = "web_search";
     const SET: &str = "set";
     const ASK: &str = "ask";
+    const ANSWER: &str = "answer";
 
     /// Wire name as it appears in the API, triggers, and registry.
     pub const fn as_str(self) -> &'static str {
@@ -53,6 +55,7 @@ impl ToolName {
             Self::WebSearch => Self::WEB_SEARCH,
             Self::Set => Self::SET,
             Self::Ask => Self::ASK,
+            Self::Answer => Self::ANSWER,
         }
     }
 
@@ -71,6 +74,7 @@ impl ToolName {
             Self::WebSearch => "WebSearch",
             Self::Set => "Set",
             Self::Ask => "Ask",
+            Self::Answer => "Answer",
         }
     }
 
@@ -88,6 +92,7 @@ impl ToolName {
             Self::WEB_SEARCH => Some(Self::WebSearch),
             Self::SET => Some(Self::Set),
             Self::ASK => Some(Self::Ask),
+            Self::ANSWER => Some(Self::Answer),
             _ => None,
         }
     }
@@ -164,6 +169,11 @@ pub enum ToolCallArguments {
         about_node_id: Option<Uuid>,
         requires_approval: Option<bool>,
     },
+    /// Answer a previously claimed question.
+    Answer {
+        question_id: Uuid,
+        content: String,
+    },
     Unknown {
         tool_name: String,
         raw_json: String,
@@ -186,6 +196,7 @@ impl ToolCallArguments {
             Self::WebSearch { .. } => ToolName::WebSearch.as_str(),
             Self::Set { .. } => ToolName::Set.as_str(),
             Self::Ask { .. } => ToolName::Ask.as_str(),
+            Self::Answer { .. } => ToolName::Answer.as_str(),
             Self::Unknown { tool_name, .. } => tool_name,
         }
     }
@@ -221,6 +232,7 @@ impl ToolCallArguments {
                 destination,
                 ..
             } => format!("ask ({destination:?}): {question}"),
+            Self::Answer { question_id, .. } => format!("answer: {question_id}"),
             Self::Unknown {
                 tool_name,
                 raw_json,

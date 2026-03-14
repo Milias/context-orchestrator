@@ -25,10 +25,6 @@ fn default_max_tool_loop_iterations() -> usize {
     10
 }
 
-fn default_max_concurrent_agents() -> usize {
-    3
-}
-
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_base_url")]
@@ -45,9 +41,6 @@ pub struct AppConfig {
     pub system_prompt: String,
     #[serde(default = "default_max_tool_loop_iterations")]
     pub max_tool_loop_iterations: usize,
-    /// Maximum number of concurrent agent loops (conversation + question agents).
-    #[serde(default = "default_max_concurrent_agents")]
-    pub max_concurrent_agents: usize,
 }
 
 impl AppConfig {

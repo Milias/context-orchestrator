@@ -93,6 +93,7 @@ pub async fn execute_tool(arguments: &ToolCallArguments) -> ToolExecutionResult 
             search_files::execute(pattern, path.as_deref()).await
         }
         ToolCallArguments::Ask { question, .. } => qa_tools::execute_ask(question),
+        ToolCallArguments::Answer { question_id, .. } => qa_tools::execute_answer(question_id),
         ToolCallArguments::WebSearch { query } => ToolExecutionResult {
             content: ToolResultContent::text(format!(
                 "web_search not yet implemented (query: {query})"

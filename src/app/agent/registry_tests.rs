@@ -1,5 +1,4 @@
 use super::*;
-use crate::app::agent::r#loop::AgentEntryMode;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -20,7 +19,7 @@ fn test_route_unknown_tool_returns_false() {
 fn test_remove_cleans_up_tool_call_owner() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_, _cancel) = reg.register(agent_id, AgentEntryMode::UserMessage);
+    let (_, _cancel) = reg.register(agent_id);
 
     let tc_id = Uuid::new_v4();
     reg.track_tool_call(agent_id, tc_id, CancellationToken::new());
@@ -41,15 +40,15 @@ fn test_cancel_all_clears_state_and_cancels_tokens() {
     let mut reg = AgentRegistry::new();
     let id1 = Uuid::new_v4();
     let id2 = Uuid::new_v4();
-    let (_, token1) = reg.register(id1, AgentEntryMode::UserMessage);
-    let (_, token2) = reg.register(id2, AgentEntryMode::UserMessage);
+    let (_, token1) = reg.register(id1);
+    let (_, token2) = reg.register(id2);
     reg.primary_agent_id = Some(id1);
 
     reg.cancel_all();
 
     assert!(token1.is_cancelled(), "token1 should be cancelled");
     assert!(token2.is_cancelled(), "token2 should be cancelled");
-    assert_eq!(reg.active_count(), 0, "agents map should be empty");
+    assert!(!reg.is_primary(id1), "agents map should be empty");
     assert!(reg.primary_agent_id.is_none(), "primary should be cleared");
 }
 
@@ -59,7 +58,7 @@ fn test_cancel_all_clears_state_and_cancels_tokens() {
 fn test_drain_phases_returns_all_and_clears() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_rx, _cancel) = reg.register(agent_id, AgentEntryMode::UserMessage);
+    let (_rx, _cancel) = reg.register(agent_id);
 
     let p1 = Uuid::new_v4();
     let p2 = Uuid::new_v4();
@@ -82,7 +81,7 @@ fn test_drain_phases_returns_all_and_clears() {
 fn test_is_primary_false_after_remove() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_rx, _cancel) = reg.register(agent_id, AgentEntryMode::UserMessage);
+    let (_rx, _cancel) = reg.register(agent_id);
     reg.primary_agent_id = Some(agent_id);
     assert!(reg.is_primary(agent_id));
 
@@ -109,7 +108,7 @@ fn test_cancel_tool_nonexistent_is_noop() {
 fn test_route_after_agent_removed_returns_false() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_rx, _cancel) = reg.register(agent_id, AgentEntryMode::UserMessage);
+    let (_rx, _cancel) = reg.register(agent_id);
 
     let tc_id = Uuid::new_v4();
     reg.track_tool_call(agent_id, tc_id, CancellationToken::new());
@@ -129,7 +128,7 @@ fn test_route_after_agent_removed_returns_false() {
 fn test_complete_phase_removes_id() {
     let mut reg = AgentRegistry::new();
     let agent_id = Uuid::new_v4();
-    let (_rx, _cancel) = reg.register(agent_id, AgentEntryMode::UserMessage);
+    let (_rx, _cancel) = reg.register(agent_id);
 
     let phase_id = Uuid::new_v4();
     reg.track_phase(agent_id, phase_id);

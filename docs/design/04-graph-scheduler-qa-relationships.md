@@ -546,17 +546,22 @@ content "Question timed out without user response."
 ### LLM Backend
 
 When `destination == Llm`:
-1. Transition Question to `Claimed` (ClaimedBy edge with a new agent UUID)
-2. Check `active_agents.len() < max_concurrent_agents`
-   - If at capacity: leave question as `Claimed` but defer spawning. `check_ready_work()` will
-     spawn when a slot opens.
-3. Spawn agent loop with `AgentEntryMode::AnswerQuestion { question_id }`
-4. Agent loop selects `QuestionResponsePolicy` for context building
-5. Agent's final text response becomes the Answer content
-6. On agent loop completion: `graph.add_answer(question_id, answer_text)`
+1. Claim the question for the primary agent (using its existing `agent_id` from `primary_agent_id`)
+2. Transition Question to `Claimed` (ClaimedBy edge points to primary agent)
+3. If no primary agent is running, question stays `Pending` — `check_ready_work()` routes
+   it when an agent starts
+4. On the next agent iteration, the context pipeline surfaces claimed questions via
+   `build_qa_section()` in the system prompt
+5. The agent calls the `answer` tool with `question_id` and `content`
+6. `qa::effects::apply_answer()` calls `graph.add_answer()` — creates Answer node,
+   Answers edge, transitions to Answered, emits `QuestionAnswered`
 
-**Cancellation**: If the agent loop is cancelled, release the claim (Question → Pending). The
-question becomes re-claimable.
+This is **self-Q&A as structured reasoning**: the agent decomposes a problem via `ask(llm, ...)`,
+the question becomes a graph citizen, it appears in context on the next iteration, and the agent
+produces a formal answer via the standard tool pipeline.
+
+**Cancellation**: If the agent loop finishes without answering, the `Finished` handler releases
+ClaimedBy edges. `check_ready_work()` detects the stale claim and re-routes the question.
 
 ### Auto Routing
 
@@ -583,17 +588,19 @@ negligible for 2-5 concurrent agents.
 
 ```rust
 /// Tracks active agent loops.
-active_agents: HashMap<Uuid, AgentHandle>,
+agents: HashMap<Uuid, AgentHandle>,
 
 /// Per-agent metadata.
 struct AgentHandle {
+    tool_tx: mpsc::UnboundedSender<AgentToolResult>,
     cancel_token: CancellationToken,
-    entry_mode: AgentEntryMode,
+    task_tokens: HashMap<Uuid, CancellationToken>,
+    active_phase_ids: HashSet<Uuid>,
 }
 ```
 
-`max_concurrent_agents` config (default: 3) limits spawning. Excess work queues in the graph as
-Pending/unclaimed nodes.
+The primary conversation agent is tracked by `primary_agent_id: Option<Uuid>`. LLM-directed
+questions are claimed for this agent (not spawned as separate agent loops).
 
 ### Atomic Claiming
 
@@ -707,29 +714,24 @@ This means the scheduling state is always consistent with the graph — no synch
 a scheduler and the graph needed. Adding a `DependsOn` edge or completing a WorkItem automatically
 changes what's ready.
 
-### Agent-to-Policy Mapping
+### Agent-to-Node Routing
 
-When spawning an agent for a ready node:
+When ready work is discovered, routing depends on node type:
 
 ```rust
-fn spawn_agent_for_node(&mut self, node_id: Uuid, agent_id: Uuid) {
+fn route_ready_node(&mut self, node_id: Uuid) {
     let g = self.graph.read();
-    let (entry_mode, policy, trigger) = match g.node(node_id) {
-        Some(Node::Question { .. }) => (
-            AgentEntryMode::AnswerQuestion { question_id: node_id },
-            Box::new(QuestionResponsePolicy) as Box<dyn ContextPolicy>,
-            ContextTrigger::QuestionResponse { question_id: node_id },
-        ),
-        Some(Node::WorkItem { .. }) => (
-            AgentEntryMode::TaskExecution { work_item_id: node_id },
-            Box::new(TaskExecutionPolicy) as Box<dyn ContextPolicy>,
-            ContextTrigger::TaskExecution { work_item_id: node_id },
-        ),
-        _ => return, // not a claimable node type
-    };
-    drop(g);
-
-    self.spawn_agent_loop(agent_id, entry_mode, policy, trigger);
+    match g.node(node_id) {
+        Some(Node::Question { destination, .. }) => {
+            // LLM questions claimed for primary agent — answered via `answer` tool.
+            // User questions routed to TUI prompt.
+            drop(g);
+            self.route_question(node_id, *destination);
+        }
+        Some(Node::WorkItem { .. }) => {
+            // Future: task execution with dedicated ContextPolicy.
+            drop(g);
+        }
 }
 ```
 

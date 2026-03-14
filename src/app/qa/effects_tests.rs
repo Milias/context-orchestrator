@@ -1,4 +1,4 @@
-use crate::graph::node::QuestionDestination;
+use crate::graph::node::{QuestionDestination, QuestionStatus};
 use crate::graph::tool::types::{ToolCallArguments, ToolCallStatus};
 use crate::graph::{ConversationGraph, EdgeKind, Node};
 use chrono::Utc;
@@ -146,5 +146,119 @@ fn test_ask_with_invalid_about_skips_edge() {
         assert!(requires_approval, "requires_approval should be true");
     } else {
         panic!("expected Question node");
+    }
+}
+
+/// Helper: create a Claimed question in the graph, ready for answering.
+fn create_claimed_question(graph: &mut ConversationGraph, content: &str) -> Uuid {
+    let q_id = Uuid::new_v4();
+    graph.add_node(Node::Question {
+        id: q_id,
+        content: content.to_string(),
+        destination: QuestionDestination::Llm,
+        status: QuestionStatus::Claimed,
+        requires_approval: false,
+        created_at: Utc::now(),
+    });
+    q_id
+}
+
+/// Bug: `apply()` doesn't recognize Answer arguments, answer never created.
+/// The agent calls `answer` but the Question stays Claimed indefinitely.
+#[test]
+fn test_answer_creates_answer_node() {
+    let mut graph = ConversationGraph::new("system");
+    let q_id = create_claimed_question(&mut graph, "What auth strategy?");
+
+    let tc_id = Uuid::new_v4();
+    graph.add_node(Node::ToolCall {
+        id: tc_id,
+        api_tool_use_id: None,
+        arguments: ToolCallArguments::Answer {
+            question_id: q_id,
+            content: "Use JWT with refresh tokens.".to_string(),
+        },
+        status: ToolCallStatus::Running,
+        parent_message_id: Uuid::new_v4(),
+        created_at: Utc::now(),
+        completed_at: None,
+    });
+
+    let result = super::apply(&mut graph, tc_id);
+    assert!(
+        result.is_some(),
+        "answer tool should produce enriched content"
+    );
+
+    let content = result.unwrap();
+    assert!(
+        content.text_content().contains("Answer created"),
+        "should confirm answer creation"
+    );
+
+    // Question should now be Answered.
+    if let Some(Node::Question { status, .. }) = graph.node(q_id) {
+        assert_eq!(*status, QuestionStatus::Answered);
+    } else {
+        panic!("question node should exist");
+    }
+
+    // Verify Answer node and Answers edge exist.
+    let answer_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Answers)
+        .collect();
+    assert_eq!(answer_edges.len(), 1);
+    assert_eq!(
+        answer_edges[0].to, q_id,
+        "Answers edge should point to Question"
+    );
+}
+
+/// Bug: answer accepted for Pending question, violating the state machine.
+/// Only Claimed questions should be answerable — Pending means no agent owns it.
+#[test]
+fn test_answer_fails_for_unclaimed_question() {
+    let mut graph = ConversationGraph::new("system");
+
+    let q_id = Uuid::new_v4();
+    graph.add_node(Node::Question {
+        id: q_id,
+        content: "Unanswerable question".to_string(),
+        destination: QuestionDestination::Llm,
+        status: QuestionStatus::Pending,
+        requires_approval: false,
+        created_at: Utc::now(),
+    });
+
+    let tc_id = Uuid::new_v4();
+    graph.add_node(Node::ToolCall {
+        id: tc_id,
+        api_tool_use_id: None,
+        arguments: ToolCallArguments::Answer {
+            question_id: q_id,
+            content: "This should fail.".to_string(),
+        },
+        status: ToolCallStatus::Running,
+        parent_message_id: Uuid::new_v4(),
+        created_at: Utc::now(),
+        completed_at: None,
+    });
+
+    let result = super::apply(&mut graph, tc_id);
+    assert!(result.is_some(), "should still return content");
+
+    let content = result.unwrap();
+    assert!(
+        content.text_content().contains("failed"),
+        "should report failure for unclaimed question"
+    );
+
+    // Question should remain Pending.
+    if let Some(Node::Question { status, .. }) = graph.node(q_id) {
+        assert_eq!(*status, QuestionStatus::Pending);
+    } else {
+        panic!("question node should exist");
     }
 }

@@ -5,7 +5,6 @@
 //! and phase tracking. It routes `AgentToolResult` notifications to the correct
 //! agent based on which agent dispatched each tool call.
 
-use super::r#loop::AgentEntryMode;
 use crate::tasks::AgentToolResult;
 
 use std::collections::{HashMap, HashSet};
@@ -34,8 +33,6 @@ struct AgentHandle {
     task_tokens: HashMap<Uuid, CancellationToken>,
     /// Node IDs of currently active `BackgroundTask` (phase) nodes.
     active_phase_ids: HashSet<Uuid>,
-    /// What triggered this agent (for cleanup and claim release).
-    pub entry_mode: AgentEntryMode,
 }
 
 impl AgentRegistry {
@@ -53,7 +50,6 @@ impl AgentRegistry {
     pub fn register(
         &mut self,
         agent_id: Uuid,
-        entry_mode: AgentEntryMode,
     ) -> (mpsc::UnboundedReceiver<AgentToolResult>, CancellationToken) {
         let (tx, rx) = mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
@@ -64,7 +60,6 @@ impl AgentRegistry {
                 cancel_token: cancel_token.clone(),
                 task_tokens: HashMap::new(),
                 active_phase_ids: HashSet::new(),
-                entry_mode,
             },
         );
         (rx, cancel_token)
@@ -122,20 +117,17 @@ impl AgentRegistry {
         }
     }
 
-    /// Remove an agent on completion. Returns the entry mode for cleanup logic.
-    pub fn remove(&mut self, agent_id: Uuid) -> Option<AgentEntryMode> {
-        let handle = self.agents.remove(&agent_id)?;
-        // Clean up orphaned tool_call_owner entries for this agent.
-        self.tool_call_owner.retain(|_, owner| *owner != agent_id);
-        if self.primary_agent_id == Some(agent_id) {
-            self.primary_agent_id = None;
+    /// Remove an agent on completion. Returns `true` if the agent existed.
+    pub fn remove(&mut self, agent_id: Uuid) -> bool {
+        let existed = self.agents.remove(&agent_id).is_some();
+        if existed {
+            // Clean up orphaned tool_call_owner entries for this agent.
+            self.tool_call_owner.retain(|_, owner| *owner != agent_id);
+            if self.primary_agent_id == Some(agent_id) {
+                self.primary_agent_id = None;
+            }
         }
-        Some(handle.entry_mode)
-    }
-
-    /// Number of active agents.
-    pub fn active_count(&self) -> usize {
-        self.agents.len()
+        existed
     }
 
     /// Track a phase node for an agent.

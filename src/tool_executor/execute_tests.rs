@@ -95,7 +95,6 @@ fn test_apply_config_set_mutates_config() {
         max_context_tokens: 1000,
         system_prompt: String::new(),
         max_tool_loop_iterations: 5,
-        max_concurrent_agents: 3,
     };
 
     execute::apply_config_set(&mut config, execute::ConfigKey::MaxTokens, "4096");

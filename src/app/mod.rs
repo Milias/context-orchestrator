@@ -258,9 +258,7 @@ impl App {
         self.tui_state.scroll_offset = u16::MAX;
 
         let agent_id = Uuid::new_v4();
-        let (tool_rx, cancel_token) = self
-            .agents
-            .register(agent_id, agent::AgentEntryMode::UserMessage);
+        let (tool_rx, cancel_token) = self.agents.register(agent_id);
         self.agents.primary_agent_id = Some(agent_id);
 
         let loop_config = agent::AgentLoopConfig {
@@ -271,7 +269,6 @@ impl App {
             max_context_tokens: self.config.max_context_tokens,
             max_tool_loop_iterations: self.config.max_tool_loop_iterations,
             tools: crate::tool_executor::registered_tool_definitions(),
-            entry_mode: agent::AgentEntryMode::UserMessage,
             anchor_id: user_msg_id,
             agent_id,
         };
