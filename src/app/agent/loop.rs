@@ -126,17 +126,17 @@ async fn run_activation(
     };
 
     for _ in 0..config.max_tool_loop_iterations {
-        let (system_prompt, messages) =
+        let build_output =
             super::context_build::build_and_finalize_context(graph, provider, config, ctx).await?;
 
         let loop_config = ChatConfig {
-            system_prompt,
+            system_prompt: build_output.system_prompt,
             ..chat_config.clone()
         };
 
         let result = agent_streaming::stream_llm_response(
             provider,
-            messages,
+            build_output.messages,
             &loop_config,
             ctx,
             cancel_token,
@@ -151,11 +151,11 @@ async fn run_activation(
             StreamOutcome::Cancelled => return Ok(ActivationResult::Cancelled),
             StreamOutcome::ApiError => {
                 // Record synchronously so `build_error_section` sees it on retry.
+                // Use the tracked `parent_id` (agent's current graph position)
+                // rather than `active_leaf()` which only applies to conversational agents.
                 if let Some(msg) = &result.error_message {
                     let mut g = graph.write();
-                    if let Ok(leaf) = g.active_leaf() {
-                        g.record_api_error(leaf, msg.clone());
-                    }
+                    g.record_api_error(parent_id, msg.clone());
                 }
                 api_error_count += 1;
                 if api_error_count > MAX_API_ERROR_RETRIES {
@@ -178,8 +178,15 @@ async fn run_activation(
             cleanup_api_errors(graph);
         }
 
-        let assistant_id =
-            apply_iteration_to_graph(graph, &result, &loop_config, ctx, &config.policy, parent_id)?;
+        let assistant_id = apply_iteration_to_graph(
+            graph,
+            &result,
+            &loop_config,
+            ctx,
+            &config.policy,
+            parent_id,
+            build_output.context_request_id,
+        )?;
         // Update parent for next iteration's message chaining.
         parent_id = assistant_id;
 
@@ -220,6 +227,7 @@ async fn run_activation(
 
 /// Add the assistant response and think block to the shared graph.
 /// Uses the policy to determine how to record the message (`add_message` vs `add_reply`).
+/// Links the `ContextBuildingRequest` to the assistant message via `ConsumedBy` edge.
 fn apply_iteration_to_graph(
     graph: &SharedGraph,
     result: &StreamResult,
@@ -227,6 +235,7 @@ fn apply_iteration_to_graph(
     ctx: &AgentContext,
     policy: &crate::app::context::policies::ContextPolicy,
     parent_id: Uuid,
+    context_request_id: Uuid,
 ) -> anyhow::Result<Uuid> {
     let assistant_id = Uuid::new_v4();
 
@@ -243,6 +252,9 @@ fn apply_iteration_to_graph(
             stop_reason: result.stop_reason,
         };
         policy.record_message(&mut g, parent_id, assistant_node)?;
+
+        // Link the context build request to the assistant message it produced.
+        let _ = g.add_edge(context_request_id, assistant_id, EdgeKind::ConsumedBy);
 
         if !result.think_text.is_empty() {
             let think_node = Node::ThinkBlock {

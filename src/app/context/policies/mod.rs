@@ -5,6 +5,7 @@
 //! ephemeral — the policy is the only difference between them.
 
 pub mod conversational;
+pub(crate) mod message_builder;
 pub mod task_execution;
 
 use crate::graph::ConversationGraph;

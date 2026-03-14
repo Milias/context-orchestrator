@@ -93,6 +93,14 @@ impl AgentRegistry {
             .and_then(|h| h.working_dir.clone())
     }
 
+    /// Update the working directory for an agent after worktree creation.
+    /// Called when the async worktree setup completes and the path is known.
+    pub fn update_working_dir(&mut self, agent_id: Uuid, path: std::path::PathBuf) {
+        if let Some(handle) = self.agents.get_mut(&agent_id) {
+            handle.working_dir = Some(path);
+        }
+    }
+
     /// Record a tool call dispatched by a specific agent.
     pub fn track_tool_call(
         &mut self,

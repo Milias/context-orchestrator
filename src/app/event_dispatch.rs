@@ -5,8 +5,8 @@
 //! updates.
 
 use crate::graph::event::GraphEvent;
-use crate::graph::node::{QuestionDestination, QuestionStatus};
-use crate::graph::{Node, Role};
+use crate::graph::node::{CompletionConfidence, QuestionDestination, QuestionStatus};
+use crate::graph::{EdgeKind, Node, Role};
 use crate::llm::ChatMessage;
 use crate::storage::{TokenDirection, TokenEvent};
 use crate::tasks::{AgentPhase, TaskMessage};
@@ -71,7 +71,7 @@ impl App {
                 node_id,
                 confidence,
             } => {
-                tracing::debug!("CompletionProposed {node_id} ({confidence:?})");
+                self.handle_completion_proposed(*node_id, *confidence);
             }
             _ => {}
         }
@@ -128,6 +128,35 @@ impl App {
             }
             QuestionDestination::Auto => unreachable!("resolved above"),
         }
+    }
+
+    /// Handle a task agent proposing completion. Creates a review `Question` for
+    /// the user to accept or reject. The question is linked to the work item via
+    /// an `About` edge and routed through the standard `QuestionAdded` pipeline.
+    fn handle_completion_proposed(&mut self, work_item_id: Uuid, confidence: CompletionConfidence) {
+        let title = {
+            let g = self.graph.read();
+            g.node(work_item_id)
+                .map_or_else(|| "(unknown task)".to_string(), |n| n.content().to_string())
+        };
+        let question_content =
+            format!("Task '{title}' completed with {confidence:?} confidence. Accept?");
+        let question_id = Uuid::new_v4();
+        let question_node = Node::Question {
+            id: question_id,
+            content: question_content,
+            destination: QuestionDestination::User,
+            status: QuestionStatus::Pending,
+            requires_approval: true,
+            created_at: Utc::now(),
+        };
+        let mut g = self.graph.write();
+        g.add_node(question_node);
+        let _ = g.add_edge(question_id, work_item_id, EdgeKind::About);
+        g.emit(GraphEvent::QuestionAdded {
+            node_id: question_id,
+            destination: QuestionDestination::User,
+        });
     }
 
     /// React to a new user message: dispatch `/command` triggers and spawn
@@ -278,8 +307,11 @@ impl App {
                 context_selector_model,
             };
 
+            if let Some(path) = working_dir {
+                let _ = task_tx.send(TaskMessage::WorktreeCreated { agent_id, path });
+            }
+
             super::agent::spawn_agent_loop(loop_config, task_tx, tool_rx, cancel_token);
-            let _ = working_dir; // Will be used when registry supports updating working_dir.
         });
     }
 

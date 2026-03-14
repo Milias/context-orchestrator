@@ -85,6 +85,9 @@ impl App {
                 self.handle_tool_call_completed(tool_call_id, content, is_error);
                 self.agents.route_tool_result(tool_call_id);
             }
+            TaskMessage::WorktreeCreated { agent_id, path } => {
+                self.agents.update_working_dir(agent_id, path);
+            }
             TaskMessage::Agent { agent_id, event } => {
                 self.handle_agent_event(agent_id, event);
             }

@@ -122,6 +122,12 @@ pub enum TaskMessage {
         agent_id: Uuid,
         event: AgentEvent,
     },
+    /// A git worktree was created for a task agent. Updates the registry
+    /// so subsequent tool executions use the correct working directory.
+    WorktreeCreated {
+        agent_id: Uuid,
+        path: std::path::PathBuf,
+    },
     /// Fresh lifetime token totals from the analytics DB.
     TokenTotalsUpdated(TokenTotals),
     /// Non-fatal analytics error to display in the status bar.
