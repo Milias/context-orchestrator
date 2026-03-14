@@ -9,20 +9,29 @@ use uuid::Uuid;
 
 // ── Shared types ────────────────────────────────────────────────────
 
+/// Lifetime state of a task for display formatting.
+/// `Pending` shows a placeholder, `Elapsed`/`Finished` show a duration.
 pub enum TaskDuration {
+    /// Task has not started yet.
     Pending,
+    /// Task is running; duration so far.
     Elapsed(Duration),
+    /// Task completed; total duration.
     Finished(Duration),
 }
 
+/// Compute an `Elapsed` duration from now back to a start time.
 pub fn elapsed(now: DateTime<Utc>, start: DateTime<Utc>) -> TaskDuration {
     TaskDuration::Elapsed((now - start).to_std().unwrap_or_default())
 }
 
+/// Compute a `Finished` duration between a start and end time.
 pub fn finished(end: DateTime<Utc>, start: DateTime<Utc>) -> TaskDuration {
     TaskDuration::Finished((end - start).to_std().unwrap_or_default())
 }
 
+/// Return a status icon and color for a tool call status.
+/// Used by the Agents tab, Activity tab, and conversation widget.
 pub fn tool_call_status_icon(status: &ToolCallStatus) -> (&'static str, Color) {
     match status {
         ToolCallStatus::Pending => ("○", Color::DarkGray),
@@ -35,6 +44,8 @@ pub fn tool_call_status_icon(status: &ToolCallStatus) -> (&'static str, Color) {
 
 // ── Formatting helpers ──────────────────────────────────────────────
 
+/// Format a `TaskDuration` for compact display.
+/// Returns `"···"` for pending, or a human-readable duration string.
 pub fn format_duration(d: &TaskDuration) -> String {
     match d {
         TaskDuration::Pending => "···".to_string(),
@@ -57,6 +68,8 @@ fn format_std_duration(d: &Duration) -> String {
     format!("{}m {:02}s", total_secs / 60, total_secs % 60)
 }
 
+/// Truncate a string to `max` characters, appending `…` if shortened.
+/// Operates on char boundaries (safe for UTF-8 multibyte strings).
 pub fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -67,6 +80,8 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Approximate display width of a string in terminal columns.
+/// Uses `chars().count()` — correct for ASCII, underestimates CJK/emoji.
 pub fn visible_width(s: &str) -> usize {
     s.chars().count()
 }
