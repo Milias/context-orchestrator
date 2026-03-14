@@ -15,7 +15,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 /// Render the Activity tab content into the given area.
-pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, _tui_state: &TuiState) {
+pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_state: &mut TuiState) {
     let block = Block::default().title("Activity").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -35,7 +35,11 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, _tui_sta
     collect_background_tasks(graph, now, &mut events);
 
     events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    events.truncate(max_rows);
+
+    // Publish total count and clamp scroll offset.
+    tui_state.activity_total = events.len();
+    let max_offset = events.len().saturating_sub(max_rows);
+    tui_state.activity_scroll = tui_state.activity_scroll.min(max_offset);
 
     if events.is_empty() {
         let empty = Paragraph::new(Span::styled(
@@ -46,7 +50,12 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, _tui_sta
         return;
     }
 
-    let lines: Vec<Line<'_>> = events.iter().map(|e| render_event_row(e, width)).collect();
+    // Apply scroll: skip `activity_scroll` items, take `max_rows`.
+    let visible = events
+        .iter()
+        .skip(tui_state.activity_scroll)
+        .take(max_rows);
+    let lines: Vec<Line<'_>> = visible.map(|e| render_event_row(e, width)).collect();
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }

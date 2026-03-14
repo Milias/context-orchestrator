@@ -224,6 +224,10 @@ pub struct TuiState {
     pub work_selected: usize,
     /// Number of visible items in the Work tab (set each frame by the renderer).
     pub work_visible_count: usize,
+    /// Scroll offset for the Activity tab event stream.
+    pub activity_scroll: usize,
+    /// Total event count in the Activity tab (set each frame by the renderer).
+    pub activity_total: usize,
 }
 
 #[derive(Debug)]
@@ -254,6 +258,8 @@ impl TuiState {
             token_usage: TokenUsage::default(),
             work_selected: 0,
             work_visible_count: 0,
+            activity_scroll: 0,
+            activity_total: 0,
         }
     }
 }

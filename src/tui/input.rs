@@ -67,10 +67,7 @@ pub fn handle_key_event(
         FocusZone::TabContent => handle_tab_content_key(key, tui_state),
     }
 }
-
-/// Handle keys in the chat panel (right side): input + conversation scroll.
-/// Typing goes to the input box. Up/Down overflow from the cursor scrolls
-/// the conversation. PageUp/PageDown/End always scroll.
+/// Chat panel keys: typing goes to input, scroll keys scroll conversation.
 fn handle_chat_panel_key(
     key: KeyEvent,
     tui_state: &mut TuiState,
@@ -89,22 +86,23 @@ fn handle_chat_panel_key(
 }
 
 /// Handle keys when a tab's content area is focused.
-/// Dispatches Up/Down navigation to the active tab.
+/// Up/Down navigates the active tab's list or scrolls its content.
 fn handle_tab_content_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
-    // Work tab: arrow key navigation through the tree.
-    if tui_state.nav.active_tab == crate::tui::state::TopTab::Work {
-        let max = tui_state.work_visible_count.saturating_sub(1);
-        return match key.code {
-            KeyCode::Up => {
-                tui_state.work_selected = tui_state.work_selected.saturating_sub(1);
-                Action::None
-            }
-            KeyCode::Down => {
-                tui_state.work_selected = (tui_state.work_selected + 1).min(max);
-                Action::None
-            }
-            _ => Action::None,
-        };
+    let (offset, max) = match tui_state.nav.active_tab {
+        crate::tui::state::TopTab::Work => (
+            &mut tui_state.work_selected,
+            tui_state.work_visible_count.saturating_sub(1),
+        ),
+        crate::tui::state::TopTab::Activity => (
+            &mut tui_state.activity_scroll,
+            tui_state.activity_total.saturating_sub(1),
+        ),
+        crate::tui::state::TopTab::Agents => return Action::None,
+    };
+    match key.code {
+        KeyCode::Up => *offset = offset.saturating_sub(1),
+        KeyCode::Down => *offset = (*offset + 1).min(max),
+        _ => {}
     }
     Action::None
 }

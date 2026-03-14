@@ -162,11 +162,7 @@ fn draw_status_bar(frame: &mut Frame, area: Rect, tui_state: &TuiState) {
 
 /// Build context-aware shortcut hints based on the current focus zone.
 fn build_shortcuts(tui_state: &TuiState) -> Vec<(&'static str, &'static str)> {
-    let mut shortcuts = vec![
-        ("1-3", "view"),
-        ("Tab", "chat"),
-        ("Ctrl+Q", "quit"),
-    ];
+    let mut shortcuts = vec![("1-3", "view"), ("Tab", "chat"), ("Ctrl+Q", "quit")];
 
     match tui_state.nav.focus {
         FocusZone::ChatPanel => {
