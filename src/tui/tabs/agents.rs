@@ -14,6 +14,9 @@ use chrono::Utc;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+/// Maximum number of recent tool call completions to display.
+const MAX_RECENT_COMPLETIONS: usize = 50;
+
 /// Compute the agent card height based on the number of active agents.
 /// Each agent gets 2 lines (phase + detail); borders add 2.
 pub(super) fn agent_card_height(tui_state: &TuiState) -> u16 {
@@ -275,6 +278,7 @@ pub(super) fn render_recent_completions(
         )
     });
     calls.sort_by_key(|n| std::cmp::Reverse(n.created_at()));
+    calls.truncate(MAX_RECENT_COMPLETIONS);
     // Cast safety: bounded by call count, well within u16.
     #[allow(clippy::cast_possible_truncation)] // Justified: max_offset ≤ calls.len().
     let max_offset = calls.len().saturating_sub(max_rows) as u16;

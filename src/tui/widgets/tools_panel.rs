@@ -1,27 +1,24 @@
 //! Tools panel widget: displays all available tools from the registry.
 //!
-//! Shows tool names in a compact 2-column grid, sourced from the static
+//! Shows a two-column table (name + description), sourced from the static
 //! tool registry. Used by the overview tab in the right column.
 
 use crate::tool_executor::tool_registry;
+use crate::tui::widgets::tool_status::truncate;
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-/// Number of columns in the tool name grid.
-const GRID_COLS: usize = 2;
-
-/// Compute the tools panel height: `ceil(tool_count / GRID_COLS)` + 2 borders.
+/// Compute the tools panel height: tool count + 2 borders.
 pub fn tools_panel_height() -> u16 {
     let count = tool_registry().len();
-    let rows = count.div_ceil(GRID_COLS);
     // Cast safety: tool count is small (<20).
     #[allow(clippy::cast_possible_truncation)] // Justified: tool count is small (<20).
-    let h = (rows as u16).saturating_add(2);
+    let h = (count as u16).saturating_add(2);
     h
 }
 
-/// Render the tools panel showing all registered tool names in a 2-column grid.
+/// Render the tools panel as a name + description table.
 pub fn render(frame: &mut Frame, area: Rect) {
     let block = Block::default().title("Tools").borders(Borders::ALL);
     let inner = block.inner(area);
@@ -41,33 +38,31 @@ pub fn render(frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let col_width = (inner.width as usize) / GRID_COLS;
+    // Name column width: longest tool name + 1 space separator.
+    let name_width = registry
+        .iter()
+        .map(|e| e.name.as_str().len())
+        .max()
+        .unwrap_or(0);
+    let sep = 1;
+    let desc_budget = (inner.width as usize).saturating_sub(name_width + sep);
     let max_rows = inner.height as usize;
-    let mut lines: Vec<Line<'_>> = Vec::new();
 
-    let names: Vec<&str> = registry.iter().map(|entry| entry.name.as_str()).collect();
-
-    for row_idx in 0..max_rows {
-        let mut spans: Vec<Span<'_>> = Vec::new();
-
-        for col in 0..GRID_COLS {
-            let tool_idx = row_idx * GRID_COLS + col;
-            if tool_idx < names.len() {
-                let name = names[tool_idx];
-                let display: String = if name.len() > col_width {
-                    name[..col_width].to_string()
-                } else {
-                    format!("{name:<col_width$}")
-                };
-                spans.push(Span::styled(display, Style::default().fg(Color::Magenta)));
-            }
-        }
-
-        if spans.is_empty() {
-            break;
-        }
-        lines.push(Line::from(spans));
-    }
+    let dim = Style::default().fg(Color::DarkGray);
+    let lines: Vec<Line<'_>> = registry
+        .iter()
+        .take(max_rows)
+        .map(|entry| {
+            let name = entry.name.as_str();
+            let padded_name = format!("{name:<name_width$}");
+            let desc = truncate(entry.description, desc_budget);
+            Line::from(vec![
+                Span::styled(padded_name, Style::default().fg(Color::Magenta)),
+                Span::raw(" "),
+                Span::styled(desc, dim),
+            ])
+        })
+        .collect();
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
