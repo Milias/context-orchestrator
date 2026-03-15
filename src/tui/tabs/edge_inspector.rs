@@ -7,6 +7,7 @@
 use uuid::Uuid;
 
 use crate::graph::{EdgeDirection, EdgeGroup};
+use crate::tui::AnimatedScroll;
 
 /// A single edge prepared for display in the inspector panel.
 #[derive(Debug, Clone)]
@@ -47,6 +48,8 @@ pub struct EdgeInspector {
     pub selected_edge: usize,
     /// Breadcrumb trail for back-navigation.
     pub trail: Vec<Breadcrumb>,
+    /// Animated scroll position for the edge list viewport.
+    pub scroll: AnimatedScroll,
 }
 
 impl EdgeInspector {
@@ -56,6 +59,7 @@ impl EdgeInspector {
             edges: Vec::new(),
             selected_edge: 0,
             trail: Vec::new(),
+            scroll: AnimatedScroll::zero(),
         }
     }
 
@@ -90,5 +94,6 @@ impl EdgeInspector {
         self.edges.clear();
         self.selected_edge = 0;
         self.trail.clear();
+        self.scroll = AnimatedScroll::zero();
     }
 }

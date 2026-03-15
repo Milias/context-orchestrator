@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::tui::state::ExplorerFocus;
+use crate::tui::AnimatedScroll;
 
 /// Per-section state for tree+detail navigation in the Graph tab.
 ///
@@ -24,6 +25,8 @@ pub struct ExplorerState {
     pub collapsed: HashSet<Uuid>,
     /// Which sub-panel has focus: Tree or Detail.
     pub focus: ExplorerFocus,
+    /// Animated scroll position for the tree viewport.
+    pub scroll: AnimatedScroll,
 }
 
 impl ExplorerState {
@@ -34,6 +37,7 @@ impl ExplorerState {
             visible_count: 0,
             collapsed: HashSet::new(),
             focus: ExplorerFocus::Tree,
+            scroll: AnimatedScroll::zero(),
         }
     }
 
@@ -50,6 +54,18 @@ impl ExplorerState {
     /// Check whether a node is currently collapsed.
     pub fn is_collapsed(&self, id: &Uuid) -> bool {
         self.collapsed.contains(id)
+    }
+
+    /// After a mouse-driven scroll change, clamp selection to the visible range
+    /// so the highlighted item stays within the viewport.
+    pub fn clamp_selection_to_viewport(&mut self, viewport_height: usize) {
+        let offset = self.scroll.position() as usize;
+        let visible_end = offset + viewport_height;
+        if self.selected < offset {
+            self.selected = offset;
+        } else if self.selected >= visible_end {
+            self.selected = visible_end.saturating_sub(1);
+        }
     }
 
     /// Move the selection up (negative) or down (positive).

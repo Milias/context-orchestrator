@@ -103,10 +103,17 @@ pub fn render(
     let selected_idx = explorer.selected;
     let max_lines = inner.height as usize;
 
+    // Viewport scrolling: ensure selected item is visible.
+    explorer
+        .scroll
+        .follow_selection(explorer.selected, inner.height, flat_items.len());
+    let offset = explorer.scroll.position() as usize;
+
     let lines: Vec<Line<'_>> = flat_items
         .iter()
-        .take(max_lines)
         .enumerate()
+        .skip(offset)
+        .take(max_lines)
         .map(|(i, item)| render_flat_item(item, i, selected_idx))
         .collect();
 

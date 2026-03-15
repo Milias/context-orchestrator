@@ -128,9 +128,16 @@ impl App {
             }
 
             let agent_active = !self.tui_state.agent_displays.is_empty();
+            let explorer_animating = self
+                .tui_state
+                .explorer
+                .values()
+                .any(|e| e.scroll.is_animating())
+                || self.tui_state.edge_inspector.scroll.is_animating();
             let animating = self.tui_state.token_usage.is_animating()
                 || self.tui_state.scroll.is_animating()
-                || self.tui_state.overview_scroll.is_animating();
+                || self.tui_state.overview_scroll.is_animating()
+                || explorer_animating;
 
             tokio::select! {
                 maybe_event = event_stream.next() => {
@@ -179,6 +186,10 @@ impl App {
                     self.tui_state.token_usage.tick();
                     self.tui_state.scroll.tick();
                     self.tui_state.overview_scroll.tick();
+                    for explorer in self.tui_state.explorer.values_mut() {
+                        explorer.scroll.tick();
+                    }
+                    self.tui_state.edge_inspector.scroll.tick();
                 }
                 _ = sigterm.recv() => {
                     self.shutdown();
@@ -296,12 +307,12 @@ impl App {
             MouseEventKind::ScrollDown => false,
             _ => return,
         };
+        let delta = if up { -3 } else { 3 };
         let pos = ratatui::prelude::Position::new(mouse.column, mouse.row);
         let rects = &self.tui_state.panel_rects;
 
         if rects.conversation.contains(pos) {
             self.tui_state.scroll_mode = crate::tui::ScrollMode::Manual;
-            let delta = if up { -3 } else { 3 };
             self.tui_state
                 .scroll
                 .scroll_by(delta, self.tui_state.max_scroll);
@@ -309,6 +320,20 @@ impl App {
                 && self.tui_state.max_scroll > 0
             {
                 self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
+            }
+        } else if rects.tree.contains(pos)
+            && self.tui_state.nav.active_tab == crate::tui::state::TopTab::Graph
+        {
+            let section = self.tui_state.nav.active_graph_section;
+            if let Some(explorer) = self.tui_state.explorer.get_mut(&section) {
+                // Cast safety: visible_count comes from a Vec::len() of tree items;
+                // tree item counts never approach u16::MAX in a TUI.
+                #[allow(clippy::cast_possible_truncation)]
+                let max = explorer.visible_count.saturating_sub(1) as u16;
+                explorer.scroll.scroll_by(delta, max);
+                // Subtract 2 for borders around the tree panel.
+                let vh = rects.tree.height.saturating_sub(2) as usize;
+                explorer.clamp_selection_to_viewport(vh);
             }
         }
     }

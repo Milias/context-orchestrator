@@ -35,7 +35,7 @@ pub fn render(
     area: Rect,
     graph: &ConversationGraph,
     node_id: Option<Uuid>,
-    tui_state: &TuiState,
+    tui_state: &mut TuiState,
 ) {
     let section = tui_state.nav.active_graph_section;
     let focused = tui_state
@@ -88,8 +88,16 @@ pub fn render(
     lines.push(Line::raw(""));
 
     // Edges section — uses pre-populated inspector edges for consistency
-    // with the input handler's navigation.
-    render_edges(&tui_state.edge_inspector, width, &mut lines);
+    // with the input handler's navigation. Lines consumed so far determine
+    // how many rows remain for scrollable edge rendering.
+    let used_lines = lines.len();
+    let available_edge_lines = max_lines.saturating_sub(used_lines);
+    render_edges(
+        &mut tui_state.edge_inspector,
+        width,
+        available_edge_lines,
+        &mut lines,
+    );
 
     // Truncate to available height.
     lines.truncate(max_lines);
@@ -217,7 +225,16 @@ fn render_content(content: &str, width: usize, budget_lines: usize, lines: &mut 
 /// Each group header is bold cyan, followed by edge entries showing
 /// a direction arrow (`->` outgoing, `<-` incoming), label, target
 /// summary, and short UUID. The selected edge uses bold + bg highlight.
-fn render_edges(inspector: &EdgeInspector, width: usize, lines: &mut Vec<Line<'_>>) {
+///
+/// The edge list is scrollable: `available_lines` limits how many rows
+/// are rendered, and the inspector's scroll state keeps the selected
+/// edge visible within that viewport.
+fn render_edges(
+    inspector: &mut EdgeInspector,
+    width: usize,
+    available_lines: usize,
+    lines: &mut Vec<Line<'_>>,
+) {
     if inspector.edges.is_empty() {
         lines.push(Line::from(Span::styled(
             "(no edges)",
@@ -225,6 +242,9 @@ fn render_edges(inspector: &EdgeInspector, width: usize, lines: &mut Vec<Line<'_
         )));
         return;
     }
+
+    // Build all edge lines first, then apply viewport scrolling.
+    let mut edge_lines: Vec<Line<'_>> = Vec::new();
 
     // Group display edges by their group label using BTreeMap for stable ordering.
     let mut groups: BTreeMap<&'static str, Vec<(usize, &DisplayEdge)>> = BTreeMap::new();
@@ -235,15 +255,21 @@ fn render_edges(inspector: &EdgeInspector, width: usize, lines: &mut Vec<Line<'_
             .push((idx, edge));
     }
 
+    // Track which line index the selected edge maps to, for scroll targeting.
+    let mut selected_line_idx = 0usize;
+
     for (group_label, edges) in &groups {
         // Group header.
-        lines.push(Line::from(Span::styled(
+        edge_lines.push(Line::from(Span::styled(
             format!("--- {group_label} ---"),
             Style::default().fg(Color::Cyan).bold(),
         )));
 
         for &(idx, edge) in edges {
             let is_selected = idx == inspector.selected_edge;
+            if is_selected {
+                selected_line_idx = edge_lines.len();
+            }
             let target_short = short_uuid(edge.target_id);
 
             let dir_arrow = match edge.direction {
@@ -266,10 +292,27 @@ fn render_edges(inspector: &EdgeInspector, width: usize, lines: &mut Vec<Line<'_
                 Style::default().fg(Color::DarkGray)
             };
 
-            lines.push(Line::from(vec![
+            edge_lines.push(Line::from(vec![
                 Span::styled("   ", style),
                 Span::styled(display_text, style),
             ]));
         }
     }
+
+    // Scroll edges to keep the selected edge visible within available_lines.
+    // Cast safety: available_lines comes from terminal height, well within u16.
+    #[allow(clippy::cast_possible_truncation)]
+    // Justified: available_lines derived from Rect::height (u16).
+    let vh = available_lines as u16;
+    inspector
+        .scroll
+        .follow_selection(selected_line_idx, vh, edge_lines.len());
+    let edge_offset = inspector.scroll.position() as usize;
+
+    lines.extend(
+        edge_lines
+            .into_iter()
+            .skip(edge_offset)
+            .take(available_lines),
+    );
 }
