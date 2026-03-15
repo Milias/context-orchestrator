@@ -321,6 +321,12 @@ impl App {
             {
                 self.tui_state.scroll_mode = crate::tui::ScrollMode::Auto;
             }
+        } else if rects.activity.contains(pos)
+            && self.tui_state.nav.active_tab == crate::tui::state::TopTab::System
+        {
+            self.tui_state
+                .overview_scroll
+                .scroll_by(delta, self.tui_state.overview_max);
         } else if rects.tree.contains(pos)
             && self.tui_state.nav.active_tab == crate::tui::state::TopTab::Graph
         {

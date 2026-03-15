@@ -42,7 +42,8 @@ pub fn render(frame: &mut Frame, area: Rect, graph: &ConversationGraph, tui_stat
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(area);
 
-    // Left: Activity (full height).
+    // Left: Activity (full height). Track rect for mouse scroll.
+    tui_state.panel_rects.activity = cols[0];
     activity::render_activity(frame, cols[0], graph, tui_state);
 
     // Right: Files + Errors + Tools stacked vertically.

@@ -190,8 +190,17 @@ fn handle_overview_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
 
 /// Handle keys specific to the System tab.
 ///
-/// Currently a placeholder — the System tab is read-only.
-fn handle_system_key(_key: KeyEvent, _tui_state: &mut TuiState) -> Action {
+/// Up/Down scrolls the activity stream on the left panel.
+fn handle_system_key(key: KeyEvent, tui_state: &mut TuiState) -> Action {
+    match key.code {
+        KeyCode::Up => tui_state
+            .overview_scroll
+            .scroll_by(-1, tui_state.overview_max),
+        KeyCode::Down => tui_state
+            .overview_scroll
+            .scroll_by(1, tui_state.overview_max),
+        _ => {}
+    }
     Action::None
 }
 

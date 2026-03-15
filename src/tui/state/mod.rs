@@ -124,6 +124,8 @@ pub struct PanelRects {
     pub tree: ratatui::prelude::Rect,
     /// Detail panel area in the graph explorer tab.
     pub detail: ratatui::prelude::Rect,
+    /// Activity stream area in the system tab (left column).
+    pub activity: ratatui::prelude::Rect,
 }
 
 /// Top-level navigation state for the tab-based layout.
