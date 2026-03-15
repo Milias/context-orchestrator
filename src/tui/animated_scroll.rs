@@ -98,10 +98,12 @@ impl AnimatedScroll {
         }
     }
 
-    /// Adjust the scroll target so `selected` is visible within a viewport
+    /// Adjust the scroll position so `selected` is visible within a viewport
     /// of `viewport_height` rows out of `total` items.
-    /// Centers the selection when possible; snaps instantly (no animation)
-    /// because the user expects the selected item to be visible immediately.
+    ///
+    /// Uses a "keep in view" strategy: only scrolls when the selection is
+    /// about to leave the viewport. This preserves mouse-scroll position
+    /// and avoids jarring jumps when the selection is already visible.
     pub fn follow_selection(&mut self, selected: usize, viewport_height: u16, total: usize) {
         if total == 0 || viewport_height == 0 {
             return;
@@ -112,12 +114,23 @@ impl AnimatedScroll {
             return;
         }
         let max_offset = total.saturating_sub(vh);
-        let target = selected.saturating_sub(vh / 2).min(max_offset);
-        // Cast safety: max_offset bounded by item count, well within u16.
+        let current = self.position() as usize;
+
+        // Selection above viewport → scroll up to show it at the top.
+        // Selection below viewport → scroll down to show it at the bottom.
+        // Otherwise leave scroll position unchanged.
+        let new_offset = if selected < current {
+            selected
+        } else if selected >= current + vh {
+            selected.saturating_sub(vh - 1)
+        } else {
+            return; // Already visible — don't touch scroll.
+        };
+
+        // Cast safety: new_offset bounded by total (Vec::len), well within u16.
         #[allow(clippy::cast_possible_truncation)]
-        // Justified: max_offset is at most total which is a usize from a Vec::len(),
-        // practically never exceeds u16::MAX in a TUI tree view.
-        self.snap(target as u16);
+        // Justified: new_offset ≤ max_offset ≤ total, practically never exceeds u16::MAX.
+        self.snap(new_offset.min(max_offset) as u16);
     }
 
     /// Returns `true` while the displayed position differs from the target.
