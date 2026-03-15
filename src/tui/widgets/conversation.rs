@@ -128,8 +128,16 @@ fn render_entries(
             MessageEntry::Streaming {
                 styled_text,
                 height,
+                timestamp,
             } => {
-                render_streaming(frame, msg_area, styled_text, clip_top, *height as u16);
+                render_streaming(
+                    frame,
+                    msg_area,
+                    styled_text,
+                    clip_top,
+                    *height as u16,
+                    *timestamp,
+                );
             }
         }
 
@@ -148,6 +156,9 @@ pub(super) enum MessageEntry<'a> {
     Streaming {
         styled_text: Text<'static>,
         height: usize,
+        /// Explicit timestamp for committed content. `None` for live streaming
+        /// (falls back to `Local::now()` at render time).
+        timestamp: Option<DateTime<Utc>>,
     },
 }
 
@@ -191,6 +202,7 @@ fn build_entries<'a>(
             {
                 push_tool_status(
                     node.id(),
+                    node.created_at(),
                     graph,
                     spinner_tick,
                     expanded,
@@ -240,6 +252,7 @@ fn build_entries<'a>(
         ) {
             push_tool_status(
                 node.id(),
+                node.created_at(),
                 graph,
                 spinner_tick,
                 expanded,
@@ -264,8 +277,10 @@ fn build_entries<'a>(
 }
 
 /// Render compact tool status lines for an assistant message's tool calls.
+/// Uses the assistant message's `created_at` for the block timestamp.
 fn push_tool_status(
     assistant_id: uuid::Uuid,
+    created_at: DateTime<Utc>,
     graph: &ConversationGraph,
     spinner_tick: usize,
     expanded: bool,
@@ -287,6 +302,7 @@ fn push_tool_status(
     entries.push(MessageEntry::Streaming {
         styled_text: styled,
         height,
+        timestamp: Some(created_at),
     });
 }
 

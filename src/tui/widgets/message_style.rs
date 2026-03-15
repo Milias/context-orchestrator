@@ -221,15 +221,22 @@ pub fn render_message(
     );
 }
 
+/// Render a streaming or tool-status block. Uses `timestamp` if provided
+/// (for committed tool calls), otherwise falls back to `Local::now()` (for
+/// live streaming content).
 pub fn render_streaming(
     frame: &mut Frame,
     area: Rect,
     styled_text: &Text<'static>,
     clip_top: u16,
     full_height: u16,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
 ) {
-    let now = chrono::Local::now().format("%H:%M").to_string();
-    let block = build_block("assistant", "", &now, area.width, Color::Green);
+    let time_str = match timestamp {
+        Some(t) => t.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+        None => chrono::Local::now().format("%H:%M").to_string(),
+    };
+    let block = build_block("assistant", "", &time_str, area.width, Color::Green);
     render_block_paragraph(
         frame,
         area,

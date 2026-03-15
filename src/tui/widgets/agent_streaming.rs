@@ -28,6 +28,7 @@ pub(super) fn build_agent_entry<'a>(
             MessageEntry::Streaming {
                 styled_text: styled,
                 height,
+                timestamp: None,
             }
         }
         AgentVisualPhase::Streaming { text, is_thinking } => {
@@ -71,6 +72,7 @@ fn build_streaming_entry<'a>(
     MessageEntry::Streaming {
         styled_text: styled,
         height,
+        timestamp: None,
     }
 }
 
